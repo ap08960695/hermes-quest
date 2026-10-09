@@ -298,13 +298,16 @@ class SamplerTests(unittest.TestCase):
             time.sleep(0.05)
         return predicate()
 
-    def test_absent_status_file_is_harmless_and_writes_nothing(self):
+    def test_absent_status_file_creates_only_plugin_identity_key(self):
         self.assertEqual(self.client.get(PREFIX + "/replay").status_code, 200)
         self.assertEqual(api._sampler["state"], "running")
         import time
         time.sleep(0.3)
         self.assertEqual(self.history(), [])
-        self.assertFalse((self.home / "hermes-quest").exists())
+        directory = self.home / "hermes-quest"
+        self.assertEqual([p.name for p in directory.iterdir()], ['session-ref.key'])
+        self.assertEqual((directory / 'session-ref.key').stat().st_size, 32)
+        self.assertFalse(self.status.exists())
 
     def test_sampler_runs_once_records_changes_and_leaves_status_untouched(self):
         self.status.write_text(json.dumps({"bots": {"dev": {"status": "active", "reason": "password=Hunter2"}}}))

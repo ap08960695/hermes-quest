@@ -303,7 +303,10 @@ class EstimatedManaTests(unittest.TestCase):
         for m in estimated:
             self.assertEqual(m['basis'], 'chars')
             self.assertIs(m['estimated'], True)
-            self.assertEqual(set(m) - {'t', 'task', 'bot', 'kind', 'tokens', 'estimated', 'basis', 'id'}, set())
+            self.assertEqual(set(m) - {'t', 'task', 'bot', 'kind', 'tokens', 'estimated', 'basis', 'id',
+                                      'session_ref', 'parent_session_ref'}, set())
+            self.assertRegex(m['session_ref'], r'^[0-9a-f]{20}$')
+            self.assertIsNone(m['parent_session_ref'])
         self.assertNotIn(marker, json.dumps(result))
         c = self.s.execute("SELECT coalesce(length(content),0)+coalesce(length(tool_calls),0) FROM messages WHERE role IN ('assistant','tool') AND token_count IS NULL ORDER BY id").fetchall()
         self.assertEqual(sorted(-(-r[0] // 4) for r in c if r[0]), by)

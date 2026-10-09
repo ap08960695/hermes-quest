@@ -41,6 +41,45 @@ Never publish real replay data or screenshots, even after redaction.
 
 ## Things to keep private
 
+### Session references and private key lifecycle
+
+Live `session_ref` and immediate `parent_session_ref` are 20 lowercase hex digits
+from domain-separated HMAC-SHA256 of the profile and session ID. An orphan parent
+is null. Mana source keys, event IDs derived from those sources, subagent labels,
+pending roots and compression session digests use the same keyed identity;
+no session-derived unkeyed hash is published in a payload or decoded cursor.
+Timestamp-shaped session IDs have little random entropy: an unkeyed hash or public
+salt does not protect them from offline guessing, even behind dashboard auth.
+
+The plugin API provisions a random 32-byte `session-ref.key` in its own state
+directory (`history_dir`, default `<hermes_home>/hermes-quest`), not in the checkout
+or Hermes databases. First provisioning locks the directory, writes a 0600
+exclusive temporary file, fsyncs it, then atomically renames and fsyncs the directory.
+Existing keys are never automatically replaced, including malformed keys. Keep the
+directory private to the service user; share the same directory across API workers.
+Never put this key in configuration JSON, environment variables, arguments, logs,
+exports, source control, static files or cursors. Back up the file privately with
+its ownership and 0600 mode; restore it to retain stable references after reinstall.
+Standalone demo/mock data does not read or need a key.
+
+The extractor only reads a regular, service-user-owned, exactly 32-byte 0600 file;
+symlinks, FIFOs, unsafe permissions and missing/unreadable keys fail closed. It never
+creates a key or writes any database. If provisioning or reading fails, the API
+continues returning board data and session rows with null refs. Session-derived
+tool/mana/summon/compression events and their ledgers are suppressed, rather than
+falling back to a guessable hash. Repair permissions/ownership or restore a private
+backup; an intentional key replacement changes identity, not authentication.
+
+The identity scheme and a keyed epoch tag participate in `config_revision`. Legacy
+JSON/compact cursors still decode, but pre-HMAC cursors, key rotation or key
+loss/restoration reset the retained replay window once. Old pending/ledger hashes
+are discarded, including temporarily missing sources. Clients must compare the
+revision before applying events and replace replay on a change (the existing game
+client does this); never add the reset snapshot's mana to the old epoch. Chaining
+the new cursor is incremental again, including signed corrections. No secret or
+mapping is stored in the cursor. This deliberately supersedes the old unkeyed
+session-reference formula; it is not an authentication or task-prose opt-in change.
+
 - `data/replay.json`, `preview/`, `assets/raw/`: git-ignored; contain data derived from real activity.
 - Screenshots or GIFs taken from real data. Use the synthetic demo (`data/demo.json`) for any public image.
 - The plugin API inherits the dashboard's authentication. Do not expose the dashboard or a plain static server
