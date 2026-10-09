@@ -15,7 +15,22 @@ const server=http.createServer((req,res)=>{
   if(u.pathname.startsWith('/api/plugins/hermes-quest/events')){
     seq++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({events:[{id:'fresh-'+seq,t:Date.now()/1000,task:'t_demo0001',kind:'heartbeat',bot:'demo-smith',note:'synthetic update '+seq}],tasks:[],bots:[],cursor:String(seq),state:'online'}));return;
   }
-  let name=decodeURIComponent(u.pathname),baseline=name.startsWith('/before/');name=name.replace(/^\/before\//,'/');if(name==='/')name='/index.html';
+  if(u.pathname==='/dashboard-host'){
+    // Synthetic host chrome: 56px header + 24px top inset + 64px bottom inset.
+    // The stateless SDK adapter mounts the actual plugin bundle, not a copied iframe.
+    res.setHeader('Content-Type','text/html; charset=utf-8');res.end(`<!doctype html><html><head><style>
+      *{box-sizing:border-box}body{margin:0;background:#10121c;color:white}
+      header{height:56px;padding:16px}main{height:calc(100dvh - 56px);padding:24px 16px 64px;overflow:auto}
+      </style></head><body><header>Hermes Quest — synthetic dashboard</header><main id="plugin"></main><script>
+      window.__HERMES_PLUGIN_SDK__={React:{createElement(tag,props,...children){
+        const el=document.createElement(tag);for(const [key,value] of Object.entries(props||{})){
+          if(key==='style')Object.assign(el.style,value);else el.setAttribute(key,value);
+        }el.append(...children);return el;
+      }}};
+      window.__HERMES_PLUGINS__={register(name,Component){document.querySelector('#plugin').append(Component());}};
+      </script><script src="/dashboard/dist/index.js"></script></body></html>`);return;
+  }
+  let name=decodeURIComponent(u.pathname),baseline=name.startsWith('/before/');name=name.replace(/^\/before\//,'/').replace(/^\/api\/plugins\/hermes-quest\/static\//,'/');if(name==='/')name='/index.html';
   if(name.includes('..')){res.writeHead(404);res.end();return;}
   try{const data=baseline?cp.execFileSync('git',['show',base+':'+name.slice(1)],{cwd:root,maxBuffer:32*1024*1024,stdio:['ignore','pipe','ignore']}):fs.readFileSync(path.join(root,name));res.setHeader('Content-Type',mime[path.extname(name)]||'application/octet-stream');res.end(data);}catch{res.writeHead(404);res.end();}
 });
@@ -28,7 +43,7 @@ function monitor(){
 }
 (async()=>{
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+server.address().port+'/';let browser,native;
-  const sourceHashes=()=>Object.fromEntries(['game.js','index.html','ui-panels.js','dashboard/plugin_api.py'].map(f=>[f,crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')]));
+  const sourceHashes=()=>Object.fromEntries(['game.js','index.html','ui-panels.js','dashboard/plugin_api.py','dashboard/dist/index.js','tools/test_ui_mobile.cjs'].map(f=>[f,crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')]));
   const report={base,browser:null,mode,source:sourceHashes(),demoSHA:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'data/demo.json'))).digest('hex'),records:[]};
   try{
     if(mode==='hidden'){
@@ -87,6 +102,33 @@ function monitor(){
       const back=Date.now();await page.bringToFront();await page.waitForFunction(()=>!document.hidden,null,{polling:100});await page.waitForTimeout(1500);
       const catches=requests.filter(r=>r.time>=back&&r.path.endsWith('/events')).length;assert.equal(catches,1);assert((await page.evaluate(()=>rafCalls))>count);
       report.records.push({hidden,callbackDelta:hidden.rafCalls-count,pollsIn60s:polls,catchupPolls:catches,errors:err});await context.close();
+    }else if(mode==='dashboard'){
+      const page=await browser.newPage({viewport:{width:844,height:390},deviceScaleFactor:3}),err=errors(page);
+      await page.goto(url+'dashboard-host');
+      const frame=await page.locator('iframe').elementHandle(),game=await frame.contentFrame();
+      await game.waitForFunction(()=>typeof S==='object'&&typeof W==='object'&&W&&typeof loop.last==='number');
+      // Reuse the mounted page to exercise orientation changes without reloading the iframe.
+      for(const [width,height] of [[844,390],[667,375],[568,320],[1280,800],[800,1280],[390,844],[375,667],[320,568],[844,390]]){
+        await page.setViewportSize({width,height});
+        await page.waitForTimeout(150);
+        await game.evaluate(()=>{S.play=false;reset(D.meta.from_+2100);draw();});
+        const host=await page.locator('iframe').boundingBox();
+        const geometry=await game.evaluate(()=>{
+          const rect=el=>{const r=el.getBoundingClientRect();return {id:el.id,x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom};};
+          return {width:innerWidth,height:innerHeight,hud:rect(document.querySelector('#hud')),buttons:[...document.querySelectorAll('button')].filter(b=>!b.hidden&&!b.closest('[hidden]')).map(rect)};
+        });
+        assert(host.x>=0&&host.y>=0&&host.x+host.width<=width&&host.y+host.height<=height,'iframe viewport bounds');
+        assert.equal(host.height,height-144,'dashboard available height');
+        for(const b of [geometry.hud,...geometry.buttons]){
+          assert(b.x>=-1&&b.x+b.w<=geometry.width+1&&b.y>=-1&&b.bottom<=geometry.height+1,b.id+' iframe bounds');
+          assert(host.x+b.x>=-1&&host.x+b.x+b.w<=width+1&&host.y+b.y>=-1&&host.y+b.bottom<=height+1,b.id+' host bounds');
+        }
+        assert.equal(geometry.hud.h,geometry.width<=760&&geometry.height>=geometry.width?116:56,'unchanged HUD layout');
+        assert.deepEqual(err,[]);
+        if(width>height&&width<1000)await page.screenshot({path:path.join(out,'dashboard-'+width+'x'+height+'.png')});
+        report.records.push({width,height,host,geometry,errors:[...err]});console.log('PASS dashboard '+width+'x'+height);
+      }
+      await page.close();
     }else{
       for(const [width,height] of [[1280,800],[800,1280],[390,844],[844,390],[375,667],[667,375],[320,568],[568,320]])for(const zoom of [1,2,3]){
         const page=await browser.newPage({viewport:{width,height},deviceScaleFactor:3}),err=errors(page);
