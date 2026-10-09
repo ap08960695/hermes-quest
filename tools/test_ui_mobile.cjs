@@ -72,6 +72,7 @@ function monitor(){
       await page.click('#help');await page.waitForTimeout(500);assert.equal(await page.locator('.legend-row').count(),46);assert.equal(await page.evaluate(()=>document.querySelector('#quest').scrollWidth>document.querySelector('#quest').clientWidth+1),false);
       await page.screenshot({path:path.join(out,'legend-320.png')});await page.keyboard.press('Escape');
       const pure=await page.evaluate(()=>{S.play=false;const old=JSON.stringify(S);for(let i=0;i<10;i++)draw();return old===JSON.stringify(S);});assert(pure,'draw must not mutate simulation');
+      await page.setViewportSize({width:390,height:844});await page.evaluate(()=>UIPanels.resize());
       const glyphs=await page.evaluate(()=>{UIPanels.clear();for(let i=0;i<10;i++)UIPanels.screenNumber('10',160,200);const d=UIPanels.diagnostics();return {count:d.drawn.length,rows:d.drawn.map(r=>r.top)};});assert.equal(glyphs.count,3);
       report.records.push({pending,replayCount,pure,glyphs,errorsExpected503:err});assert.equal(err.filter(e=>!e.includes('503')).length,0);await page.close();
     }else if(mode==='hidden'){
@@ -92,9 +93,13 @@ function monitor(){
         await ready(page,url);await page.evaluate(z=>{S.play=false;reset(D.meta.from_+2100);cam.zi=z;draw();},zoom);await page.waitForTimeout(150);
         const geometry=await page.evaluate(()=>{
           const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom};};
-          return {hud:rect('#hud'),buttons:[...document.querySelectorAll('button')].filter(b=>!b.hidden&&!b.closest('[hidden]')).map(b=>({id:b.id,...rect('#'+b.id)})),scroll:document.documentElement.scrollWidth,grid:UIPanels.diagnostics().grid,worldDPR:DPR,visibleText:document.body.innerText.trim()};
+          const boxes=['#hud','#tag','#help','#clock','#scrub'].map(s=>document.querySelector(s).getBoundingClientRect());
+          const outer=boxes.filter((r,i)=>!boxes.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
+          const bitmaps=[...document.querySelectorAll('#ui-stage canvas')].filter(c=>!c.hidden).map(c=>c.getBoundingClientRect());
+          const occlusion=outer.concat(bitmaps).reduce((a,r)=>a+r.width*r.height,0)/(innerWidth*innerHeight);
+          return {occlusion,hud:rect('#hud'),buttons:[...document.querySelectorAll('button')].filter(b=>!b.hidden&&!b.closest('[hidden]')).map(b=>({id:b.id,...rect('#'+b.id)})),scroll:document.documentElement.scrollWidth,grid:UIPanels.diagnostics().grid,worldDPR:DPR,visibleText:document.body.innerText.trim()};
         });
-        assert.equal(geometry.visibleText,'');assert(geometry.hud.h<=(width>760&&height>500?64:176));assert(geometry.scroll<=width+1);
+        assert.equal(geometry.visibleText,'');assert(geometry.hud.h<=(width>760&&height>500?64:176));assert(geometry.scroll<=width+1);assert(geometry.occlusion<=(width>760&&height>500?.2:.25),'closed UI occlusion budget '+JSON.stringify({width,height,zoom,geometry}));
         for(const b of geometry.buttons){assert(b.w>=44&&b.h>=44,b.id+' hitbox');assert(b.x>=-1&&b.x+b.w<=width+1&&b.y>=-1&&b.bottom<=height+1,b.id+' bounds');}
         await page.click('#log');const log=await page.evaluate(()=>{const c=document.querySelector('#chron').getBoundingClientRect(),h=document.querySelector('#hud').getBoundingClientRect();return {bottom:c.bottom,hudTop:h.top};});assert(log.bottom<=log.hudTop);
         await page.click('#quests');assert(await page.locator('#chron').isHidden());assert(await page.locator('#camp').isVisible());
