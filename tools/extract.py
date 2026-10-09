@@ -341,9 +341,96 @@ def _hash(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+CURSOR_LIMIT = 32768
+_CURSOR_MAGIC = b'HQ2\0'
+
+
+def _varint(value):
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 2 ** 53:
+        raise ValueError('invalid Hermes Quest cursor')
+    data = bytearray()
+    while value >= 128:
+        data.append((value & 127) | 128)
+        value >>= 7
+    data.append(value)
+    return data
+
+
+def _pack_cursor(state):
+    # Lossless wire-only change: keep full profile/session hashes and every ledger
+    # entry, including temporarily absent sources. Store shared keys once as raw
+    # 80-bit hashes rather than two JSON dictionaries of 20-digit hex strings.
+    header = dict(state)
+    fields = ('mana', 'mana_versions')
+    keys = set()
+    for field in fields:
+        if field in state:
+            header[field] = {}
+            keys.update(state[field])
+    if not keys:
+        return json.dumps(state, separators=(',', ':'), sort_keys=True).encode()
+    data = json.dumps(header, separators=(',', ':'), sort_keys=True).encode()
+    packed = bytearray(_CURSOR_MAGIC + len(data).to_bytes(4, 'big') + data)
+    for key in sorted(keys):
+        if not re.fullmatch(r'session-[0-9a-f]{20}', key):
+            raise ValueError('invalid Hermes Quest cursor')
+        flags = sum(1 << i for i, field in enumerate(fields) if key in state.get(field, {}))
+        packed.append(flags)
+        packed.extend(bytes.fromhex(key[8:]))
+        for field in fields:
+            if key in state.get(field, {}):
+                packed.extend(_varint(state[field][key]))
+    return bytes(packed)
+
+
+def _unpack_cursor(data):
+    if not data.startswith(_CURSOR_MAGIC):
+        return json.loads(data)  # Existing v1 cursors migrate without a rebase.
+    end = 8 + int.from_bytes(data[4:8], 'big')
+    if len(data) < 8 or end > len(data):
+        raise ValueError()
+    state = json.loads(data[8:end])
+    fields = ('mana', 'mana_versions')
+    if any(field in state and state[field] != {} for field in fields):
+        raise ValueError()
+    seen = set()
+    while end < len(data):
+        flags = data[end]
+        if flags not in (1, 2, 3) or end + 11 > len(data):
+            raise ValueError()
+        key = 'session-' + data[end + 1:end + 11].hex()
+        if key in seen:
+            raise ValueError()
+        seen.add(key)
+        end += 11
+        for i, field in enumerate(fields):
+            if not flags & (1 << i):
+                continue
+            if field not in state:
+                raise ValueError()
+            value = 0
+            for shift in range(0, 56, 7):
+                if end >= len(data):
+                    raise ValueError()
+                byte = data[end]
+                end += 1
+                value |= (byte & 127) << shift
+                if not byte & 128:
+                    break
+            else:
+                raise ValueError()
+            state[field][key] = value
+    return state
+
+
 def _cursor(state):
-    data = json.dumps(state, separators=(',', ':'), sort_keys=True).encode()
-    return base64.urlsafe_b64encode(zlib.compress(data)).decode().rstrip('=')
+    data = _pack_cursor(state)
+    cursor = base64.urlsafe_b64encode(zlib.compress(data)).decode().rstrip('=')
+    # Never return a cursor the GET API/guest cannot use. An oversized state must
+    # fail closed, not silently evict ledgers or acknowledge undelivered events.
+    if len(cursor) > CURSOR_LIMIT:
+        raise ValueError('Hermes Quest cursor capacity exceeded')
+    return cursor
 
 
 def _decode(cursor):
@@ -357,7 +444,7 @@ def _decode(cursor):
         unpacked = decoder.decompress(data, 2 * 1024 * 1024)
         if not decoder.eof or decoder.unused_data:
             raise ValueError()
-        state = json.loads(unpacked)
+        state = _unpack_cursor(unpacked)
         if state.get('v') != 1 or not isinstance(state.get('marks'), dict):
             raise ValueError()
         if any(not isinstance(state.get(key), dict) for key in ('tasks', 'bots', 'runs')):
