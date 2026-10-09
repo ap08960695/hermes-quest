@@ -30,17 +30,29 @@ jobs:
         run: python3 tools/check_public.py --history
       - name: Game backtest (must print PASS)
         run: node tools/backtest.js
-      - name: Tools unit tests (synthetic fixtures)
-        run: python3 -m unittest discover -s tools -p 'test_*.py' -v
-      - name: Dashboard API unit tests (synthetic databases)
-        run: python3 -m unittest discover -s dashboard -p 'test_*.py' -v
+      - name: Extractor redaction and synthetic API privacy corpus (no Hermes required)
+        run: |
+          python3 -m unittest discover -s tools -p 'test_extract.py' -v
+          python3 -m unittest discover -s dashboard -p 'test_live_contract.py' -v
+      - name: Other tools unit tests (synthetic fixtures)
+        run: |
+          for test in tools/test_*.py; do
+            [ "$test" = tools/test_extract.py ] && continue
+            python3 -m unittest discover -s tools -p "${test##*/}" -v
+          done
+      - name: Other dashboard API unit tests (synthetic databases)
+        run: |
+          for test in dashboard/test_*.py; do
+            [ "$test" = dashboard/test_live_contract.py ] && continue
+            python3 -m unittest discover -s dashboard -p "${test##*/}" -v
+          done
       - name: Node regression tests
         run: |
           node tools/backtest.test.js
           node dashboard/test_game.cjs
           node dashboard/test_defaults.cjs
           # test_api_migration.cjs receives real synthetic API fixtures from
-          # test_live_contract.py in the dashboard unit-test step above.
+          # test_live_contract.py in the redaction/privacy step above.
       - name: Live-host checks intentionally skipped
         run: |
           printf '%s\n' 'SKIP: live dashboard authentication, installed Hermes plugin, and network/browser deployment checks require an operator host; all repository unit tests run above using synthetic fixtures.'
