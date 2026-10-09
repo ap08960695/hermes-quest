@@ -19,46 +19,47 @@ html,body{margin:0;height:100%;background:#05080f;color:var(--ink);font:13px/1.3
 button{width:44px;height:44px;min-width:44px;min-height:44px;padding:2px;background:#1b2742;border:1px solid var(--line);border-radius:4px;cursor:pointer;display:flex;align-items:center;justify-content:center}
 button.on,button:focus-visible{outline:2px solid var(--gold)}
 canvas{image-rendering:pixelated;display:block;flex:none}
-#hud{height:56px!important;flex-wrap:nowrap!important;gap:4px!important;padding:5px!important;bottom:0!important;left:0!important;right:0!important;border-radius:0}
-#hud button{padding:2px!important;min-height:44px}
-#speeds{width:60px!important;min-width:60px}
-#clock{width:60px;min-width:60px!important;display:flex;justify-content:center}
-#scrub{min-width:44px!important;min-height:24px;flex:1}
-#tabs{display:flex!important;gap:4px}
-#mana{gap:4px!important;flex:none}
-#mana>div{width:68px!important;display:flex;align-items:center;flex-wrap:wrap;gap:2px}
+button{color:var(--ink);font:inherit}
+.text-button{width:auto;padding:8px}
+select{min-height:44px;max-width:100%;background:#1b2742;color:var(--ink);border:1px solid var(--line)}
+select:focus-visible{outline:2px solid var(--gold)}
+#focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;gap:4px;max-width:calc(100vw - 16px)}
+#menu-toggle{width:64px;background:var(--navy)}
+#tag{position:static;display:flex;align-items:center;gap:2px;padding:0;min-width:0}
+#mode{font-size:11px;padding:0 4px}
+#connection{width:36px;height:36px}
+#issues{width:auto;font-size:11px;color:#ffbba7}
+#menu{z-index:4;left:8px;top:60px;width:min(376px,calc(100vw - 16px));max-height:calc(100dvh - 68px);overflow:auto;padding:8px}
+#menu details{border-bottom:1px solid var(--line);padding:4px 0}
+#menu summary{cursor:pointer;min-height:44px;padding:12px 4px;font-weight:600}
+#menu summary:focus-visible{outline:2px solid var(--gold)}
+.menu-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:4px}
+#hud{position:static;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#speeds{width:60px;min-width:60px}
+#clock{width:60px;display:flex;justify-content:center}
+#scrub{width:100%;min-height:44px;flex:auto}
+#tabs{display:flex;gap:4px}
+#mana{gap:8px;flex-wrap:wrap}
+#mana>div{width:68px;display:flex;align-items:center;flex-wrap:wrap;gap:2px}
 #mana .percentage{width:48px;height:16px}
 #mana i{width:100%;height:4px;margin:0}
-#tag{padding:2px!important;display:flex;gap:2px}
-#connection,#mode{width:36px;height:36px}
-#live{width:44px;height:44px}
-#help{position:fixed;right:8px;top:8px}
-#camp,#chron{left:auto!important;right:8px;top:64px!important;bottom:calc(var(--hud-height) + 8px)!important;width:min(360px,calc(100vw - 16px))!important;height:auto!important;max-height:none!important;overflow:auto!important;display:block}
-.drawer-close{position:sticky;top:0;float:right;z-index:1}
-#camps,#feed{padding:8px;clear:both;overflow:auto!important}
+#camp,#chron{position:static;box-shadow:none;border:0;border-radius:0;padding:4px}
+.drawer-close{float:right}
+#camps,#feed{padding:4px;clear:both}
 .bitmap-row{position:relative;width:100%;padding:2px 0;overflow:hidden}
 .bitmap-row canvas{max-width:none}
-.pips{display:flex;gap:3px}
+.pips{display:flex;gap:3px;flex-wrap:wrap}
 .pips canvas{width:36px;height:36px}
-#quest{width:min(440px,calc(100vw - 32px))!important;max-height:calc(100vh - 32px);overflow:auto;display:block!important;padding:8px!important}
-#quest[hidden]{display:none!important}
-#quest{background:#0d1423}
+#quest{z-index:6;width:min(440px,calc(100vw - 16px));max-height:calc(100dvh - 16px);overflow:auto;padding:8px;background:#0d1423}
 #quest .close{position:sticky;top:0;float:right;z-index:1;margin:0}
 .detail-content{clear:both}
 .legend-row{display:flex;align-items:flex-start;gap:8px}.legend-row>canvas{flex:none}.legend-row .bitmap-row{min-width:0;flex:1}
-@media(max-width:760px) and (orientation:portrait){
-  #hud{height:116px!important;padding:1px!important;display:grid!important;grid-template-columns:44px 60px 1fr 44px 44px;grid-template-rows:44px 24px 44px;column-gap:4px!important;row-gap:0!important}
-  #play{grid-column:1;grid-row:1}#speeds{grid-column:2;grid-row:1}#clock{grid-column:3;grid-row:1}#world{grid-column:4;grid-row:1}#calm{grid-column:5;grid-row:1}
-  #scrub{grid-column:1/-1;grid-row:2;width:100%;margin:0}#mana{grid-column:1/4;grid-row:3}#tabs{grid-column:4/6;grid-row:3}
-  #mana>div{width:58px!important;flex-direction:column;justify-content:center;gap:1px}#mana .percentage{width:48px}
-}
-@media(max-height:500px) and (orientation:landscape){
-  #hud{height:56px!important;justify-content:center}
-  #clock{position:fixed;left:132px;top:20px}
-  #mana>div{width:40px!important}#mana .percentage{display:none}
-  #scrub{position:fixed;left:204px;right:64px;top:12px;width:calc(100vw - 268px);margin:0}
-}
-@media(min-width:761px){#hud #tabs{display:flex!important}}
+.item-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid var(--line);padding:4px 0}
+.item-summary span{min-width:0;overflow-wrap:anywhere}
+#overview-summary,#playback-summary{font-size:12px;margin:4px 0}
+#menu p{overflow-wrap:anywhere}
+@media(max-width:360px){#mode{padding:0 2px}#focus-bar{gap:2px}#issues{padding:2px;max-width:124px}}
+@media(max-height:400px){#menu{top:56px;max-height:calc(100dvh - 64px)}}
 
 .panel{position:fixed;background:var(--panel);border:1px solid var(--gold);border-radius:6px;box-shadow:0 4px 18px #0008}
 #hud{display:flex;align-items:center}
@@ -72,21 +73,40 @@ canvas{image-rendering:pixelated;display:block;flex:none}
 <body>
 <canvas id="stage" aria-label="Hermes Quest world"></canvas>
 <div id="ui-stage" aria-hidden="true"></div>
-<div id="tag" class="panel"><span id="mode" role="img"></span><span id="connection" role="status"></span><button id="live" hidden aria-label="Follow live"></button></div>
-<button id="help" aria-label="Icon help"></button>
-<div id="camp" class="panel" hidden aria-label="Quests"><button id="camp-close" class="drawer-close" aria-label="Close"></button><div id="camps"></div></div>
-<div id="chron" class="panel" hidden aria-label="Log"><button id="chron-close" class="drawer-close" aria-label="Close"></button><div id="feed"></div></div>
-<div id="quest" class="panel" role="dialog" aria-label="Details" hidden></div>
-<div id="hud" class="panel">
-  <button id="play" aria-label="Play or pause"></button>
-  <button id="speeds" aria-label="Replay speed"></button>
-  <span id="clock" role="timer"></span>
-  <input id="scrub" aria-label="Replay time" type="range" min="0" max="1000" value="0">
-  <div class="mana" id="mana"></div>
-  <span id="tabs"><button id="quests" data-t="camp" aria-label="Quests"></button><button id="log" data-t="chron" aria-label="Log"></button></span>
-  <button id="world" aria-label="Map"></button>
-  <button id="calm" aria-label="Reduce motion and flashes"></button>
+<div id="focus-bar">
+  <button id="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menu">Menu</button>
+  <div id="tag" class="panel"><span id="mode">Loading</span><button id="connection" aria-label="Loading connection details"></button></div>
+  <button id="issues" hidden aria-label="Issues"></button>
 </div>
+<nav id="menu" class="panel" aria-label="Quest menu" hidden>
+  <details id="group-playback"><summary>Playback</summary>
+    <p id="playback-summary">Loading activity…</p>
+    <div id="hud">
+      <button id="play" aria-label="Play or pause"></button>
+      <button id="live" hidden aria-label="Follow live"></button>
+      <button id="speeds" aria-label="Replay speed"></button>
+      <span id="clock" role="timer"></span>
+      <input id="scrub" aria-label="Replay time" type="range" min="0" max="1000" value="0">
+    </div>
+  </details>
+  <details id="group-overview"><summary>Overview</summary>
+    <p id="overview-summary">Loading activity…</p>
+    <div class="mana" id="mana"></div>
+    <p>Simulated mana, not a real provider quota.</p>
+    <h3>Heroes</h3><div id="heroes-list"></div><button id="heroes-all" class="text-button">View all heroes</button>
+    <h3>Tasks</h3><div id="tasks-list"></div><button id="tasks-all" class="text-button">View all tasks</button>
+    <p>Details and lists cover only the loaded replay range and retained history.</p>
+    <span id="tabs"><button id="quests" data-t="camp" aria-label="Quests"></button><button id="log" data-t="chron" aria-label="Log"></button></span>
+    <section id="camp" hidden aria-label="Campaigns"><button id="camp-close" class="drawer-close" aria-label="Close campaigns"></button><div id="camps"></div><button id="camps-all" class="text-button">View all campaigns</button></section>
+    <section id="chron" hidden aria-label="Activity feed"><button id="chron-close" class="drawer-close" aria-label="Close activity feed"></button>
+      <div class="menu-controls"><label for="feed-filter">Activity</label><select id="feed-filter"><option value="all">All</option><option value="work">Work</option><option value="issues">Issues</option></select><button id="feed-all" class="text-button">View all activity</button></div>
+      <p>Latest retained activity; not an all-time log.</p><div id="feed"></div>
+    </section>
+  </details>
+  <details id="group-world"><summary>World</summary><p>Explore the map and its activity markers.</p><div class="menu-controls"><button id="world" aria-label="Map"></button><button id="world-help" class="text-button">Icon legend</button></div></details>
+  <details id="group-settings"><summary>Settings</summary><div class="menu-controls"><button id="calm" aria-label="Reduce motion and flashes"></button><button id="help" aria-label="Icon help"></button><button id="hide-panels" class="text-button">Hide panels</button></div><p>Menu and group visibility are saved only on this device. Closing panels does not pause playback or live updates.</p></details>
+</nav>
+<div id="quest" class="panel" role="dialog" aria-modal="true" aria-label="Details" hidden></div>
 <script src="font.js"></script>
 <script src="ui-glyphs.js"></script>
 <script src="ui-panels.js"></script>

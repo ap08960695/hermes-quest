@@ -30,7 +30,8 @@ if (!['chromium', 'firefox'].includes(browserName)) {
 }
 const playwright = createRequire(path.join(repo, 'package.json'))('playwright');
 
-const VIEWPORTS = [{name: '1280x800', width: 1280, height: 800}, {name: '390x844', width: 390, height: 844}];
+const VIEWPORTS = [{name: '1280x800', width: 1280, height: 800}, {name: '390x844', width: 390, height: 844},
+  ...[[375,667],[320,568],[667,375],[568,320]].map(([width,height])=>({name:width+'x'+height,width,height}))];
 const TYPES = {'.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json',
   '.png': 'image/png', '.css': 'text/css', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.ttf': 'font/ttf', '.woff2': 'font/woff2'};
 
@@ -85,7 +86,7 @@ async function runViewport(browser, base, vp) {
   try {
     // data/demo.json is the default feed; the boot code reports a load failure only via this banner.
     await page.goto(`${base}/index.html`, {waitUntil: 'load'});
-    await page.waitForFunction(() => document.querySelector('#connection')?.getAttribute('aria-label'), null, {timeout: 30000});
+    await page.waitForFunction(() => /^(Replay file|Unable to load data)/.test(document.querySelector('#connection')?.getAttribute('aria-label')||''), null, {timeout: 30000});
     const state = await page.locator('#connection').getAttribute('aria-label');
     if (state !== 'Replay file normal') problems.push(`boot did not reach file/demo mode (connection label "${state}")`);
     await page.waitForFunction(() => /^Replay time: \d/.test(document.querySelector('#clock')?.getAttribute('aria-label') || ''), null, {timeout: 30000});
@@ -94,7 +95,17 @@ async function runViewport(browser, base, vp) {
     await page.waitForFunction(t => document.querySelector('#clock').getAttribute('aria-label') !== t, first, {timeout: 30000});
     await page.waitForTimeout(1500);
     await colours('drawn');
+    const focusBounds=await page.evaluate(()=>{
+      const r=document.querySelector('#stage').getBoundingClientRect(),b=document.querySelector('#menu-toggle').getBoundingClientRect();
+      return {canvas:r.width===innerWidth&&r.height===innerHeight,menu:document.querySelector('#menu').hidden,
+        target:b.width>=44&&b.height>=44,toolbar:document.querySelector('#hud').getClientRects().length,
+        overflow:document.documentElement.scrollWidth>innerWidth+1};
+    });
+    if(!focusBounds.canvas||!focusBounds.menu||!focusBounds.target||focusBounds.toolbar||focusBounds.overflow)problems.push('focus mode: toolbar/layout/touch-target gate failed');
     await shot('1-drawn');
+    await page.locator('#menu-toggle').focus();await page.keyboard.press('Enter');
+    if(await page.locator('#menu-toggle').getAttribute('aria-expanded')!=='true')problems.push('keyboard Menu did not open');
+    await page.click('#group-playback > summary');
 
     // Pause
     await page.click('#play');
@@ -105,6 +116,19 @@ async function runViewport(browser, base, vp) {
     await page.waitForTimeout(1200);
     if ((await clock()) !== frozen) problems.push(`pause: clock kept moving (${frozen} -> ${await clock()})`);
     await shot('2-paused');
+    const stable=await page.evaluate(()=>{cam.x=cam.tx;cam.y=cam.ty;return JSON.stringify([S.t,S.i,S.speed,S.play,following,cursor,cam.x,cam.y,cam.tx,cam.ty,cam.zi]);});
+    await page.keyboard.press('Escape');
+    if(!await page.locator('#menu-toggle').evaluate(el=>el===document.activeElement))problems.push('Escape did not return Menu focus');
+    await page.keyboard.press('Space');
+    await page.click('#group-overview > summary');
+    await page.locator('#tasks-list .item-summary').first().waitFor();
+    await page.locator('#tasks-list button').first().click();
+    await page.locator('#quest .bitmap-row canvas').first().waitFor();
+    await page.keyboard.press('Escape');
+    if(!await page.locator('#tasks-list button').first().evaluate(el=>el===document.activeElement))problems.push('detail close did not return focus');
+    if(await page.evaluate(()=>JSON.stringify([S.t,S.i,S.speed,S.play,following,cursor,cam.x,cam.y,cam.tx,cam.ty,cam.zi]))!==stable)problems.push('Menu/detail changed paused playback/camera/cursor');
+    await shot('menu-overview');
+    await page.click('#group-overview > summary');
     // Play
     await page.click('#play');
     if ((await page.locator('#play').getAttribute('aria-label')) !== 'Pause normal' ||
@@ -132,6 +156,98 @@ async function runViewport(browser, base, vp) {
   return {viewport: vp.name, problems, steps};
 }
 
+async function runLoadStates(browser,base) {
+  const check=(v,m)=>{if(!v)throw Error(m);},demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json')));
+  for(const state of ['loading','error','empty','idle']){
+    const ctx=await browser.newContext({viewport:{width:320,height:568}}),page=await ctx.newPage(),errors=[];
+    page.on('pageerror',e=>errors.push(e.message));
+    let release;const delayed=new Promise(r=>release=r);
+    await page.route('**/data/demo.json',async route=>{
+      if(state==='loading')await delayed;
+      if(state==='error')return route.fulfill({status:503,body:'synthetic load failure'});
+      const data=structuredClone(demo);data.events=[];
+      if(state==='empty'){data.tasks=[];data.bots=[];}
+      return route.fulfill({json:data});
+    });
+    try {
+      await page.goto(base+'/index.html',{waitUntil:'domcontentloaded'});
+      if(state==='loading'){
+        check((await page.locator('#connection').getAttribute('aria-label')).includes('Loading'),'Loading confused with empty');
+        await page.click('#menu-toggle');check(await page.locator('#menu').isVisible(),'Loading Menu unavailable');release();
+      } else if(state==='error'){
+        await page.waitForFunction(()=>document.querySelector('#issues').textContent==='Offline');
+        check((await page.locator('#connection').getAttribute('aria-label')).includes('Unable to load data'),'Error confused with empty');
+        await page.click('#issues');check((await page.locator('#quest').textContent()).includes('Unable to load data'),'Boot error details unavailable');
+      } else {
+        await page.waitForFunction(()=>typeof loop.last==='number');
+        await page.click('#menu-toggle');await page.click('#group-overview > summary');
+        check((await page.locator('#overview-summary').textContent()).includes(state==='empty'?'No tasks in this replay range':'No active work'),'Empty/idle labels confused');
+      }
+      check(errors.length===0,errors.join('; '));
+    } finally {release();await ctx.close();}
+  }
+  console.log('PASS '+browserName+' loading/error/empty/idle distinct and accessible');
+}
+
+async function runLiveMenu(browser,base) {
+  // Synthetic transport, never operator data. Exercise the production polling path.
+  const ctx=await browser.newContext({viewport:{width:320,height:568},hasTouch:true});
+  const page=await ctx.newPage(),errors=[],polls=[];let seq=0,replays=0,state='online';
+  page.on('pageerror',e=>errors.push(e.message));
+  page.on('console',m=>{if(m.type()==='error'&&!m.text().includes('503'))errors.push(m.text());});
+  page.on('requestfailed',r=>errors.push(r.url()));
+  const check=(value,message)=>{if(!value)throw Error(message);};
+  const demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json')));
+  await page.route('**/api/plugins/hermes-quest/replay*',route=>{
+    replays++;const d=structuredClone(demo),shift=Date.now()/1000-d.meta.to;
+    d.events.forEach(e=>e.t+=shift);d.meta.from_+=shift;d.meta.to+=shift;
+    d.meta.source='synthetic-live';d.meta.show_titles=false;d.cursor='0';
+    d.tasks.forEach(t=>{t.title='MENU_PRIVATE_TITLE';t.note='MENU_PRIVATE_NOTE';});
+    return route.fulfill({json:d});
+  });
+  await page.route('**/api/plugins/hermes-quest/events*',route=>{
+    polls.push(Date.now());if(state==='offline')return route.fulfill({status:503,body:'synthetic unavailable'});
+    seq++;return route.fulfill({json:{state,events:[{id:'menu-live-'+seq,t:Date.now()/1000,
+      kind:seq===1?'blocked':'heartbeat',task:demo.tasks[0].id,bot:demo.bots[0].id}],tasks:[],bots:[],cursor:String(seq)}});
+  });
+  try {
+    await page.goto(base+'/index.html?live=1');
+    await page.waitForFunction(()=>typeof loop.last==='number'&&cursor!=='0');
+    await page.waitForFunction(()=>!document.querySelector('#issues').hidden);
+    const before=await page.evaluate(()=>({t:S.t,i:S.i,speed:S.speed,play:S.play,following,cam:[cam.tx,cam.ty,cam.zi],cursor}));
+    for(let n=0;n<12;n++){
+      await page.tap('#menu-toggle');await page.waitForTimeout(5000);
+    }
+    const after=await page.evaluate(()=>({t:S.t,i:S.i,speed:S.speed,play:S.play,following,cam:[cam.tx,cam.ty,cam.zi],cursor,
+      hidden:document.hidden,events:D.events.filter(e=>String(e.id).startsWith('menu-live-')).map(e=>e.id)}));
+    check(after.t>before.t+50&&after.i>before.i,'Menu stopped live playback');
+    check(JSON.stringify([before.speed,before.play,before.following,before.cam])===JSON.stringify([after.speed,after.play,after.following,after.cam]),'Menu reset playback/camera');
+    check(!after.hidden&&replays===1&&Number(after.cursor)>Number(before.cursor),'Menu reset/refetched transport');
+    check(new Set(after.events).size===after.events.length&&after.events.length===seq,'Live event duplication/loss');
+    for(let n=1;n<polls.length;n++)check(polls[n]-polls[n-1]>=9000&&polls[n]-polls[n-1]<=13000,'Polling cadence changed');
+    check(await page.locator('#issues').isVisible(),'Blocked badge hidden with Menu');
+    await page.tap('#menu-toggle');await page.click('#group-overview > summary');
+    await page.click('#log');await page.selectOption('#feed-filter','work');
+    check(await page.locator('#issues').isVisible(),'Feed filter hid blocked badge');
+    await page.click('#tasks-all');check(await page.locator('#quest .item-summary').count()===demo.tasks.length,'View all escaped or omitted loaded task window');
+    await page.keyboard.press('Escape');
+    const privacy=await page.evaluate(()=>!JSON.stringify(D).includes('MENU_PRIVATE')&&!JSON.stringify(S).includes('MENU_PRIVATE')&&!document.body.textContent.includes('MENU_PRIVATE'));
+    check(privacy,'Hidden title/note canary leaked');
+    const saved=await page.evaluate(()=>JSON.parse(localStorage.getItem('quest-menu-v1')));
+    check(JSON.stringify(Object.keys(saved).sort())===JSON.stringify(['groups','menu'])&&Object.values(saved.groups).every(v=>typeof v==='boolean'),'Non-UI data in preference');
+    // Explicit failure states use the real delta/error path, not a painted status stub.
+    state='legacy-fallback';await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});
+    check((await page.locator('#mode').textContent()).includes('Snapshot'),'Snapshot falsely connected');
+    state='offline';await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});
+    check((await page.locator('#mode').textContent()).includes('Offline'),'Offline falsely connected');
+    await page.click('#menu-toggle');check(await page.locator('#issues').isVisible(),'Offline/blocked hidden in focus mode');
+    await page.screenshot({path:path.join(outDir,browserName+'-synthetic-live-focus.png')});
+    check(errors.length===0,errors.join('; '));
+    fs.writeFileSync(path.join(outDir,browserName+'-live-menu.json'),JSON.stringify({synthetic:true,before,after,polls,replays,privacy,saved,errors},null,2));
+    console.log('PASS '+browserName+' synthetic Menu touch/live 60s, cadence, dedup, privacy, retained lists, snapshot/offline');
+  } finally {await ctx.close();}
+}
+
 fs.mkdirSync(outDir, {recursive: true});
 // Regenerate the deterministic synthetic demo exactly as documented (never reads live data).
 execFileSync('python3', [path.join('tools', 'mock.py')], {cwd: root, stdio: 'inherit'});
@@ -150,7 +266,9 @@ for (const vp of VIEWPORTS) {
     for (const p of [...new Set(r.problems)]) console.log(`  - ${p}`);
   } else console.log(`PASS ${browserName} ${r.viewport}`);
 }
+try {await runLoadStates(browser,base);} catch(e){failed++;console.log('FAIL load states: '+e.message);}
+try {await runLiveMenu(browser,base);} catch(e){failed++;console.log('FAIL synthetic live Menu: '+e.message);}
 await browser.close();
 server.close();
-console.log(failed ? `SMOKE FAIL (${failed}/${VIEWPORTS.length} viewports) screenshots: ${outDir}` : `SMOKE PASS screenshots: ${outDir}`);
+console.log(failed ? `SMOKE FAIL (${failed} failing flows) screenshots: ${outDir}` : `SMOKE PASS screenshots: ${outDir}`);
 process.exit(failed ? 1 : 0);
