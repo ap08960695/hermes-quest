@@ -567,6 +567,130 @@ async function runSceneTruth(browser,base) {
   }
 }
 
+async function runHeroInspect(browser,base,vp) {
+  const ctx=await browser.newContext({viewport:vp,deviceScaleFactor:1,hasTouch:true}),page=await ctx.newPage(),errors=[],checks=[];
+  page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+  const check=(value,message)=>{if(!value)throw Error(message);checks.push(message);};
+  try {
+    await page.goto(base);await page.waitForFunction(()=>typeof S!=='undefined'&&Object.keys(S.heroes).length&&Object.keys(SPRV).length);
+    await page.evaluate(()=>{
+      cancelAnimationFrame(raf);raf=null;UI.menu(false);UI.close();
+      const b=D.bots[0],ref=n=>String(n).repeat(20);
+      loadReplay({meta:{...D.meta,from_:0,to:100,generated:100,show_titles:false,show_profile_names:true},events:[],
+        bots:['root','child','orphan'].map((id,i)=>({...b,id,name:'PRIVATE_NAME',display_name:['Root','Child','Orphan'][i],profile_name:'synthetic-'+id,pet_name:'Demo pet'})),
+        tasks:[{id:'hidden',title:'PRIVATE_TASK_CANARY',note:'PRIVATE_NOTE_CANARY',bot:'child',stage:'BUILD',status:'running',parents:['fake-dependency']}],
+        sessions:[{bot:'root',session_ref:ref(1),parent_session_ref:null,is_subagent:false,started_at:0},
+          {bot:'child',session_ref:ref(2),parent_session_ref:ref(1),is_subagent:true,started_at:0},
+          {bot:'orphan',session_ref:ref(3),parent_session_ref:ref(9),is_subagent:true,started_at:0}]});
+      reset(100);S.play=false;
+      Object.values(S.heroes).forEach((h,i)=>Object.assign(h,{x:1000+(i===2?110:0),y:700,path:[],atk:-1,down:0,sleep:false,effort:'medium',fam:[]}));
+      Object.assign(cam,{x:1000,y:670,tx:1000,ty:670,zi:1});draw();
+    });
+    const picks=await page.evaluate(()=>inspect.picks.filter(p=>p.type==='hero'));
+    check(picks.length===3&&picks.every(p=>p.hit.right-p.hit.left>=44&&p.hit.bottom-p.hit.top>=44),'all rendered heroes have 44 CSS px hit targets');
+    const p=picks.find(p=>p.id==='child'),x=(p.body.left+p.body.right)/2,y=(p.body.top+p.body.bottom)/2;
+    await page.touchscreen.tap(x,y);
+    check(await page.locator('#character-content button').count()===2,'overlap exposes both characters');
+    await page.getByRole('button',{name:'Child',exact:true}).click();
+    await page.evaluate(()=>{followCharacter(1);draw();});
+    check((await page.locator('#character-content').innerText()).includes('Parent: Root'),'child resolves explicit session parent');
+    const geometry=await page.evaluate(()=>{
+      const p=inspect.picks.find(p=>p.id==='child'),c=$('#character-card').getBoundingClientRect(),bar=$('#focus-bar').getBoundingClientRect();
+      return {clearance:Math.min(p.body.left,p.body.top-bar.bottom,c.top-p.body.bottom,innerWidth-p.body.right),card:c.toJSON(),hit:p.hit};
+    });
+    check(geometry.clearance>=8,'followed hero clears card and status by 8 CSS px');
+    const invariant=await page.evaluate(()=>{
+      const before=JSON.stringify([S,D.events,following,cursor]);
+      for(let i=0;i<120;i++){followCharacter(1/60);draw();}
+      return before===JSON.stringify([S,D.events,following,cursor]);
+    });
+    check(invariant,'120 follow/render frames leave replay, hero paths and ledger unchanged');
+    if(browserName==='chromium'){
+      const cdp=await ctx.newCDPSession(page),saved=await page.evaluate(()=>({...cam}));
+      const a={x:40,y:120,id:1},b={x:90,y:120,id:2};
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[a,b]});
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[a,{...b,x:110}]});
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[{...b,x:110}]});
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...b,x:112}]});
+      await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      check(await page.evaluate(()=>inspect.follow&&cam.zi>1),'pinch retains Follow through staggered finger release');
+      await page.evaluate(saved=>{Object.assign(cam,saved);draw();},saved);await cdp.detach();
+    }
+    const privateDOM=await page.content();
+    check(!/PRIVATE_TASK_CANARY|PRIVATE_NOTE_CANARY|[1239]{20}/.test(privateDOM),'task prose and session refs absent from DOM');
+    await page.screenshot({path:path.join(outDir,`${browserName}-${vp.name}-hero-follow.png`)});
+    if(args.includes('--gif-frames')&&browserName==='chromium'&&vp.width===1280){
+      const saved=await page.evaluate(()=>({state:cloneState(S),camera:{...cam}}));
+      for(let i=0;i<30;i++){
+        await page.evaluate(i=>{
+          if(i===0){clearInspection();draw();const p=inspect.picks.find(p=>p.id==='child'&&p.type==='hero');click({clientX:(p.body.left+p.body.right)/2,clientY:(p.body.top+p.body.bottom)/2});}
+          if(i===4){showInspection('child');S.heroes.root.x-=140;S.heroes.child.path=[[1000,700],[1170,700]];S.tasks.demo={id:'demo',stage:'BUILD',max_rt:1800,x:1160,y:740,alpha:1,emerge:0,atk:-1,hp:1,region:'forge',slot:0,state:'quest'};}
+          if(i>=4){stepHero(S.heroes.child,.16);if(i===16){S.tasks.demo.flash=.1;S.tasks.demo.kick=.8;}else{S.tasks.demo.flash=0;S.tasks.demo.kick=0;}renderInspection();followCharacter(.16);draw();}
+        },i);
+        await page.screenshot({path:path.join(outDir,'hero-frame-'+String(i).padStart(2,'0')+'.png')});
+      }
+      await page.evaluate(saved=>{Object.assign(S,saved.state);Object.assign(cam,saved.camera);showInspection('child');draw();},saved);
+    }
+    await page.keyboard.press('Escape');
+    check(await page.evaluate(()=>!inspect.follow&&document.activeElement===cv&&$('#character-card').hidden),'Escape stops follow and restores canvas focus');
+    await page.evaluate(()=>{showInspection('root');draw();});
+    check((await page.locator('#character-content').innerText()).includes('Not a sub-agent'),'root is not a sub-agent');
+    await page.evaluate(()=>{showInspection('orphan');draw();});
+    check((await page.locator('#character-content').innerText()).includes('Parent unknown'),'orphan does not infer a parent from task dependencies');
+    await page.mouse.click(vp.width-12,80);
+    check(await page.evaluate(()=>!inspect.follow),'empty-space tap stops follow');
+    await page.evaluate(()=>{showInspection('child');draw();});
+    await page.mouse.move(vp.width/2,80);await page.mouse.down();await page.mouse.move(vp.width/2+20,80);await page.mouse.up();
+    check(await page.evaluate(()=>!inspect.follow&&$('#character-card').hidden),'drag over 8 CSS px pans without selecting');
+    await page.evaluate(()=>{clearInspection();Object.assign(cam,{x:1000,y:670,tx:1000,ty:670});draw();});
+    await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+7,y);await page.mouse.up();
+    check(await page.evaluate(()=>!$('#character-card').hidden),'7 CSS px movement remains a tap, not a pan');
+    await page.keyboard.press('Escape');
+    await page.evaluate(()=>{clearInspection();Object.assign(cam,{x:1000,y:670,tx:1000,ty:670});draw();});
+    await page.mouse.move(x,y);await page.mouse.down();await page.waitForTimeout(550);await page.mouse.up();
+    check(await page.evaluate(()=>$('#character-card').hidden),'press over 500 ms does not select');
+    await page.locator('#stage').focus();await page.keyboard.press('Enter');
+    check(await page.locator('#character-content button').count()===3,'keyboard picker exposes every visible hero');
+    await page.keyboard.press('Escape');
+    const sessions=await page.evaluate(()=>{
+      showInspection('child');D.sessions.push({bot:'child',session_ref:'88888888888888888888',parent_session_ref:'99999999999999999999',is_subagent:true});renderInspection();
+      return {text:$('#character-content').textContent,count:document.querySelectorAll('#character-content button').length,selected:selectedSession()};
+    });
+    check(sessions.count===2&&sessions.selected===null&&sessions.text.includes('Choose a session to inspect its parent'),'multiple sessions require explicit selection of one parent');
+    await page.getByRole('button',{name:'Session 1 · Parent: Root',exact:true}).click();
+    const chosenText=await page.locator('#character-content').innerText();
+    check(chosenText.includes('Parent: Root')&&!chosenText.includes('Choose a session'),'explicit session choice exposes that session parent');
+    await page.evaluate(()=>{D.sessions.pop();clearInspection();});
+    const links=await page.evaluate(()=>{
+      const heroes={...S.heroes},sessions=D.sessions.slice(),stroke=cx.stroke,number=UI.screenNumber;let count=0,more='';
+      for(let i=0;i<4;i++){const id='extra'+i;S.heroes[id]={...S.heroes.child,bot:id,x:1000+(i-1.5)*30};D.sessions.push({bot:id,session_ref:String(i+4).repeat(20),parent_session_ref:'11111111111111111111',is_subagent:true});}
+      showInspection('root');draw();cx.stroke=()=>{count++;};UI.screenNumber=(value)=>{more=value;};
+      inspectionLinks(view());cx.stroke=stroke;UI.screenNumber=number;
+      const rows=document.querySelectorAll('#character-content button').length,dom=$('#character-content').textContent;
+      S.heroes=heroes;D.sessions=sessions;clearInspection();draw();return{count,more,dom,rows};
+    });
+    check(links.count===3&&links.more==='+2'&&links.dom.includes('+2')&&links.rows===5,'direct parent/child lines cap at three with +N and complete child list');
+    const liveParent=await page.evaluate(()=>{
+      showInspection('child');mergeDelta({events:[],tasks:[],bots:[],sessions:[{...D.sessions[1],parent_session_ref:'99999999999999999999'}],cursor:'synthetic-lineage-update'});
+      renderInspection();const result=$('#character-content').textContent;
+      mergeDelta({events:[],tasks:[],bots:[],sessions:[{...D.sessions.find(s=>s.bot==='child'),parent_session_ref:'11111111111111111111'}],cursor:'synthetic-lineage-restore'});return result;
+    });
+    check(liveParent.includes('Parent unknown'),'live session metadata upserts refresh parent without inferring');
+    await page.evaluate(()=>{showInspection('child');delete S.heroes.child;renderInspection();});
+    check((await page.locator('#character-content').innerText()).includes('Character unavailable')&&await page.evaluate(()=>!inspect.follow&&!S.heroes.child),'eviction stops follow without recreating character');
+    // A moving monster must use the painted position, never its route destination.
+    const monsterPoint=await page.evaluate(()=>{
+      clearInspection();S.heroes={};S.tasks={moving:{id:'moving',stage:'TEST',max_rt:1800,x:1900,y:1400,mx:1000,my:700,mpath:[[1900,1400]],mdist:0,mface:1,alpha:1,emerge:0,atk:-1,hp:1,region:'forge',slot:0,state:'fight'}};
+      Object.assign(cam,{x:1000,y:670,tx:1000,ty:670});draw();const p=inspect.picks.find(p=>p.type==='monster');return{x:(p.body.left+p.body.right)/2,y:(p.body.top+p.body.bottom)/2};
+    });
+    await page.mouse.click(monsterPoint.x,monsterPoint.y);
+    check(!await page.locator('#quest').evaluate(el=>el.hidden),'moving monster is selected at actual painted coordinates');
+    check(errors.length===0,errors.join('; ')||'no console/page errors');
+    fs.writeFileSync(path.join(outDir,`${browserName}-${vp.name}-hero-inspect.json`),JSON.stringify({synthetic:true,checks,geometry,errors},null,2));
+    console.log('PASS '+browserName+' '+vp.name+' hero inspection ('+checks.length+' checks)');
+  }finally{await ctx.close();}
+}
+
 fs.mkdirSync(outDir, {recursive: true});
 // Regenerate the deterministic synthetic demo exactly as documented (never reads live data).
 execFileSync('python3', [path.join('tools', 'mock.py')], {cwd: root, stdio: 'inherit'});
@@ -576,7 +700,7 @@ console.log(`serving ${root} at ${base} (${browserName})`);
 const browser = await playwright[browserName].launch();
 console.log(`${browserName} ${browser.version()}`);
 let failed = 0;
-for (const vp of VIEWPORTS) {
+for (const vp of args.includes('--inspect-only')?[]:VIEWPORTS) {
   const r = await runViewport(browser, base, vp);
   for (const s of r.steps) console.log(`  [${r.viewport}] ${s}`);
   if (r.problems.length) {
@@ -585,11 +709,14 @@ for (const vp of VIEWPORTS) {
     for (const p of [...new Set(r.problems)]) console.log(`  - ${p}`);
   } else console.log(`PASS ${browserName} ${r.viewport}`);
 }
+for(const vp of VIEWPORTS){try{await runHeroInspect(browser,base,vp);}catch(e){failed++;console.log('FAIL hero inspection '+vp.name+': '+e.stack);}}
+if(!args.includes('--inspect-only')) {
 try {await runSceneTruth(browser,base);} catch(e){failed++;console.log('FAIL scene truth: '+e.stack);}
 try {await runLoadStates(browser,base);} catch(e){failed++;console.log('FAIL load states: '+e.message);}
 try {await runRetention(browser,base);} catch(e){failed++;console.log('FAIL retention dialogs: '+e.message);}
 try {await runLiveStale(browser,base);} catch(e){failed++;console.log('FAIL live stale warning: '+e.message);}
 try {await runLiveMenu(browser,base);} catch(e){failed++;console.log('FAIL synthetic live Menu: '+e.message);}
+}
 await browser.close();
 server.close();
 console.log(failed ? `SMOKE FAIL (${failed} failing flows) screenshots: ${outDir}` : `SMOKE PASS screenshots: ${outDir}`);
