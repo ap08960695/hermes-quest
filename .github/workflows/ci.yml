@@ -83,6 +83,8 @@ jobs:
           npx playwright install --with-deps chromium firefox
       - name: UI inventory (both engines, portrait/landscape, zoom 1 and 3)
         run: node tools/test_ui_inventory.cjs "$RUNNER_TEMP/ui-regressions/inventory"
+      - name: Selected rendering and private presentation (both engines)
+        run: node tools/test_scene_selection.cjs "$RUNNER_TEMP/ui-regressions/selection"
       - name: Mobile smoke (Chromium, 8 viewports x 3 zooms)
         run: node tools/test_ui_mobile.cjs "$RUNNER_TEMP/ui-regressions/mobile-chromium" smoke
       - name: Mobile smoke (Firefox, same unchanged assertions)

@@ -447,7 +447,7 @@ async function runRetention(browser,base) {
         gone:!JSON.stringify([D,S]).includes('SYNTHETIC_EVICTED')&&!document.body.textContent.includes('SYNTHETIC_EVICTED')};});
     };
     const settled=f=>f.connected&&f.visible&&f.tag!=='BODY'&&(f.id==='tasks-all'||f.id==='heroes-all'||f.id==='menu-toggle'||f.key!=='');
-    for(const [kind,opener,expectOwn] of [['task','#tasks-list [data-key="retention-old"] button','tasks-all'],['hero','#heroes-list [data-key="retention-hero-old"] button','heroes-all']]){
+    for(const [kind,opener,expectOwn] of [['task','#tasks-list .item-summary button','tasks-all'],['hero','#heroes-list .item-summary button','heroes-all']]){
       ({base:b0}=await setup());
       const f=await pollEvict(b0,opener);
       check(!f.open&&f.gone,'poll: '+kind+' detail for evicted subject stayed open or leaked');
@@ -539,7 +539,7 @@ async function runSceneTruth(browser,base) {
       // Native frame boundary drains the pending resize event. The fixture's
       // stubbed game rAF must not let that event erase our later capture.
       await page.evaluate(()=>new Promise(resolve=>window.__nativeRaf(()=>window.__nativeRaf(resolve))));
-      await page.evaluate(()=>{loadReplay({meta:{from_:0,to:100,show_titles:false},bots:[],events:[],tasks:Array.from({length:18},(_,i)=>({id:'synthetic-crowd-'+i,stage:'BUILD'}))});reset(0);
+      await page.evaluate(()=>{selectedScene=null;loadReplay({meta:{from_:0,to:100,show_titles:false},bots:[],events:[],tasks:Array.from({length:18},(_,i)=>({id:'synthetic-crowd-'+i,stage:'BUILD'}))});reset(0);
         for(const row of D.tasks)spawnMonster(task(row.id),'forge');reset(0);const [x,y]=W.regions.forge.plaza.center;Object.assign(cam,{x,tx:x,y:y-40,ty:y-40,zi:1});draw();hud(1);});
       // reset replays the eventless payload; spawn once more, then settle with dt.
       await page.evaluate(()=>{for(const row of D.tasks)spawnMonster(task(row.id),'forge');S.play=true;S.speed=1;for(let i=0;i<9000;i++){window.__clock+=1000/60;update(1/60);}S.play=false;draw();hud(1);});
@@ -547,10 +547,14 @@ async function runSceneTruth(browser,base) {
       check((await badge.textContent()).includes('+6'),'badge does not count the six hidden monsters');
       const opened=new Set();for(let i=0;i<18;i++){
         await badge.click();const members=page.locator('#quest .item-summary');check(await members.count()===18,'overflow omitted members');
-        const id=await members.nth(i).getAttribute('data-key');check(id===`synthetic-crowd-${i}`,'wrong or missing member identity');
+        const key=await members.nth(i).getAttribute('data-key');check(/^item-\d+$/.test(key),'unsafe presentation key');
         await members.nth(i).locator('button').click();
+        const id=await page.evaluate(()=>selectedScene);check(id===`synthetic-crowd-${i}`,'wrong or missing selected identity');
         check(await page.locator('#quest .item-summary').count()===0,'Details did not leave the pick-list');
-        check((await page.locator('#quest').textContent()).includes('Task ID: '+id),'wrong selected overflow task');opened.add(id);
+        check((await page.locator('#quest').textContent()).includes('Task '+(i+1)),'wrong selected task label');
+        check(!(await page.locator('#quest').evaluate(el=>el.outerHTML)).includes(id),'raw task ID in private Details');opened.add(id);
+        await page.evaluate(()=>draw());const hidden=await page.evaluate(()=>Object.values(S.tasks).filter(t=>overflowed(t)&&t.id!==selectedScene).length);
+        check((await badge.textContent()).includes('+'+hidden),'badge counts a selected visible representative as hidden');
         await page.locator('#quest .close').click();}
       check(opened.size===18,'did not open 18 distinct Forge tasks');
       selections.push({width,tasksOpened:18,hiddenMonsters:6});
