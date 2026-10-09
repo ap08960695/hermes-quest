@@ -1,7 +1,7 @@
 'use strict';
 // Owns actions; peer bindings stay live on the per-game context. Registration never boots.
 (globalThis.HQModules ||= {}).createActions = function createActions(ctx) {
-const CUI = window.QuestCUI.create();   // difficulty = time budget
+const CUI = window.QuestCUI.create();
 function spawnMonster(t, region) {
   if (t.region === region && t.alpha > 0) return;
   const used = Object.values(ctx.S.tasks).filter(o => o !== t && o.region === region && o.alpha > 0 && !o.dying).map(o => o.slot);

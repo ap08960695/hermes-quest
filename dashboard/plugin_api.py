@@ -313,6 +313,7 @@ def _static_target(asset_path: str) -> Path:
         "index.html", "game.js", "npcs.js", "font.js", "ui-glyphs.js", "ui-panels.js", "quest/c-ui.js",
         "quest/geometry.js", "quest/appearance.js", "quest/state.js",
         "quest/actions.js", "quest/combat.js", "quest/social.js", "quest/simulation.js",
+        "quest/render.js", "quest/ui.js", "quest/history.js", "quest/transport.js",
         "assets/fonts/NotoSansThai-Regular.otf", "data/world.json", "assets/sprites/monsters.json"
     } or (
         len(parts) >= 3 and parts[:2] == ["assets", "px"]

@@ -101,7 +101,9 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
   // replay must be ignored, not silently substituted or overwritten by mock.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quest-default-'));
   try {
-    for (const f of ['index.html','game.js','quest/c-ui.js','npcs.js','assets/px/npcs/meta.json','data/world.json','tools/backtest.js','tools/parity/loader.cjs','tools/mock.py','tools/extract.py']) {
+    const modules = [...fs.readFileSync(path.join(root, 'index.html'), 'utf8')
+      .matchAll(/<script src="(quest\/[^"]+)"><\/script>/g)].map(m => m[1]);
+    for (const f of ['index.html','game.js',...modules,'npcs.js','assets/px/npcs/meta.json','data/world.json','tools/backtest.js','tools/parity/loader.cjs','tools/mock.py','tools/extract.py']) {
       const dest=path.join(dir,f); fs.mkdirSync(path.dirname(dest),{recursive:true}); fs.copyFileSync(path.join(root,f),dest);
     }
     const exec = (command,args,expected=0) => {
