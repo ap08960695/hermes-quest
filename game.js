@@ -24,7 +24,8 @@ let calm = false;
 const img = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src; });
 const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 const lerp = (a, b, t) => a + (b - a) * t;
-const fmt = t => new Date(t * 1000).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+const CLOCK_FORMAT = new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit'});
+const fmt = t => { const d = new Date(t * 1000); return Number.isNaN(d.getTime()) ? 'Invalid Date' : CLOCK_FORMAT.format(d); };
 
 let MON2 = {}, MMETA2 = {}, SPRV = {};
 let D, W, BG, SPR = {}, MONS = null, MONMETA = null, BLD = {}, MIMG = {}, HMETA = {fw: 128, fh: 96, ax: 48, base: 91, walk: [0, 1, 2, 3], atk: [4, 5, 6, 7], idle: []};

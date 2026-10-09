@@ -42,10 +42,10 @@
   function flush() {for(let i=slot;i<slots.length;i++)slots[i].hidden=true;}
   function image(im,x,y) {
     if(slot>=128||used+im.width*im.height>budget)return;used+=im.width*im.height;
-    let c=slots[slot++];if(!c){c=document.createElement('canvas');c.setAttribute('aria-hidden','true');overlay.append(c);slots.push(c);}
+    let c=slots[slot++];if(!c){c=document.createElement('canvas');c.setAttribute('aria-hidden','true');c.style.left=c.style.top='0px';overlay.append(c);slots.push(c);}
     if(c._source!==im||c._grid!==grid){c.width=im.width*grid;c.height=im.height*grid;c.style.width=im.width+'px';c.style.height=im.height+'px';
       const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.drawImage(im,0,0,c.width,c.height);c._source=im;c._grid=grid;}
-    c.style.left=x+'px';c.style.top=y+'px';c.hidden=false;
+    c.style.transform=`translate(${x}px,${y}px)`;c.hidden=false;
     drawn.push({left:x,top:y,right:x+im.width,bottom:y+im.height});
   }
   function fits(x,y,w,h) {const overlaps=r=>x<r.right&&x+w>r.left&&y<r.bottom&&y+h>r.top;
