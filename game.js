@@ -8,6 +8,7 @@
 const $ = s => document.querySelector(s);
 const cv = $('#stage'), cx = cv.getContext('2d');
 const DPR = Math.min(2, window.devicePixelRatio || 1);
+const UI = window.UIPanels;
 const STAGES = ['PLAN', 'BUILD', 'TEST', 'REVIEW', 'DEPLOY', 'VERIFY'];
 const STAGE_TH = {PLAN: 'วางแผน', BUILD: 'สร้าง', TEST: 'ทดสอบ', REVIEW: 'รีวิว', DEPLOY: 'deploy', VERIFY: 'ตรวจ'};
 const MON = {PLAN: 'ghost', BUILD: 'golem', TEST: 'slime', REVIEW: 'bat', DEPLOY: 'skeleton', VERIFY: 'mimic'};
@@ -43,7 +44,7 @@ const eventKeys = new Set();
 // bounded by 2,256; bot IDs by 6,769 (tail + metadata + task assignees), plus
 // the existing anonymous-event fallback. Transport payloads are transient.
 const HISTORY_LIMIT = 2000, METADATA_LIMIT = 256, TRANSPORT_MS = 35000;
-let checkpoint = null, pollBusy = false;
+let checkpoint = null, pollBusy = false, privacyPending = false;
 const cloneState = v => JSON.parse(JSON.stringify(v));
 class HistoryExpired extends Error {}
 class IdentityChanged extends HistoryExpired {}
@@ -61,7 +62,13 @@ function normalizeData() {
   D.meta.from_ ??= D.events[0]?.t ?? Date.now() / 1000;
   D.meta.to ??= D.events[D.events.length - 1]?.t ?? D.meta.from_;
   D.bots = D.bots.map(normalizeBot);
-  if (D.meta.show_titles === false) D.tasks.forEach(t => { t.title = t.id; });
+  // Metadata is opt-in. Sanitize before state, accessible DOM or bitmap caches.
+  if (D.meta.show_titles !== true) redactText();
+}
+function redactText() {
+  D.tasks.forEach(t => { t.title = t.id; delete t.note; });
+  D.bots.forEach(b => { b.name = b.id; });
+  D.events.forEach(e => { delete e.note; delete e.title; });
 }
 // Prefer extractor IDs. Canonical field ordering also deduplicates legacy overlap.
 function eventKey(e) {
@@ -69,7 +76,7 @@ function eventKey(e) {
     Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])]))) : v;
   return e.id !== undefined ? String(e.id) : JSON.stringify(canonical(e));
 }
-function connection(text, state) { $('#connection').textContent = text; $('#connection').dataset.state = state; }
+function connection(text, state) { if (UI) UI.status(text, state); }
 async function json(url) {
   // One deadline covers both headers and body, allowing backend extraction 30s.
   // Race as well as abort: even a transport that ignores abort cannot stall retry.
@@ -134,13 +141,15 @@ function loadReplay(replay, live = null, at = null) {
     throw new Error('Invalid replay');
   // Rebase is transactional: a failed snapshot must not destroy the old cursor/history.
   const previous = {D, checkpoint, cursor, state: {...S}, keys: [...eventKeys]};
+  if (UI) UI.privacy();
   try {
     D = replay; checkpoint = null; eventKeys.clear();
     for (const field of ['tasks', 'bots']) D[field] = [...new Map(D[field].map(v => [v.id, v])).values()];
     normalizeData();
     D.events.sort((a, b) => a.t - b.t);
     D.events = D.events.filter(e => { const key = eventKey(e); const duplicate = eventKeys.has(key); eventKeys.add(key); return !duplicate; });
-    Object.assign(S, emptyState(), live ? cloneState({feed: previous.state.feed, lastFeed: previous.state.lastFeed, fx: previous.state.fx}) : {});
+    const preserve = live && previous.D?.meta.show_titles === D.meta.show_titles;
+    Object.assign(S, emptyState(), preserve ? cloneState({feed: previous.state.feed, lastFeed: previous.state.lastFeed, fx: previous.state.fx}) : {});
     // Rebase before compaction: fresh actions can otherwise disappear into the
     // silent checkpoint, including a batch larger than the retained window.
     if (live) reset(live.t, live.keys);
@@ -149,6 +158,7 @@ function loadReplay(replay, live = null, at = null) {
     if (live && checkpoint && S.t < checkpoint.t) reset(checkpoint.t);
     if (at !== null) reset(at, new Set()); // Clean, silent migration commits atomically.
     cursor = D.cursor ?? '';
+    privacyPending = false;
   } catch (e) {
     D = previous.D; checkpoint = previous.checkpoint; cursor = previous.cursor;
     Object.assign(S, previous.state); eventKeys.clear(); previous.keys.forEach(k => eventKeys.add(k)); FRIENDS = null;
@@ -174,14 +184,16 @@ function mergeDelta(delta) {
     throw new Error('Invalid event data');
   // An identity/config migration needs a clean authoritative snapshot, not an
   // upsert mixing old profile IDs/prose with pseudonyms. Check before mutation.
-  if ((delta.meta?.config_revision !== undefined && delta.meta.config_revision !== D.meta.config_revision) ||
+  if ((delta.meta?.show_titles !== undefined && delta.meta.show_titles !== D.meta.show_titles) ||
+      (delta.meta?.config_revision !== undefined && delta.meta.config_revision !== D.meta.config_revision) ||
       (delta.meta?.captain !== undefined && delta.meta.captain !== D.meta.captain))
     throw new IdentityChanged('Replay identity changed');
-  if (checkpoint && (delta.events.some(e => e.t <= checkpoint.t ||
-      (e.task && !D.tasks.some(t => t.id === e.task) && !checkpoint.state.tasks[e.task]) ||
-      (e.bot && !D.bots.some(b => b.id === e.bot) && !checkpoint.state.heroes[e.bot])) ||
-      delta.tasks.some(t => !D.tasks.some(old => old.id === t.id)) ||
-      delta.bots.some(b => !D.bots.some(old => old.id === b.id))))
+  // Metadata-only refreshes do not change history. A newly created task is
+  // provably new; unknown older identities still require the bounded-history safeguard.
+  const born = new Set(delta.events.filter(e => e.kind === 'created' && e.t > (checkpoint?.t ?? -Infinity)).map(e => e.task));
+  if (checkpoint && delta.events.some(e => e.t <= checkpoint.t ||
+      (e.task && !D.tasks.some(t => t.id === e.task) && !checkpoint.state.tasks[e.task] && !born.has(e.task)) ||
+      (e.bot && !D.bots.some(b => b.id === e.bot) && !checkpoint.state.heroes[e.bot])))
     throw new HistoryExpired('Replay rebase required');
   const playhead = S.t, appliedThrough = D.events[S.i - 1]?.t ?? checkpoint?.t ?? -Infinity;
   const pending = new Set(D.events.slice(S.i).map(eventKey));
@@ -191,6 +203,7 @@ function mergeDelta(delta) {
     D[field] = [...byId.values()];
   }
   normalizeData(); FRIENDS = null;
+  if (D.meta.show_titles !== true) delta.events.forEach(e => { delete e.note; delete e.title; });
   syncMetadata();
   let late = false;
   for (const e of delta.events) {
@@ -215,13 +228,19 @@ function mergeDelta(delta) {
   cursor = delta.cursor;
 }
 async function pollEvents() {
-  if (pollBusy) return;
+  if (pollBusy || document.hidden) return;
   pollBusy = true;
   clearTimeout(pollTimer);
   try {
     const delta = await json(`${API}events?since=${encodeURIComponent(cursor)}`);
     try { mergeDelta(delta); } catch (e) {
       if (!(e instanceof HistoryExpired)) throw e;
+      if (e instanceof IdentityChanged) {
+        privacyPending = true;
+        redactText(); checkpoint = null;
+        Object.assign(S, emptyState());
+        if (UI) UI.privacy();
+      }
       const replay = await json(`${API}replay?hours=12`);
       if (replay.cursor === undefined) throw new Error('Missing replay cursor');
       // Playback/controls may advance while the snapshot is in flight. Classify
@@ -245,13 +264,13 @@ async function pollEvents() {
   } catch (e) { connection('ขาดการเชื่อมต่อ · ลองใหม่ใน 10s', 'offline'); }
   finally {
     // Serial requests: no overlap or advancing the cursor on a failed response.
-    pollBusy = false; pollTimer = setTimeout(pollEvents, 10000);
+    pollBusy = false; pollTimer = document.hidden ? null : setTimeout(pollEvents, 10000);
   }
 }
 function goLive() {
   following = true; S.play = true; S.speed = 1;
   document.querySelectorAll('[data-s]').forEach(b => b.classList.toggle('on', false));
-  reset(Date.now() / 1000); $('#play').textContent = '⏸';
+  reset(Date.now() / 1000); if (UI) UI.control('#play','pause','หยุด');
 }
 async function boot() {
   try {
@@ -274,14 +293,14 @@ async function boot() {
   for (const p of W.props || []) if (!BLD[p.img]) BLD[p.img] = await img(`assets/px/${p.src || 'buildings'}/${p.img}.png`);
   if (window.NPCS) await NPCS.load(W, D, img);                      // M4 villagers (npcs.js)
   MONMETA = await fetch('assets/sprites/monsters.json').then(r => r.ok ? r.json() : null).catch(() => null);
-  $('#mode').textContent = D.meta.source === 'demo' || !liveFeed ? '· DEMO' : '· LIVE';
+  if (UI) UI.control('#mode',D.meta.source === 'demo' || !liveFeed ? 'demo' : 'connected','แหล่งข้อมูล');
   ui();
   if (liveFeed) {
     goLive();
     connection(D.state === 'legacy-fallback' ? 'SNAPSHOT · รอ M3' : 'เชื่อมต่อแล้ว · 10s', D.state === 'legacy-fallback' ? 'snapshot' : 'online');
-    pollTimer = setTimeout(pollEvents, 10000);
+    if (!document.hidden) pollTimer = setTimeout(pollEvents, 10000);
   } else { reset(D.meta.from_); connection('ไฟล์ย้อนหลัง', 'file'); }
-  requestAnimationFrame(loop);
+  if (!document.hidden) raf = requestAnimationFrame(loop);
   } catch (e) { connection('โหลดข้อมูลไม่ได้ · ลองโหลดหน้าใหม่', 'offline'); }
 }
 
@@ -733,6 +752,18 @@ function update(dt) {
   cam.x = lerp(cam.x, cam.tx, 1 - Math.exp(-dt * 5)); cam.y = lerp(cam.y, cam.ty, 1 - Math.exp(-dt * 5));
 }
 function stepHero(h, dt) {
+  // Render-independent ambience: probabilities are rates calibrated at 60Hz.
+  if (UI && !calm) {
+    const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, lv = LEVEL[h.effort] || 0;
+    const fighting = h.task && S.tasks[h.task]?.state === 'fight' && h.path.length <= 1;
+    const ep = EL_PARTICLE[st.el];
+    if ((fighting || h.charge > 0) && ep && Math.random() < 1-Math.pow(.92,dt*60))
+      S.fx.push({k:'p',x:h.x+(Math.random()-.5)*26,y:h.y-Math.random()*40,vx:(Math.random()-.5)*10,vy:ep[1]*30,color:ep[0],life:.6});
+    if (lv >= 1 && Math.random() < 1-Math.pow(.95,dt*60))
+      S.fx.push({k:'p',x:h.x+(Math.random()-.5)*24,y:h.y-20-Math.random()*30,vx:0,vy:-20,color:st.color,life:.5});
+    if (lv >= 3 && Math.random() < 1-Math.pow(.75,dt*60))
+      S.fx.push({k:'p',x:h.x+(Math.random()-.5)*30,y:h.y-Math.random()*20,vx:0,vy:-40,color:st.glow,life:.7});
+  }
   h.hurt = Math.max(0, h.hurt - dt); h.down = Math.max(0, h.down - dt); h.knock = Math.max(0, (h.knock || 0) - dt * 3);
   h.meditate = Math.max(0, (h.meditate || 0) - dt); if (h.gest && (h.gest.until -= dt) <= 0) h.gest = null;
   for (const f of h.fam) if (f.task && S.tasks[f.task] && S.tasks[f.task].state === 'fight' && Math.random() < dt * .6) { const t2 = S.tasks[f.task]; S.fx.push({k: 'proj', proj: 'orb', x0: h.x + Math.cos(f.a) * 34, y0: h.y - 46, x1: t2.x, y1: t2.y - 22, color: '#ffb36b', glow: '#fff', life: .35, max: .35, arc: 6}); later(.35, () => { t2.flash = .05; burst(t2.x, t2.y - 22, '#ffb36b', 4); }); }
@@ -766,12 +797,25 @@ function atkFrame(a) { const f = HMETA.atk; return a < .14 ? f[0] : a < .22 ? f[
 function lunge(a) { return a < .14 ? -4 * ease(a / .14) : a < .22 ? lerp(-4, 12, ease((a - .14) / .08)) : a < .32 ? 12 : lerp(12, 0, ease((a - .32) / .14)); }
 
 // ---------- render ----------
+let raf = null;
 function loop(ts) {
+  raf = null;
+  if (document.hidden) return;
   const dt = Math.min(.05, (ts - (loop.last || ts)) / 1000); loop.last = ts;
   update(dt); draw(); hud(dt);
-  requestAnimationFrame(loop);
+  raf = requestAnimationFrame(loop);
 }
-function resize() { cv.width = innerWidth * DPR; cv.height = innerHeight * DPR; }
+function resize() { cv.width = innerWidth * DPR; cv.height = innerHeight * DPR; if (UI) UI.resize(); }
+function visibility() {
+  if (document.hidden) {
+    if (raf !== null) cancelAnimationFrame(raf); raf = null;
+    clearTimeout(pollTimer); pollTimer = null; loop.last = null;
+  } else if (D && W) {
+    loop.last = null;
+    if (raf === null) raf = requestAnimationFrame(loop);
+    if (liveFeed) pollEvents();
+  }
+}
 // Pixel grid: logic runs in design units (1536x1024); the world is drawn on a native 768x512 pixel grid,
 // one design unit = half a native pixel. Every sprite/tile is drawn at its native size times an INTEGER
 // screen scale Z with smoothing off, and every position is snapped to the native grid -> crisp pixels.
@@ -790,8 +834,10 @@ function blit(v, im, sx, sy, sw, sh, nx, ny, flip = false) {       // nx,ny: nat
 }
 function draw() {
   const v = view();
+  if (UI) UI.clear();
   cx.imageSmoothingEnabled = false;
   cx.fillStyle = '#0b1220'; cx.fillRect(0, 0, cv.width, cv.height);
+  if (privacyPending) return;
   if (BG) cx.drawImage(BG, v.ox, v.oy, W.size[0] * v.Z, W.size[1] * v.Z);
   const ents = [...(W.layered ? W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
     ...(Object.values(S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
@@ -799,18 +845,40 @@ function draw() {
     ...Object.values(S.heroes).map(h => ({y: h.y, f: () => heroDraw(v, h)})),
     ...(window.NPCS ? NPCS.ents(v, blit, shadowPx) : [])];             // M4 villagers share the y-sort
   ents.sort((a, b) => a.y - b.y).forEach(e => e.f());
-  for (const f of S.fx) fxDraw(v, f);
+  const groups = new Map();
+  for (const f of S.fx) {
+    if(f.k !== 'num') { fxDraw(v,f); continue; }
+    // Limit visual lanes only; keep every original effect/event in simulation.
+    const key=Math.round(f.x/24)+':'+Math.round(f.y/24),group=groups.get(key)||[];
+    group.push(f);groups.set(key,group);
+  }
+  for(const group of groups.values())group.slice(0,3).forEach((f,i)=>
+    fxDraw(v,{...f,y:f.y-i*18/v.Z*DPR,text:i===2&&group.length>3?'+'+compact(group.length-2):f.text}));
   for (const [k, r] of Object.entries(W.regions)) banner(v, k, r);
   vignette();
 }
-function shadowPx(v, nx, ny, w) {                                   // pixel-grid oval shadow
-  cx.fillStyle = 'rgba(10,14,20,.32)';
-  const h = Math.max(1, Math.round(w / 3));
-  for (let r = -h; r <= h; r++) { const half = Math.round(w * Math.sqrt(1 - (r / (h + .5)) ** 2)); cx.fillRect(v.ox + (nx - half) * v.Z, v.oy + (ny + r) * v.Z, half * 2 * v.Z, v.Z); }
+const SHADOWS = new Map(), FLASH = new Map();
+function onScreen(v,x,y,w,h) {
+  const sx=v.ox+x*v.Z, sy=v.oy+y*v.Z;
+  return sx+w*v.Z>=0 && sx-w*v.Z<=cv.width && sy+32*v.Z>=0 && sy-h*v.Z<=cv.height;
+}
+function flashSheet(im,brightness,saturation=1) {
+  const key=im.src+brightness+':'+saturation;if(FLASH.has(key))return FLASH.get(key);
+  const c=document.createElement('canvas');c.width=im.width;c.height=im.height;
+  const g=c.getContext('2d');g.filter=`brightness(${brightness}) saturate(${saturation})`;g.drawImage(im,0,0);g.filter='none';
+  // Force the one-time raster before any per-frame draw, never filter the scene.
+  g.getImageData(0,0,1,1);FLASH.set(key,c);return c;
+}
+function shadowPx(v, nx, ny, w) {
+  const h=Math.max(1,Math.round(w/3));let c=SHADOWS.get(w);
+  if(!c){c=document.createElement('canvas');c.width=w*2+2;c.height=h*2+1;const g=c.getContext('2d');g.fillStyle='rgba(10,14,20,.32)';
+    for(let r=-h;r<=h;r++){const half=Math.round(w*Math.sqrt(1-(r/(h+.5))**2));g.fillRect(w-half,h+r,half*2,1);}SHADOWS.set(w,c);}
+  blit(v,c,0,0,c.width,c.height,nx-w,ny-h);
 }
 function prop(v, p) {
   const im = BLD[p.img]; if (!im) return;
   const bx = N(p.x), by = N(p.y);
+  if (!onScreen(v,bx,by,im.width+64,im.height+64)) return;
   shadowPx(v, bx, by, Math.round(im.width * .42));
   if (p.img === 'campfire' || p.img === 'lamp') { const r = (p.img === 'lamp' ? 20 : 32) * v.Z * (1 + Math.sin(performance.now() / 180 + p.x) * .06); const lx = v.ox + bx * v.Z, ly = v.oy + (by - im.height * .8) * v.Z; const g = cx.createRadialGradient(lx, ly, 0, lx, ly, r); g.addColorStop(0, 'rgba(255,190,90,.35)'); g.addColorStop(1, 'rgba(255,190,90,0)'); cx.fillStyle = g; cx.fillRect(lx - r, ly - r, r * 2, r * 2); }
   blit(v, im, 0, 0, im.width, im.height, bx - Math.floor(im.width / 2), by - im.height + 1);
@@ -819,15 +887,12 @@ function banner(v, key, r) {
   const pr = W.layered && W.props.find(p => p.region === key), im = pr && BLD[pr.img];
   const x = v.ox + N(r.spot[0]) * v.Z, y = v.oy + (im ? N(pr.y) - im.height - 10 : N(r.spot[1]) - 60) * v.Z;
   const n = Object.values(S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
-  const label = key === 'vault' ? `${r.label}  🪙${S.vault}` : r.label + (n ? `  ⚔${n}` : '');
-  cx.font = `${Math.round(11 * DPR)}px "Noto Sans Thai",sans-serif`;
-  const w = cx.measureText(label).width + 14 * DPR, h = 18 * DPR;
-  cx.fillStyle = key === 'volcano' && n ? 'rgba(120,20,16,.88)' : 'rgba(13,21,38,.85)'; cx.strokeStyle = '#d9b25c'; cx.lineWidth = DPR;
-  cx.beginPath(); cx.roundRect(Math.round(x - w / 2), Math.round(y - h / 2), w, h, 3 * DPR); cx.fill(); cx.stroke();
-  cx.fillStyle = '#f2e6c2'; cx.textAlign = 'center'; cx.textBaseline = 'middle'; cx.fillText(label, x, y + DPR);
+  if(UI){UI.screenIcon(key==='vault'?'coin':STAGES.map(s=>s.toLowerCase()).includes(key)?key:'world',x/DPR,y/DPR);
+    if(n||key==='vault')UI.screenNumber(compact(key==='vault'?S.vault:n),x/DPR,y/DPR-22,'#ffd36b');}
 }
 function heroDraw(v, h) {
   const img = SPRV[`${h.cls}-${(h.st || NO_STYLE).tag}`] || SPR[h.cls] || SPR.warrior; if (!img) return;
+  if (!onScreen(v,h.x,h.y,180,180)) return;
   const M = HMETA, walking = h.path.length > 1;
   let fr = 0, bob = 0;
   const WK = HMETA.walk, n = WK.length, now = performance.now() / 1000;
@@ -844,18 +909,18 @@ function heroDraw(v, h) {
     cx.globalAlpha = .28 + Math.sin(performance.now() / 260 + h.homeK) * .08; cx.fillStyle = st.color;
     for (let i = -2; i <= 2; i++) { const half = Math.round((17 + (h.eff ? h.eff.mult * 3 : 3)) * Math.sqrt(1 - (i / 2.6) ** 2)); cx.fillRect(v.ox + (bx - half) * v.Z, v.oy + (N(h.y) + 1 + i) * v.Z, half * 2 * v.Z, v.Z); }
     cx.globalAlpha = 1;
-    const ep = EL_PARTICLE[st.el]; if (ep && Math.random() < .08) S.fx.push({k: 'p', x: h.x + (Math.random() - .5) * 26, y: h.y - Math.random() * 40, vx: (Math.random() - .5) * 10, vy: ep[1] * 30, color: ep[0], life: .6});
+
   }
   if (h.charge > 0) {                                                          // effort wind-up: a ring closing in on the hero
     const c = 1 - h.charge / Math.max(.01, h.eff.charge), r = 30 - c * 18, n = 14;
     for (let i = 0; i < n; i++) { const a = i / n * 6.28 + c * 4; px(v, h.x + Math.cos(a) * r, h.y - 30 + Math.sin(a) * r * .8, 2, 2, i % 3 ? st.color : st.glow); }
   }
   shadowPx(v, bx, N(h.y) + 1, 15);
-  if (h.hurt > 0 && !calm) cx.filter = 'brightness(2.4) saturate(.2)';
+  const sheet = h.hurt > 0 && !calm ? flashSheet(img,2.4,.2) : img;
   if (h.sleep && !walking) cx.globalAlpha = .9;
   if (h.down > 0 || (h.sleep && !walking)) {                     // lying down: rotate by exactly 90deg (stays on the grid)
     cx.save(); cx.translate(v.ox + bx * v.Z, v.oy + by * v.Z); cx.rotate(-Math.PI / 2);
-    cx.drawImage(img, fr * M.fw, 0, M.fw, M.fh, -M.base * v.Z, -M.ax * v.Z, M.fw * v.Z, M.fh * v.Z); cx.restore();
+    cx.drawImage(sheet, fr * M.fw, 0, M.fw, M.fh, -M.base * v.Z, -M.ax * v.Z, M.fw * v.Z, M.fh * v.Z); cx.restore();
   } else {
     const nx = h.face > 0 ? bx - M.ax : bx - (M.fw - M.ax), ny = by - M.base, lv = LEVEL[h.effort] || 0;
     levelBack(v, h, bx, by, st, lv);
@@ -865,7 +930,7 @@ function heroDraw(v, h) {
       for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) blit(v, sil, fr * M.fw, 0, M.fw, M.fh, nx + ox, ny + oy, h.face < 0);
       cx.globalAlpha = (h.sleep && !walking) ? .9 : 1;
     }
-    blit(v, img, fr * M.fw, 0, M.fw, M.fh, nx, ny, h.face < 0);
+    blit(v, sheet, fr * M.fw, 0, M.fw, M.fh, nx, ny, h.face < 0);
     levelFront(v, h, bx, by, st, lv);
   }
   cx.filter = 'none'; cx.globalAlpha = 1;
@@ -873,7 +938,7 @@ function heroDraw(v, h) {
   for (const f of h.fam) blitMon(v, 'bat', N(h.x + Math.cos(f.a) * 34), N(h.y - 46 + Math.sin(f.a) * 10), .7);
   if (h.gest && !walking) emoji(h.gest.icon.split(' ')[0], hx + 14 * v.Z, top + 6 * v.Z - Math.sin(performance.now() / 200) * 2 * v.Z, 12 * v.Z);
   if (h.sleep && !walking) emoji('💤', hx + 12 * v.Z, top + 28 * v.Z - Math.sin(performance.now() / 400) * 4 * v.Z, 14 * v.Z);
-  if (v.Z >= 2 * DPR || h.task) nameplate(hx, top - 2 * DPR, v.Z >= 2 * DPR ? `${h.name} · ${st.tag}·${h.effort}` : h.name, h.task ? '#ffd36b' : '#cfd8ea');
+
   if (h.bubble) bubble(hx, top - 16 * DPR, h.bubble.text);
 }
 // Effort/attack colours come from the character itself: the dominant saturated hue of its first frame, plus a
@@ -907,28 +972,34 @@ function silhouette(im, color) {                     // solid-colour copy of a s
 }
 // Effort = level. medium: plain. high: glowing 1px outline. xhigh: + halo. max: + wings of light and rising motes.
 const LEVEL = {low: 0, medium: 0, high: 1, xhigh: 2, max: 3};
+const WINGS = new Map(), HALOS = new Map();
 function levelBack(v, h, bx, by, st, lv) {
   if (lv >= 3) {                                     // wings of light: a fan of feathers from each shoulder, slow flap
-    const flap = Math.sin(performance.now() / 420) * .12, sy = by - 46;
-    cx.globalAlpha = .7;
-    cx.globalAlpha = .85;
+    const flap = Math.sin(performance.now() / 420) * .12, pixels = [];
     for (const sd of [-1, 1]) for (let f = 0; f < 7; f++) {
-      const ang = -.05 - f * .2 + flap, len = 46 - f * 4;           // feathers fan from sideways to steeply up
+      const ang = -.05 - f * .2 + flap, len = 46 - f * 4;
       for (let i = 10; i < len; i += 2) {
-        const x = bx + sd * (8 + Math.cos(ang) * i), y = sy + Math.sin(ang) * i * .85;
-        px(v, x - 1, y, 3, 2, i > len - 8 ? st.glow : (f % 2 ? st.color : st.glow));
+        pixels.push([N(sd*(8+Math.cos(ang)*i)-1),N(-46+Math.sin(ang)*i*.85),i>len-8||f%2===0]);
       }
     }
-    cx.globalAlpha = .18; px(v, bx - 14, by - 120, 28, 120, st.glow); cx.globalAlpha = 1;   // faint light column
+    // Key the exact snapped native pixels, not a quantized animation phase.
+    const key=st.color+st.glow+JSON.stringify(pixels);let im=WINGS.get(key);
+    if(!im){im=document.createElement('canvas');im.width=116;im.height=128;const g=im.getContext('2d');g.globalAlpha=.85;
+      for(const [x,y,glow] of pixels){g.fillStyle=glow?st.glow:st.color;g.fillRect(x+58,y+124,3,2);}
+      g.globalAlpha=.18;g.fillStyle=st.glow;g.fillRect(44,4,28,120);
+      if(WINGS.size>=256)WINGS.delete(WINGS.keys().next().value);WINGS.set(key,im);}
+    blit(v,im,0,0,116,128,bx-58,by-124);
   }
 }
 function levelFront(v, h, bx, by, st, lv) {
-  if (lv >= 1 && Math.random() < .05) S.fx.push({k: 'p', x: h.x + (Math.random() - .5) * 24, y: h.y - 20 - Math.random() * 30, vx: 0, vy: -20, color: st.color, life: .5});
+
   if (lv >= 2) {                                     // halo
     const y = by - 72 + Math.round(Math.sin(performance.now() / 500) * 1);
-    cx.globalAlpha = .9; for (let i = 0; i < 16; i++) { const a = i / 16 * 6.28; px(v, bx + Math.cos(a) * 9, y + Math.sin(a) * 3, 2, 1, st.glow); } cx.globalAlpha = 1;
+    let im=HALOS.get(st.glow);if(!im){im=document.createElement('canvas');im.width=24;im.height=12;const g=im.getContext('2d');g.globalAlpha=.9;g.fillStyle=st.glow;
+      for(let i=0;i<16;i++){const a=i/16*6.28;g.fillRect(N(Math.cos(a)*9)+11,N(Math.sin(a)*3)+5,2,1);}HALOS.set(st.glow,im);}
+    blit(v,im,0,0,24,12,bx-11,y-5);
   }
-  if (lv >= 3 && Math.random() < .25) S.fx.push({k: 'p', x: h.x + (Math.random() - .5) * 30, y: h.y - Math.random() * 20, vx: 0, vy: -40, color: st.glow, life: .7});
+
 }
 function blitMon(v, kind, bx, by, alpha = 1) {
   const im = MIMG[kind]; if (!im) return null;
@@ -936,6 +1007,7 @@ function blitMon(v, kind, bx, by, alpha = 1) {
   return im;
 }
 function monster(v, t) {
+  if (!onScreen(v,t.mx ?? t.x,t.my ?? t.y,200,200)) return;
   if (t.region === 'camp' && t.slot >= 18) return;                          // camp yard shows the first 18 only
   const kind = mtype(t), key = `${kind}-${mtier(t)}`, im2 = MON2[key], M = MMETA2[key];
   const walking = !!(t.mpath && t.emerge <= 0), kick = Math.round(ease(t.kick || 0) * 8);
@@ -956,24 +1028,24 @@ function monster(v, t) {
     else if (walking) fr = Math.floor(t.mdist / 9) % 4;
     else { fr = Math.floor(performance.now() / 380 + t.slot) % 2 ? 0 : 2; bob = 0; }      // idle: shift weight between two stances
     const face = walking ? (t.mface || -1) : -1;                            // sheets face LEFT; flip when marching right
-    if (t.flash > 0 && !calm) cx.filter = 'brightness(2.6)';
+
     cx.globalAlpha = Math.max(0, Math.min(1, alpha * (t.dying ? Math.min(1, t.dying * 2.5) : 1)));
-    blit(v, im2, fr * M.fw, 0, M.fw, M.fh, face < 0 ? bx - M.ax : bx - (M.fw - M.ax), by - M.base - bob, face > 0);
+    blit(v, t.flash > 0 && !calm ? flashSheet(im2,2.6) : im2, fr * M.fw, 0, M.fw, M.fh, face < 0 ? bx - M.ax : bx - (M.fw - M.ax), by - M.base - bob, face > 0);
     cx.globalAlpha = 1; cx.filter = 'none';
     top = by - Math.round(M.fh * .78);
   } else {
     const bob = Math.floor(performance.now() / 420 + t.slot) % 2 * 2;
-    if (t.flash > 0 && !calm) cx.filter = 'brightness(3)';
+
     const im = blitMon(v, t.chained ? 'skeleton' : (MON[t.stage] || 'goblin'), bx, by - bob, alpha * (t.dying ? t.dying : 1));
     cx.filter = 'none'; top = by - (im ? im.height : 40) - 6;
   }
-  if (t.roar > 0 && !t.dying) nameplate(v.ox + bx * v.Z, v.oy + (top - 14) * v.Z, 'GRAAAH!', '#ff7b5a');
+
   if (t.state === 'caged' && !walking) emoji('⛓', v.ox + (bx + 14) * v.Z, v.oy + (top + 10) * v.Z, 10 * v.Z);
   if (t.alpha > .5 && !t.dying && t.region !== 'camp') {                  // HP bar = time left; camp monsters just wait
     const w = 36, x0 = bx - w / 2;
     cx.fillStyle = '#141824'; cx.fillRect(v.ox + (x0 - 2) * v.Z, v.oy + (top - 2) * v.Z, (w + 4) * v.Z, 6 * v.Z);
     cx.fillStyle = t.chained ? '#e0503c' : t.hp > .4 ? '#e8c04a' : '#e0503c'; cx.fillRect(v.ox + x0 * v.Z, v.oy + top * v.Z, Math.max(1, Math.round(w * t.hp)) * v.Z, 2 * v.Z);
-    if (v.Z >= 2 * DPR) nameplate(v.ox + bx * v.Z, v.oy + (top - 4) * v.Z, t.id.slice(0, 10) + ' · ' + t.title.slice(0, 24), '#f2e6c2');
+
   }
 }
 function dragon(v) {
@@ -981,17 +1053,23 @@ function dragon(v) {
   blitMon(v, 'dragon', N(x) + 52, N(y) - 12 - b * 2);
 }
 function nameplate(x, y, text, color) {
-  cx.font = `${Math.round(10 * DPR)}px "Noto Sans Thai",sans-serif`; cx.textAlign = 'center'; cx.textBaseline = 'bottom';
-  cx.lineWidth = 3 * DPR; cx.strokeStyle = 'rgba(0,0,0,.75)'; cx.strokeText(text, x, y); cx.fillStyle = color; cx.fillText(text, x, y);
+  if(!UI)return;
+  const digits=String(text).replace(/−/g,'-').match(/[+-]?\d+/)?.[0];
+  if(digits){const n=Number(digits),label=(n<0?'-':digits.startsWith('+')?'+':'')+compact(Math.abs(n));
+    UI.screenNumber(label,x/DPR,y/DPR,color);
+    if(/CRIT|COMBO/.test(text))UI.screenIcon(effectIcon(text),x/DPR,y/DPR-40);}
+  else UI.screenIcon(effectIcon(text),x/DPR,y/DPR);
 }
 function bubble(x, y, text) {
-  const t = text.length > 46 ? text.slice(0, 45) + '…' : text;
-  cx.font = `${Math.round(10 * DPR)}px "Noto Sans Thai",sans-serif`;
-  const w = cx.measureText(t).width + 12 * DPR, h = 16 * DPR;
-  cx.fillStyle = 'rgba(245,236,210,.95)'; cx.beginPath(); cx.roundRect(x - w / 2, y - h, w, h, 5 * DPR); cx.fill();
-  cx.fillStyle = '#2a2116'; cx.textAlign = 'center'; cx.textBaseline = 'middle'; cx.fillText(t, x, y - h / 2 + DPR);
+  if(UI)UI.screenIcon('message',x/DPR,y/DPR);
 }
-function emoji(e, x, y, size) { cx.font = `${Math.round(size)}px serif`; cx.textAlign = 'center'; cx.textBaseline = 'middle'; cx.fillText(e, x, y); }
+function effectIcon(text) {
+  const icons={'📜':'read','📖':'read','🔍':'search','👁':'vision','✒':'write','🗝':'memory','🕊':'message','🐦‍⬛':'message','🐣':'delegate','🦊':'delegate','🧙':'delegate','⚒':'commit','🎈':'push','⚔':'merge','🪙':'coin','💤':'sleep','⛓':'chain','🔮':'search'};
+  if(String(text).includes('CRIT'))return 'crit';if(String(text).includes('CLEAR'))return 'verify';if(String(text).includes('COMBO'))return 'sword';
+  return icons[text]||'info';
+}
+function emoji(e, x, y, size) { if(UI)UI.screenIcon(effectIcon(e),x/DPR,y/DPR); }
+function compact(n) {return n>9999?'9999+':String(Math.max(0,Math.round(n)));}
 function px(v, x, y, w, h, c) { cx.fillStyle = c; cx.fillRect(v.ox + Math.round(x) * v.Z, v.oy + Math.round(y) * v.Z, w * v.Z, h * v.Z); }
 function fxDraw(v, f) {
   const k = f.max ? 1 - f.life / f.max : 0;
@@ -1027,7 +1105,7 @@ function fxDraw(v, f) {
   else if (f.k === 'arrows') { const e = ease(k); for (let i = 0; i < 3; i++) { const [x, y] = P(v, lerp(f.x0, f.x1, e) - i * 6, lerp(f.y0, f.y1, e) + i * 2); cx.fillStyle = '#e8f0ff'; cx.fillRect(x, y, 6 * v.Z, v.Z); } }
   else if (f.k === 'portal') { const [x, y] = P(v, f.x, f.y); const r = (8 + Math.sin(k * 20) * 2) * v.z * Math.min(1, k * 4) * Math.min(1, f.life * 2); cx.strokeStyle = '#7fc8ff'; cx.lineWidth = 3 * DPR; cx.beginPath(); cx.ellipse(x, y - 14 * v.z, r * .6, r * 1.3, 0, 0, 7); cx.stroke(); }
   else if (f.k === 'raven') { const e = ease(k), [x, y] = P(v, lerp(f.x0, f.x1, e), lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 50); emoji(f.icon || '🐦‍⬛', x, y, 9 * v.z); }
-  else if (f.k === 'council') { const [x, y] = P(v, f.h.x, f.h.y); const a = performance.now() / 500; [['FABLE', '#ffb36b'], ['ASTRA', '#7fc8ff']].forEach(([n, c], i) => { const ox = Math.cos(a + i * Math.PI) * 18 * v.z, oy = -46 * v.z + Math.sin(a + i * Math.PI) * 5 * v.z; emoji('🧙', x + ox, y + oy, 10 * v.z); nameplate(x + ox, y + oy - 7 * v.z, n, c); }); }
+  else if (f.k === 'council') { const [x,y]=P(v,f.h.x,f.h.y);emoji('🧙',x,y-46*v.z,16);nameplate(x,y-68*v.z,'2','#ffd36b'); }
 }
 function vignette() { const g = cx.createRadialGradient(cv.width / 2, cv.height / 2, cv.height * .45, cv.width / 2, cv.height / 2, cv.height * .95); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.28)'); cx.fillStyle = g; cx.fillRect(0, 0, cv.width, cv.height); }
 
@@ -1043,49 +1121,43 @@ function say(html, t, key, minGap = 0) {
   }
   S.feed.unshift({t, html}); S.feed.length = Math.min(S.feed.length, 60); S.feedDirty = true;
 }
-function renderFeed() { $('#feed').innerHTML = S.feed.slice(0, 40).map(f => `<li><time>${fmt(f.t)}</time>${f.html}</li>`).join(''); S.feedDirty = false; }
-function renderCamps() {
-  const by = {};
-  for (const t of D.tasks) (by[t.campaign] ||= []).push(t);
-  const rows = Object.entries(by).map(([c, ts]) => {
-    const live = ts.map(t => S.tasks[t.id]).filter(Boolean);
-    const done = live.filter(t => t.state === 'done').length;
-    const act = live.filter(t => t.state === 'fight' || t.state === 'blocked').length;
-    const last = Math.max(0, ...live.map(t => t.runStart || 0));
-    const pips = STAGES.map(st => {
-      const sts = live.filter(t => t.stage === st);
-      const cls = sts.some(t => t.state === 'fight') ? 'active' : sts.length && sts.every(t => t.state === 'done') ? 'done' : '';
-      return `<span class="${cls}">${STAGE_TH[st]}</span>`;
-    }).join('');
-    const blk = live.find(t => t.state === 'blocked');
-    return {c, html: `<div class="c"><b>${esc(c)}</b> <small>${done}/${ts.length} เควส${act ? ` · ⚔${act}` : ''}</small>
-      <div class="pips">${pips}</div><div class="bar"><b style="width:${Math.round(done / ts.length * 100)}%"></b></div>
-      ${blk ? `<div class="blk">⛓ ${esc(blk.title)}</div>` : ''}</div>`, score: act * 1e10 + last, seen: live.length};
-  }).filter(r => r.seen).sort((a, b) => b.score - a.score);
-  $('#camps').innerHTML = rows.slice(0, 8).map(r => r.html).join('') || '<div class="c">ยังไม่มีงาน</div>';
+function renderFeed() {
+  if(UI)UI.feed(S.feed.map(f=>({text:fmt(f.t)+' '+UI.plain(f.html)})));
+  S.feedDirty=false;
 }
-let hudT = 0;
+function renderCamps() {
+  if(!UI)return;
+  const by={};for(const t of D.tasks)(by[t.campaign]||=[]).push(t);
+  const rows=Object.entries(by).map(([title,ts])=>{
+    const live=ts.map(t=>S.tasks[t.id]).filter(Boolean),done=live.filter(t=>t.state==='done').length;
+    return {title,count:done+'/'+ts.length+' เควส',blocked:live.find(t=>t.state==='blocked')?.title,
+      stages:STAGES.map(st=>{const group=live.filter(t=>t.stage===st);return {id:st.toLowerCase(),state:group.some(t=>t.state==='fight')?'selected':group.length&&group.every(t=>t.state==='done')?'normal':'disabled'};})};
+  });UI.camps(rows);
+}
+let hudT=0;
 function hud(dt) {
-  $('#clock').textContent = fmt(S.t);
-  $('#scrub').value = Math.max(0, Math.min(1000, Math.round((S.t - D.meta.from_) / Math.max(1, D.meta.to - D.meta.from_) * 1000)));
-  $('#live').classList.toggle('on', following);
-  if ((hudT += dt) < .5) return; hudT = 0;
-  if (S.feedDirty) renderFeed();
-  renderCamps();
-  $('#mana').innerHTML = Object.entries(WALLET).map(([k, [n, c]]) => `<div>${n} ${Math.round(S.mana[k] ?? 0)}%<i><b style="width:${S.mana[k] ?? 0}%;background:${c}"></b></i></div>`).join('');
+  if(!UI || privacyPending)return;
+  if((hudT+=dt)<.1)return;hudT=0;
+  UI.number('#clock',fmt(S.t),'เวลา replay');UI.number('#speeds',String(S.speed),'ความเร็ว');
+  UI.control('#play',S.play?'pause':'play',S.play?'หยุด':'เล่น');
+  UI.control('#live','live-follow','ติดตามสด',following?'selected':'normal');
+  $('#play').setAttribute('aria-pressed',String(!S.play));$('#live').setAttribute('aria-pressed',String(following));
+  $('#scrub').value=Math.max(0,Math.min(1000,Math.round((S.t-D.meta.from_)/Math.max(1,D.meta.to-D.meta.from_)*1000)));
+  $('#scrub').setAttribute('aria-valuetext',fmt(S.t));
+  renderFeed();renderCamps();UI.resources(S.mana);
 }
 function ui() {
-  resize(); addEventListener('resize', resize);
-  $('#speeds').innerHTML = [30, 120, 600].map(s => `<button data-s="${s}">${s}x</button>`).join(' ');
-  const mark = () => document.querySelectorAll('[data-s]').forEach(b => b.classList.toggle('on', +b.dataset.s === S.speed));
-  $('#speeds').onclick = e => { if (e.target.dataset.s) { following = false; S.speed = +e.target.dataset.s; mark(); } }; mark();
-  $('#play').onclick = () => { following = false; S.play = !S.play; $('#play').textContent = S.play ? '⏸' : '▶'; };
-  $('#scrub').oninput = e => { following = false; reset(D.meta.from_ + (D.meta.to - D.meta.from_) * e.target.value / 1000); };
-  $('#live').hidden = !liveFeed;
-  $('#live').onclick = () => { goLive(); mark(); };
-  $('#calm').onclick = () => { calm = !calm; $('#calm').classList.toggle('on', calm); };
-  $('#world').onclick = () => Object.assign(cam, {tx: W.size[0] / 2, ty: W.size[1] / 2, zi: 1});
-  $('#tabs').onclick = e => { const t = e.target.dataset.t; if (t) document.body.classList.toggle('show-' + t); };
+  if(UI)UI.init();resize();addEventListener('resize',resize);
+  document.addEventListener('visibilitychange',visibility);
+  $('#speeds').onclick=()=>{following=false;const speeds=[30,120,600];S.speed=speeds[(speeds.indexOf(S.speed)+1)%speeds.length];hudT=1;hud(0);};
+  $('#play').onclick=()=>{following=false;S.play=!S.play;hudT=1;hud(0);};
+  $('#scrub').oninput=e=>{following=false;reset(D.meta.from_+(D.meta.to-D.meta.from_)*e.target.value/1000);};
+  $('#live').hidden=!liveFeed;$('#live').onclick=goLive;
+  $('#calm').onclick=()=>{calm=!calm;$('#calm').setAttribute('aria-pressed',String(calm));if(UI)UI.control('#calm','calm','ลดเอฟเฟกต์',calm?'selected':'normal');};
+  $('#world').onclick=()=>{Object.assign(cam,{tx:W.size[0]/2,ty:W.size[1]/2,zi:1});
+    if(UI)UI.detail(Object.entries(W.regions).map(([k,r])=>UI.plain(r.label)+(k==='vault'?' : '+S.vault:'')),'แผนที่');};
+  $('#tabs').onclick=e=>{const t=e.target.closest('[data-t]')?.dataset.t;if(t&&UI){UI.drawer(t);renderFeed();renderCamps();}};
+  hudT=1;hud(0);
   const pointers = new Map(); let moved = 0, pinch = null;
   const distance = () => { const [a, b] = [...pointers.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   cv.onpointerdown = e => {
@@ -1105,23 +1177,26 @@ function ui() {
   cv.onwheel = e => { e.preventDefault(); cam.zi = Math.max(1, Math.min(4, cam.zi + (e.deltaY < 0 ? 1 : -1))); };
 }
 function click(e) {
+  if(privacyPending)return;
   const v = view(), wx = (e.clientX * DPR - v.ox) / v.z, wy = (e.clientY * DPR - v.oy) / v.z;
   const t = Object.values(S.tasks).filter(t => t.alpha > 0).sort((a, b) => Math.hypot(a.x - wx, a.y - 15 - wy) - Math.hypot(b.x - wx, b.y - 15 - wy))[0];
   if (t && Math.hypot(t.x - wx, t.y - 15 - wy) < 22) return quest(t);
+  const h=Object.values(S.heroes).find(h=>Math.hypot(h.x-wx,h.y-36-wy)<36);
+  if(h&&UI)return UI.detail([h.name,h.bot,'อาชีพ : '+h.cls,'model : '+h.model,'effort : '+h.effort,
+    h.sleep?'พักที่โรงเตี๊ยม':h.task?'กำลังทำงาน':'พร้อมรับงาน',h.bubble?.text||'-'],'ฮีโร่');
   const r = Object.entries(W.regions).sort((a, b) => Math.hypot(a[1].spot[0] - wx, a[1].spot[1] - wy) - Math.hypot(b[1].spot[0] - wx, b[1].spot[1] - wy))[0];
   Object.assign(cam, {tx: r[1].spot[0], ty: r[1].spot[1] - 20, zi: 2});
-  $('#quest').style.display = 'none';
+  if(UI)UI.detail([r[1].label,'เควส : '+Object.values(S.tasks).filter(t=>t.region===r[0]).length],'พื้นที่');
 }
 function quest(t) {
-  const h = t.bot && S.heroes[t.bot], el = $('#quest');
-  const el_ = t.runStart ? Math.round((S.t - t.runStart) / 60) : 0;
-  el.innerHTML = `<h3>QUEST · ${esc(t.id)}</h3>
-    <div class="row"><b>${esc(t.title)}</b></div>
-    <div class="row"><span class="k">ผู้รับ</span> ${h ? `${esc(h.name)} (${esc(h.bot)})` : '-'} · <span class="k">ขั้น</span> ${STAGE_TH[t.stage] || t.stage} · <span class="k">สถานะ</span> ${t.state}</div>
-    <div class="row"><span class="k">เวลา</span> ${el_}m / ${Math.round((t.max_rt || 1800) / 60)}m · <span class="k">campaign</span> ${esc(t.campaign)}</div>
-    <div class="row"><span class="k">heartbeat ล่าสุด</span><br>${esc(t.note || '-')}</div>
-    <div class="row">${t.moa ? '<span class="badge">MoA</span>' : ''}${t.mock ? '<span class="badge">MOCK</span>' : ''}${t.chained ? '<span class="badge">BLOCKED</span>' : ''}</div>
-    <button onclick="this.parentNode.style.display='none'">ปิด</button>`;
-  el.style.display = 'block';
+  if(privacyPending)return;
+  const h=t.bot&&S.heroes[t.bot], elapsed=t.runStart?Math.round((S.t-t.runStart)/60):0;
+  const states={quest:'รอรับงาน',fight:'กำลังทำงาน',blocked:'ติดขัด',caged:'รอ dependency',done:'สำเร็จ'};
+  if(UI)UI.detail([t.id,D.meta.show_titles===true?t.title:t.id,
+    'ผู้รับ : '+(h?h.name+' ('+h.bot+')':'-'),
+    'ขั้น : '+(STAGE_TH[t.stage]||'ไม่ทราบ')+' สถานะ : '+(states[t.state]||'ไม่ทราบ'),
+    'เวลา : '+elapsed+' / '+Math.round((t.max_rt||1800)/60)+' นาที',
+    'ชุดงาน : '+t.campaign,'บันทึกล่าสุด : '+(D.meta.show_titles===true?t.note||'-':'-'),
+    [t.moa?'MoA':'',t.mock?'ข้อมูลจำลอง':'',t.chained?'ติดขัด':''].join(' ')],'เควส');
 }
 boot();
