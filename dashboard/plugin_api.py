@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import atexit
+import importlib.util
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -30,6 +31,11 @@ async def _lifespan(app):
 
 
 router = APIRouter(lifespan=_lifespan)
+_desktop_spec = importlib.util.spec_from_file_location("hermes_quest_desktop_transport", Path(__file__).with_name("desktop_transport.py"))
+assert _desktop_spec is not None and _desktop_spec.loader is not None
+_desktop_module = importlib.util.module_from_spec(_desktop_spec)
+_desktop_spec.loader.exec_module(_desktop_module)
+router.include_router(_desktop_module.router)
 ROOT = Path(__file__).resolve().parent.parent
 EXTRACT_TIMEOUT = 30
 _sampler = {"lock": threading.Lock(), "key": None, "thread": None, "stop": None, "state": "idle"}

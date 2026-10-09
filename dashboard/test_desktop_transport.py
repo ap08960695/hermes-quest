@@ -60,6 +60,7 @@ class Base(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.addCleanup(self.temp.cleanup)
         for name in ("index.html", *transport.SCRIPT_ORDER):
+            (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(REPO / name, self.root / name)
         (self.root / "desktop").mkdir()
         (self.root / "desktop" / "guest-bridge.js").write_text(BRIDGE_FIXTURE, encoding="utf-8")
@@ -220,8 +221,9 @@ class BootstrapTests(Base):
 
     def test_script_order_violation_and_duplicates_fail_closed(self):
         base = self.index_text()
-        swapped = base.replace('<script src="npcs.js"></script>\n<script src="game.js"></script>',
-                               '<script src="game.js"></script>\n<script src="npcs.js"></script>')
+        swapped = base.replace('<script src="npcs.js"></script>', '<script src="__swap__.js"></script>')
+        swapped = swapped.replace('<script src="game.js"></script>', '<script src="npcs.js"></script>')
+        swapped = swapped.replace('<script src="__swap__.js"></script>', '<script src="game.js"></script>')
         self.assertNotEqual(swapped, base)
         self.set_index(swapped)
         self.assert_closed(self.bootstrap(), "script_order")

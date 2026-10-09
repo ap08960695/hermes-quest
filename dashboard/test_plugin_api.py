@@ -83,6 +83,25 @@ class QuestAPItests(unittest.TestCase):
         target.write_text(text)
         return target
 
+    def test_desktop_router_included_with_host_auth_gate(self):
+        # Loaded by file location like the isolated plugin host, not a package import.
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+        app = FastAPI()
+        @app.middleware("http")
+        async def auth(request: Request, call_next):
+            if request.headers.get("Authorization") != "Bearer synthetic":
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            return await call_next(request)
+        app.include_router(api.router, prefix=PREFIX)
+        with TestClient(app) as client:
+            self.assertEqual(client.get(PREFIX + "/desktop-bootstrap").status_code, 401)
+            response = client.get(PREFIX + "/desktop-bootstrap", headers={"Authorization": "Bearer synthetic"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["version"], 1)
+            self.assertIn("quest/c-ui.js", api._desktop_module.SCRIPT_ORDER)
+            self.assertEqual(client.get(PREFIX + "/desktop-asset?path=invalid", headers={"Authorization": "Bearer synthetic"}).status_code, 404)
+
     def test_modern_replay_config_and_hours(self):
         response = self.client.get(PREFIX + "/replay?hours=2.5")
         self.assertEqual(response.status_code, 200)
