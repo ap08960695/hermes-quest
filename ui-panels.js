@@ -59,16 +59,38 @@
     for(let lane=0;lane<3;lane++){const top=y-lane*18;
       if(fits(x,top,im.width,im.height)){image(im,x,top);break;}}
   }
+  // Game symbols survive plain() so renderFeed does not erase their meaning.
+  // Visible symbols come only from our atlas; no emoji reaches the detail font.
+  const symbols={
+    '💥':['sword','กระแทกหรือคำสั่งพัง'],'💬':['message','ข้อความ'],'✨':['delegate','สภาให้คำปรึกษา'],
+    '🧭':['world','นำทาง'],'👹':['quests','มอนสเตอร์ใหม่'],'🧘':['compress','ย่อบริบท'],
+    '👑':['delegate','Captain'],'🏹':['test','ทดสอบ'],'🌀':['delegate','ส่งต่อเควส'],
+    '⏳':['clock','ขยายเวลา'],'🐦‍⬛':['message','ข้อความจาก Captain'],'🦊':['delegate','อัญเชิญ subagent'],
+    '🛡':['review','ส่งตรวจ'],'⛓':['chain','ติดขัด'],'🔓':['chain','ปลดโซ่'],'💀':['offline','ล้ม'],
+    '🏆':['verify','สำเร็จ'],'😴':['sleep','พัก'],'☀':['play','พร้อมรบ'],'📯':['delegate','สั่งงาน'],
+    '🍺':['sleep','โรงเตี๊ยม'],'🪙':['coin','เหรียญ'],'⚓':['world','ท่าเรือ'],'🔥':['build','กองไฟ'],
+    '📜':['read','เอกสาร'],'📖':['read','อ่าน'],'🔍':['search','ค้นหา'],'👁':['vision','ดูภาพ'],
+    '✒':['write','เขียน'],'🗝':['memory','ความจำ'],'🕊':['message','ข้อความ'],'🐣':['delegate','มอบหมาย'],
+    '🧙':['delegate','สภา'],'⚒':['commit','บันทึกงาน'],'🎈':['push','ส่งงาน'],'⚔':['sword','การโจมตี'],
+    '💤':['sleep','พัก'],'🔮':['search','ค้นหา']
+  };
+  const symbolPattern=new RegExp('('+Object.keys(symbols).sort((a,b)=>b.length-a.length).join('|')+'\\uFE0F?)','gu');
+  const symbol=part=>symbols[part.replace(/\uFE0F/g,'')];
   // Strip only formatting created by the game; never parse payload as HTML.
   function plain(value) {
     return String(value??'').replace(/<\/?(?:b|span)(?: class="who")?>/g,'').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&amp;/g,'&')
-      .replace(/[^\p{L}\p{M}\p{N}\p{P}\p{Zs}\n+<>=]/gu,'').trim();
+      .split(symbolPattern).map(part=>symbol(part)?part:part.replace(/[^\p{L}\p{M}\p{N}\p{P}\p{Zs}\n+<>=]/gu,'')).join('').trim();
   }
   async function line(parent,text) {
     text=plain(text);const token=epoch;
     const row=document.createElement('div');row.className='bitmap-row';
-    const accessible=document.createElement('span');accessible.className='sr-only';accessible.textContent=text;
+    const parts=text.split(symbolPattern), meanings=parts.map(part=>symbol(part)?.[1]||part).join(' ');
+    const accessible=document.createElement('span');accessible.className='sr-only';accessible.textContent=meanings;
     row.append(accessible);parent.append(row);
+    const glyphs=parts.map(symbol).filter(Boolean);
+    if(glyphs.length){const strip=document.createElement('div');strip.style.cssText='display:flex;flex-wrap:wrap;gap:2px';row.append(strip);
+      for(const [id] of glyphs){const holder=document.createElement('span');paint(holder,iconImage(id),id);strip.append(holder.firstChild);}}
+    text=parts.filter(part=>!symbol(part)).join('');
     try {
       const value=await T.bitmap(text||'-',{maxWidth:Math.max(32,parent.clientWidth-(parent.classList.contains('legend-row')?68:24))});
       if(token!==epoch||!row.isConnected)return;
@@ -78,7 +100,7 @@
     } catch(e) {
       if(token!==epoch||!row.isConnected)return;
       const c=document.createElement('canvas');c.width=c.height=36;I.draw(c.getContext('2d'),'offline',2,2,2,'alert');
-      c.setAttribute('aria-hidden','true');row.append(c);accessible.textContent='Detail font unavailable';row.setAttribute('role','status');
+      c.setAttribute('aria-hidden','true');row.append(c);accessible.textContent=meanings+' — Detail font unavailable';row.setAttribute('role','status');
     }
   }
   function close() {$('#quest').hidden=true;bounds();}
@@ -103,12 +125,24 @@
     const key=JSON.stringify(entries);if(key===feedKey)return;feedKey=key;const el=$('#feed');el.replaceChildren();
     for(const f of entries.slice(0,40))line(el,f.text);
   }
+  function campaignCount(parent,value) {
+    const text=plain(value), match=/^(\d+)\/(\d+)(?:\s+เควส)?(?:\s*(?:·\s*)?⚔\uFE0F?\s*(\d+))?$/.exec(text);
+    // Fixed four-cell fields; larger values retain their exact accessible value.
+    const compact=n=>n.length>4?'999+':n;
+    const im=document.createElement('canvas');im.width=200;im.height=36;
+    const g=im.getContext('2d');g.imageSmoothingEnabled=false;
+    T.draw(g,match?compact(match[1]):'?',0,10,{scale:2});T.draw(g,'/',48,10,{scale:2});
+    T.draw(g,match?compact(match[2]):'?',60,10,{scale:2});g.drawImage(iconImage('sword'),112,0);
+    if(match?.[3]!==undefined)T.draw(g,compact(match[3]),152,10,{scale:2});
+    const row=document.createElement('div');row.className='campaign-count';row.setAttribute('role','img');parent.append(row);
+    paint(row,im,text.split(symbolPattern).map(part=>symbol(part)?.[1]||part).join(' '));
+  }
   function camps(rows) {
     if($('#camp').hidden)return;
     const key=JSON.stringify(rows);if(key===campKey)return;campKey=key;const el=$('#camps');el.replaceChildren();
     for(const r of rows.slice(0,8)) {
       const section=document.createElement('section');section.className='campaign';el.append(section);
-      line(section,r.title);line(section,r.count);
+      line(section,r.title);campaignCount(section,r.count);
       const pips=document.createElement('div');pips.className='pips';section.append(pips);
       for(const p of r.stages){const c=document.createElement('canvas');c.width=c.height=36;c.setAttribute('role','img');c.setAttribute('aria-label',p.id+' '+p.state);c.getContext('2d').drawImage(iconImage(p.id,p.state),0,0);pips.append(c);}
       if(r.blocked)line(section,r.blocked);
@@ -126,7 +160,7 @@
   }
   function status(text,state) {control('#connection',({online:'connected',file:'snapshot'})[state]||state,text,state==='offline'?'alert':'normal');}
   function legend() {
-    const labels={'play':'เล่น','pause':'หยุด','live-follow':'ติดตามสด','speed':'ความเร็ว 30 / 120 / 600','clock':'เวลา replay','scrub-start':'เริ่มประวัติ','scrub-end':'ล่าสุด','world':'แผนที่','calm':'ลดการสั่นและแสงกะพริบ','quests':'งาน','log':'บันทึก','close':'ปิด','info':'คำอธิบาย','demo':'ข้อมูลจำลอง','connected':'เชื่อมต่อแล้ว','offline':'ขาดการเชื่อมต่อ','snapshot':'ไฟล์ย้อนหลัง','loading':'กำลังโหลด','mana-claude':'ทรัพยากร Claude','mana-codex':'ทรัพยากร Codex','mana-gemini':'ทรัพยากร Gemini','heart':'ไม่มีข้อมูล HP ฮีโร่','mana':'mana จำลอง ไม่ใช่ quota จริง','level':'ระดับเอฟเฟกต์จาก effort ไม่ใช่ EXP','coin':'งานที่สำเร็จ','plan':'วางแผน','build':'สร้าง','test':'ทดสอบ','review':'รีวิว','deploy':'เผยแพร่','verify':'ตรวจผล','chain':'ติดขัดหรือรอ dependency','sleep':'พัก','sword':'การโจมตีจากการทำงาน','crit':'ผลการโจมตีสำคัญ','read':'อ่าน','search':'ค้นหา','vision':'ดูภาพ','write':'เขียน','memory':'ความจำ','message':'ข้อความ','delegate':'มอบหมาย','commit':'บันทึกงาน','push':'ส่งงาน','merge':'รวมงาน','compressed':'ย่อบริบท'};
+    const labels={'play':'เล่น','pause':'หยุด','live-follow':'ติดตามสด','speed':'ความเร็ว 30 / 120 / 600','clock':'เวลา replay','scrub-start':'เริ่มประวัติ','scrub-end':'ล่าสุด','world':'แผนที่','calm':'ลดการสั่นและแสงกะพริบ','quests':'งาน','log':'บันทึก','close':'ปิด','info':'คำอธิบาย','demo':'ข้อมูลจำลอง','connected':'เชื่อมต่อแล้ว','offline':'ขาดการเชื่อมต่อ','snapshot':'ไฟล์ย้อนหลัง','loading':'กำลังโหลด','mana-claude':'ทรัพยากร Claude','mana-codex':'ทรัพยากร Codex','mana-gemini':'ทรัพยากร Gemini','heart':'ไม่มีข้อมูล HP ฮีโร่','mana':'mana จำลอง ไม่ใช่ quota จริง','level':'ระดับเอฟเฟกต์จาก effort ไม่ใช่ EXP','coin':'งานที่สำเร็จ','plan':'วางแผน','build':'สร้าง','test':'ทดสอบ','review':'รีวิว','deploy':'เผยแพร่','verify':'ตรวจผล','chain':'ติดขัดหรือรอ dependency','sleep':'พัก','sword':'การโจมตีจากการทำงาน','crit':'ผลการโจมตีสำคัญ','read':'อ่าน','search':'ค้นหา','vision':'ดูภาพ','write':'เขียน','memory':'ความจำ','message':'ข้อความ','delegate':'มอบหมาย','commit':'บันทึกงาน','push':'ส่งงาน','merge':'รวมงาน','compress':'ย่อบริบท'};
     detail([], 'คำอธิบายไอคอน');const content=$('#quest .detail-content');
     for(const id of I.ids){const row=document.createElement('div');row.className='legend-row';content.append(row);
       const im=iconImage(id),c=document.createElement('canvas');c.width=im.width;c.height=im.height;c.setAttribute('aria-hidden','true');c.getContext('2d').drawImage(im,0,0);row.append(c);
