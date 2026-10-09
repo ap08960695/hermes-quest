@@ -1,0 +1,292 @@
+{
+"spots": {
+"castle": [
+720,
+525
+],
+"forge": [
+320,
+535
+],
+"forest": [
+165,
+330
+],
+"tower": [
+405,
+252
+],
+"observatory": [
+585,
+245
+],
+"citadel": [
+1200,
+372
+],
+"volcano": [
+1075,
+218
+],
+"port": [
+1130,
+700
+],
+"inn": [
+250,
+795
+],
+"vault": [
+800,
+785
+]
+},
+"nodes": {
+"plaza_w": [
+640,
+540
+],
+"forge_e": [
+540,
+520
+],
+"forge_gate": [
+450,
+535
+],
+"mid": [
+455,
+435
+],
+"nw1": [
+400,
+400
+],
+"nw2": [
+330,
+372
+],
+"forest_rd": [
+250,
+345
+],
+"tower_rd": [
+420,
+322
+],
+"obs_rd": [
+560,
+330
+],
+"fountain_s": [
+780,
+560
+],
+"se1": [
+870,
+585
+],
+"se2": [
+950,
+615
+],
+"bridge_w": [
+990,
+650
+],
+"bridge_e": [
+1070,
+672
+],
+"v_w": [
+700,
+782
+],
+"bridge_v": [
+600,
+780
+],
+"vill_e": [
+450,
+785
+],
+"e1": [
+830,
+500
+],
+"ne1": [
+975,
+330
+],
+"ne2": [
+995,
+270
+],
+"stairs": [
+1050,
+250
+],
+"cit_rd": [
+1100,
+400
+],
+"v_e1": [
+905,
+650
+],
+"v_e2": [
+890,
+730
+],
+"e1b": [
+970,
+498
+],
+"e1c": [
+1000,
+450
+]
+},
+"edges": [
+[
+"castle",
+"plaza_w"
+],
+[
+"plaza_w",
+"forge_e"
+],
+[
+"forge_e",
+"forge_gate"
+],
+[
+"forge_gate",
+"forge"
+],
+[
+"forge_e",
+"mid"
+],
+[
+"mid",
+"nw1"
+],
+[
+"nw1",
+"nw2"
+],
+[
+"nw2",
+"forest_rd"
+],
+[
+"forest_rd",
+"forest"
+],
+[
+"nw1",
+"tower_rd"
+],
+[
+"tower_rd",
+"tower"
+],
+[
+"mid",
+"obs_rd"
+],
+[
+"obs_rd",
+"observatory"
+],
+[
+"castle",
+"fountain_s"
+],
+[
+"fountain_s",
+"se1"
+],
+[
+"se1",
+"se2"
+],
+[
+"se2",
+"bridge_w"
+],
+[
+"bridge_w",
+"bridge_e"
+],
+[
+"bridge_e",
+"port"
+],
+[
+"vault",
+"v_w"
+],
+[
+"v_w",
+"bridge_v"
+],
+[
+"bridge_v",
+"vill_e"
+],
+[
+"vill_e",
+"inn"
+],
+[
+"castle",
+"e1"
+],
+[
+"ne1",
+"ne2"
+],
+[
+"ne2",
+"stairs"
+],
+[
+"stairs",
+"volcano"
+],
+[
+"ne1",
+"cit_rd"
+],
+[
+"cit_rd",
+"citadel"
+],
+[
+"se1",
+"v_e1"
+],
+[
+"v_e1",
+"v_e2"
+],
+[
+"v_e2",
+"vault"
+],
+[
+"e1",
+"e1b"
+],
+[
+"e1b",
+"e1c"
+],
+[
+"e1c",
+"ne1"
+]
+]
+}

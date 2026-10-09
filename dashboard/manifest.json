@@ -1,0 +1,13 @@
+{
+  "name": "hermes-quest",
+  "label": "Hermes Quest",
+  "description": "Pixel RPG activity viewer with live events and replay controls",
+  "icon": "Gamepad2",
+  "version": "0.1.0",
+  "tab": {
+    "path": "/hermes-quest",
+    "position": "after:sessions"
+  },
+  "entry": "dist/index.js",
+  "api": "plugin_api.py"
+}

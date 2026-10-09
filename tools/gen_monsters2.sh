@@ -1,0 +1,12 @@
+#!/bin/bash
+P="$(cd "$(dirname "$0")/.." && pwd)"; cd $P/assets/raw
+until grep -q NPCDONE gen.log; do sleep 15; done
+run() { out=$1; shift; prompt=$1; shift; [ -s $out ] && return
+  codex exec --skip-git-repo-check -s workspace-write -C $P/assets/raw "Use your image generation tool to create ONE NEW image (never reuse an existing file) and save it as $P/assets/raw/$out. $prompt After saving, reply only with the file path." "$@" < /dev/null > $out.log 2>&1
+  echo "$out rc=$?" >> gen.log; }
+run lairs.png "1536x1024 SPRITE SHEET, TRANSPARENT background, HD pixel-art style matching the attached building reference, same top-down 3/4 RPG overworld camera. Follow the attached template: 2x2 cells of 768x512, one standalone structure per cell, base on the red baseline, centred, only a thin footprint shadow. Cell 1: dark cave entrance in a mossy rock outcrop with glowing red eyes inside and bones at the mouth. Cell 2: ruined stone archway with a swirling purple portal and broken pillars. Cell 3: murky green swamp pool with dead trees, bubbles and lily pads (round, self-contained, no ground around it). Cell 4: monster war camp with crude spiked palisade, bone totem, ragged tents and a bonfire. No text, no grid lines, no characters." -i lair-template.png -i buildings.png
+declare -A M=([goblin]="green goblin raider with a spiked club" [golem]="hulking iron-and-stone golem with glowing core" [slime]="large green slime with a face, bouncy" [ghost]="translucent blue ghost wraith with claws" [skeleton]="skeleton warrior with rusty sword and round shield" [bat]="big purple demon bat")
+for m in goblin golem slime ghost skeleton bat; do
+  run mon-$m.png "1536x1024 SPRITE SHEET, TRANSPARENT background. Draw EXACTLY the same monster design, colors and HD pixel-art style as the matching creature in the attached monster reference sheet: ${M[$m]}. Follow the attached template EXACTLY: 4 columns x 3 rows of 384x341 cells, same monster size in every cell, facing LEFT, full body, feet on the red baseline, body centred on the blue line. Row 1: 4-frame walk cycle (menacing, weight on each step). Row 2: 4-frame attack: anticipation (wind-up, lean back), lunge (big swing/bite/spell toward the left), impact (with a small hit flash), recover. Row 3: hurt (recoil, flash), death 1 (staggering), death 2 (falling), death 3 (collapsed on the ground / dissolving). Fierce, readable silhouettes. No grid lines, baseline or text." -i monster-template.png -i monsters.png
+done
+echo MON2DONE >> gen.log

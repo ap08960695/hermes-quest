@@ -1,0 +1,12 @@
+# private: built from real Hermes activity (internal hosts, card titles, masked customer ids)
+data/replay.json
+preview/
+.playwright-mcp/
+# raw AI sheets (~100 MB); keep assets/px and tools/gen_*.sh
+assets/raw/
+__pycache__/
+.venv/
+# Local operator instructions and agent session state; never ship these.
+/RUNBOOK.md
+/HANDOFF.md
+/.claude/

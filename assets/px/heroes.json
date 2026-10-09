@@ -1,0 +1,298 @@
+{
+  "fw": 128,
+  "fh": 96,
+  "ax": 48,
+  "base": 91,
+  "walk": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7
+  ],
+  "idle": [
+    8,
+    9,
+    10,
+    11
+  ],
+  "atk": [
+    12,
+    13,
+    14,
+    15
+  ],
+  "source_checks": {
+    "warrior-Sol": {
+      "raw_sha256": "798af4917b9f231570ef632bffaeb053757cd3e31edabf64a3ad43e497096651",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "fd6f04817d9314255edfb3e4f22eb24d9e088e4ecfc9f7a562b898bdd12343b5",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.286996,
+        0.283186,
+        0.280702,
+        0.301309
+      ],
+      "native_input_sha256": "1570a64037271950f6b56ad37fbdb41ba35f6f60e17af23f57e66ad15db1986d"
+    },
+    "engineer-Sol": {
+      "raw_sha256": "517903a819f880f8d7c39672bcd9965ea8e39eb3e15fe8a2b04d052bcde79d15",
+      "head_method": "walk-idle-appearance-reference",
+      "strip_sha256": "c636892ac0fba9bb8788d13bd9d617198edab5b0576a779259ea4b76ec4ec86c",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.25098,
+        0.252964,
+        0.26556,
+        0.297512
+      ]
+    },
+    "mage-Luna": {
+      "raw_sha256": "27d4fdc13571aaafdb5fd983a9e3cc5e9f9d9e0952a8b4b45c3fa34eb2a66a50",
+      "head_method": "walk-idle-appearance-reference",
+      "strip_sha256": "551a7211371977c8879a9df0ebac09603f34d69b5eff2fb4c844fd926cea48f2",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.236162,
+        0.237918,
+        0.301887,
+        0.320175
+      ]
+    },
+    "sage-Opus": {
+      "raw_sha256": "f9cc8bd88bc77d7fe709abbc3c3b200e2794ea9a7caa840eedfe2a361e74aea5",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "210b2d0d66a44ddbaf8b1eafade3ed41f6c936998cd555df66ae6d1f24915a98",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.272921,
+        0.27234,
+        0.26556,
+        0.296597
+      ],
+      "native_input_sha256": "70887e68dee9e80aa9af5255c7d1e0f80d32731d8261fe9747aef40817a67a2f"
+    },
+    "ranger-Sol": {
+      "raw_sha256": "68a549dec27aa071adb900e279fe93236dc9640f569a8c26efce7a9337d07f95",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "398b85c1b9c3eb06fa8d5f68f4a5f9735c220eac640ce474ab64ac03ef2bc881",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.274678,
+        0.27234,
+        0.263374,
+        0.2716
+      ],
+      "native_input_sha256": "299b8f423fb2b014d7d9c88dd1aedc1800d7d035eaac905011b62de7d7d797ff"
+    },
+    "commander-Sol": {
+      "raw_sha256": "f7414ff1e62354e6966982144a1c0f21301623eafda9ccab53ea4462cadf1f91",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "ca17c6ac2767fff214ab8ef404de98477ad95942ed22222c8c7934e0483f32d2",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.26556,
+        0.261224,
+        0.259109,
+        0.286188
+      ],
+      "native_input_sha256": "dae01a0939bb35050f5c1770a53ca66a049cdedbad4d6a69aa384f000019b506"
+    },
+    "engineer-Sonnet": {
+      "raw_sha256": "21202cf3d7b31905011bd346295312af5cf536a0240ba8d082a1abb29301164f",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "76cf16af35be2046b3b3e9eee3bdf1b70cd00bbdd3f729ad7a4bd4e96e1043d8",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.22898,
+        0.228571,
+        0.261224,
+        0.357261
+      ],
+      "native_input_sha256": "a92a65188954e39d2fe85f2aad0cdfc772fd744077c87b1e2feea6716dc1ce60"
+    },
+    "mage-Sonnet": {
+      "raw_sha256": "246df61b52eb8059bf896729c302d758aefe7aebc32cdec7a876e4aa6931746b",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "ad6698c370dbe85f5ce2632bdd4b25862faf80726d9e97544b3dc982a7fe3ace",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.26556,
+        0.26556,
+        0.263374,
+        0.269967
+      ],
+      "native_input_sha256": "125aa17bef16c37b73557058462289475b10d58c72a8e4df3e63c85a00397489"
+    },
+    "paladin-Sol": {
+      "raw_sha256": "f02ded373dc0218d931a607e8af33ae81afcb59c1113c78a578d7e98f2ef0dcb",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "5f2d694118e861ab7a200aeb6df5d9d252d38d1e914113e22f82677a876d3973",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.264463,
+        0.264463,
+        0.264463,
+        0.283892
+      ],
+      "native_input_sha256": "2d8000d9ab825bf80125b589187c628636e9843317ce25974e534342c8da2791"
+    },
+    "ranger-Sonnet": {
+      "raw_sha256": "0c9f3fc771af8f4480df79a7f8876040a528ffb1608be6574e93b7ae36758cc8",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "360442b7cb2432b2c8aca07d75ac53bbc783c9092dd8e857cf370c42fa8660eb",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.26501,
+        0.266667,
+        0.263374,
+        0.281097
+      ],
+      "native_input_sha256": "07b815d2209283aee8b2e82806b807e2bbafebcb05943c2391a9f869ef5f0b5c"
+    },
+    "sage-Sonnet": {
+      "raw_sha256": "a5189ae7828d63f534cf1f2d4219d1792b48881660dff58b692400729f9eda4f",
+      "head_method": "walk-idle-appearance-reference",
+      "strip_sha256": "22896cce6d3a0d897f1ab174953cf4f4905bb282044bca3dfedbd9fb316eaa28",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.277056,
+        0.279476,
+        0.279476,
+        0.297232
+      ]
+    },
+    "warrior-Sonnet": {
+      "raw_sha256": "5a620f4e3d7fd4029a0c1e2af55d49fba61c195eaa0ffbe5a73d2d80e1223030",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "da54f20d17a3f6b94516faed2a732dac4e8dd8a022c96d93f596cfabd40de82d",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.268908,
+        0.266667,
+        0.266112,
+        0.278715
+      ],
+      "native_input_sha256": "914c6ffc7f7c489ff97e14719b5f9dee80a70b5200ae2e1c08bf009e6fb92cc3"
+    },
+    "mage-Gemini": {
+      "raw_sha256": "8e8c3e6db54fe74614d3b05c14dcda3bac9cbb07337992a52b4ecf256c6a3cc2",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "8cd8df89e4b026873a9db11de0813bee513e1994734b44881d27faf86d3005ae",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.251969,
+        0.261759,
+        0.251473,
+        0.292154
+      ],
+      "native_input_sha256": "e9711b424aec575292f04bb52c771da84257d66b70c4838116846f721f0ae4ee"
+    },
+    "mage-Haiku": {
+      "raw_sha256": "1306a683a3a2ef245eb86f55a5c8eff341ccba80da11899b02ede96935cbb85c",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "44c89b6367430e8967cf13e8a8e1113ec38d3d609d81c3cd51e9806c6a0a003b",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.278867,
+        0.276458,
+        0.274678,
+        0.292551
+      ],
+      "native_input_sha256": "7fbe8827dd29959342c39ff8e7bb02ec865c50fa992b9fc55c9f1a5764772299"
+    },
+    "paladin-Gemini": {
+      "raw_sha256": "4ed1890c7c6b2305985f3203d1e750c1332084df44d4d655c8066b2903b59e07",
+      "head_method": "walk-idle-appearance-reference",
+      "strip_sha256": "dd567e81bfa5a335405d18ad327d9b79ccdc8f9ccad8a4f87918d79f632cfffc",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.319202,
+        0.323232,
+        0.324873,
+        0.330216
+      ]
+    },
+    "paladin-Opus": {
+      "raw_sha256": "13f94786ddce1375045bc43cb95701814690ec3e4f11a1bbdf011962257c771a",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "d8a143a4db58b4d9f46879a5c6718d3ee3d367c4a3ba1b149cffd4f92c9ab6ab",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.264463,
+        0.263374,
+        0.262295,
+        0.278981
+      ],
+      "native_input_sha256": "e929833d95ea97e6b4a3eb63ae1b6f0ce551a17e1006c97488d1c6cabd91c154"
+    },
+    "ranger-Gemini": {
+      "raw_sha256": "632ec870d91ed743a26e1d03a1961c97e28d381ef84007a1f6bf01dc631fd952",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "fb6fd6af2a2653919fb3255fec74bd385a658ea1347e293b5f94eed2947a2861",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.273504,
+        0.271186,
+        0.273504,
+        0.278853
+      ],
+      "native_input_sha256": "88f818bfd2b5ebb7483f9bd8d1828417b3ff39ad964ca6179e0f28a0133cdb88"
+    },
+    "ranger-Haiku": {
+      "raw_sha256": "7a6b75aa7e6c735b213372713d5cf9609da8cf6796167a1e5aac79d7f7bcc3c5",
+      "head_method": "walk-idle-appearance-reference",
+      "strip_sha256": "0eec1f5e09e85809c6ab51f6492bb3aff2122c7fd85c8701d90a316cc902c72d",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.266667,
+        0.263374,
+        0.271186,
+        0.280088
+      ]
+    },
+    "sage-Gemini": {
+      "raw_sha256": "c32997c622d6cd4cb5a42b8851b1ba785046d629ac0e0caab583eab6f545713e",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "6ea6d5cb13704f30f09d19b357c772b8d95d3f15d24abecedbcca85d4069ea9e",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.271186,
+        0.271186,
+        0.270613,
+        0.286153
+      ],
+      "native_input_sha256": "1c3ecbb381a5ef503c49a57ad25b28764cd87396ae6147c494e15c25ad9e1ad0"
+    },
+    "sage-Luna": {
+      "raw_sha256": "1735de3741d03dcb880a8ab1d0c73f61d61871628278fee3fcf4afdc82596019",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "15359772b4d886c39e9b5980b0a3e4478bbab074540b6687c601f994ff074c3f",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.26556,
+        0.267782,
+        0.258065,
+        0.275324
+      ],
+      "native_input_sha256": "f35f6ddbd3bd6f46def1d7941335ad36d09dbb101b27ede2eb5bbaaf67f07428"
+    },
+    "paladin-Sonnet": {
+      "raw_sha256": "469723976095e67bd73b65074334b38022b89595caccf83a2cff1d39534e9bf8",
+      "head_method": "oracle-v1-cap-mask-isotropic-native",
+      "strip_sha256": "b7284b693d08a4bbe1ba1377ff1696d9fe649e843f61f3b591bef04fc30eb662",
+      "edge_clip_frames": [],
+      "row_scales": [
+        0.380952,
+        0.378698,
+        0.376471,
+        0.396899
+      ],
+      "native_input_sha256": "ba5a422a026f7d4283477004b82acdf8c79a313ea23d235772be83ed5cefd82f"
+    }
+  }
+}

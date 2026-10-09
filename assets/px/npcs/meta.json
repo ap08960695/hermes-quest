@@ -1,0 +1,161 @@
+{
+ "hero_walk_h": 64,
+ "npcs": {
+  "porter": {
+   "title": "Porter (sack)",
+   "file": "porter.png",
+   "fw": 96,
+   "fh": 80,
+   "ax": 48,
+   "base": 75,
+   "frames": {
+    "walk": [
+     0,
+     1,
+     2,
+     3
+    ],
+    "idle": [
+     2
+    ]
+   },
+   "dirs": {
+    "right": {
+     "walk": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "idle": [
+      2
+     ]
+    }
+   },
+   "scale_vs_hero": 0.85,
+   "walk_height_px": 55,
+   "src_scale": 0.2501,
+   "head_x_spread": 0.6,
+   "height_spread": 1,
+   "native_facing": "right",
+   "mirror_left": true
+  },
+  "farmer": {
+   "title": "Farmer (straw hat, hoe)",
+   "file": "farmer.png",
+   "fw": 96,
+   "fh": 80,
+   "ax": 48,
+   "base": 75,
+   "frames": {
+    "walk": [
+     0,
+     1,
+     2,
+     3
+    ],
+    "idle": [
+     2
+    ]
+   },
+   "dirs": {
+    "right": {
+     "walk": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "idle": [
+      2
+     ]
+    }
+   },
+   "scale_vs_hero": 0.85,
+   "walk_height_px": 56,
+   "src_scale": 0.2548,
+   "head_x_spread": 0.4,
+   "height_spread": 1,
+   "native_facing": "right",
+   "mirror_left": true
+  },
+  "child": {
+   "title": "Child (wooden sword)",
+   "file": "child.png",
+   "fw": 96,
+   "fh": 80,
+   "ax": 48,
+   "base": 75,
+   "frames": {
+    "walk": [
+     0,
+     1,
+     2,
+     3
+    ],
+    "idle": [
+     2
+    ]
+   },
+   "dirs": {
+    "right": {
+     "walk": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "idle": [
+      2
+     ]
+    }
+   },
+   "scale_vs_hero": 0.6,
+   "walk_height_px": 40,
+   "src_scale": 0.2931,
+   "head_x_spread": 0.2,
+   "height_spread": 1,
+   "native_facing": "right",
+   "mirror_left": true
+  },
+  "guard": {
+   "title": "Town guard (spear)",
+   "file": "guard.png",
+   "fw": 96,
+   "fh": 80,
+   "ax": 48,
+   "base": 75,
+   "frames": {
+    "walk": [
+     0,
+     1,
+     2,
+     3
+    ],
+    "idle": [
+     2
+    ]
+   },
+   "dirs": {
+    "right": {
+     "walk": [
+      0,
+      1,
+      2,
+      3
+     ],
+     "idle": [
+      2
+     ]
+    }
+   },
+   "scale_vs_hero": 0.85,
+   "walk_height_px": 59,
+   "src_scale": 0.2628,
+   "head_x_spread": 0.2,
+   "height_spread": 0,
+   "native_facing": "right",
+   "mirror_left": true
+  }
+ }
+}

@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install test dependencies (no Hermes runtime required)
+        run: python3 -m pip install 'numpy>=1.26,<3' 'Pillow>=10,<13' 'PyYAML>=6,<7' 'fastapi>=0.115,<1' 'httpx>=0.27,<1'
+      - name: Public tree guard
+        run: python3 tools/check_public.py
+      - name: Public history guard
+        run: python3 tools/check_public.py --history
+      - name: Game backtest (must print PASS)
+        run: node tools/backtest.js
+      - name: Tools unit tests (synthetic fixtures)
+        run: python3 -m unittest discover -s tools -p 'test_*.py' -v
+      - name: Dashboard API unit tests (synthetic databases)
+        run: python3 -m unittest discover -s dashboard -p 'test_*.py' -v
+      - name: Node regression tests
+        run: |
+          node tools/backtest.test.js
+          node dashboard/test_game.cjs
+          node dashboard/test_defaults.cjs
+          # test_api_migration.cjs receives real synthetic API fixtures from
+          # test_live_contract.py in the dashboard unit-test step above.
+      - name: Live-host checks intentionally skipped
+        run: |
+          printf '%s\n' 'SKIP: live dashboard authentication, installed Hermes plugin, and network/browser deployment checks require an operator host; all repository unit tests run above using synthetic fixtures.'

@@ -1,0 +1,22 @@
+{
+  "hermes_home": "~/.hermes",
+  "profiles": "auto",
+  "captain": "auto",
+  "show_titles": false,
+  "classes": {
+    "developer": "warrior", "tester": "ranger", "reviewer": "paladin",
+    "devops": "engineer", "operator": "engineer", "researcher": "mage", "analyst": "sage"
+  },
+  "regions": {
+    "commander": "castle", "warrior": "forge", "ranger": "forest",
+    "paladin": "citadel", "engineer": "port", "mage": "tower", "sage": "observatory"
+  },
+  "stages": {
+    "sage": "PLAN", "mage": "PLAN", "warrior": "BUILD", "ranger": "TEST",
+    "paladin": "REVIEW", "engineer": "DEPLOY"
+  },
+  "stage_regions": {
+    "PLAN": "observatory", "BUILD": "forge", "TEST": "forest", "REVIEW": "citadel",
+    "DEPLOY": "port", "VERIFY": "forest"
+  }
+}

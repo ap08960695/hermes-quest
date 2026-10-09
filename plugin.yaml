@@ -1,0 +1,10 @@
+name: hermes-quest
+label: Hermes Quest
+version: 0.1.0
+manifest_version: 2
+description: Read-only pixel RPG dashboard for Hermes activity, with live polling and replay.
+capabilities: []
+provides_tools: []
+provides_hooks: []
+provides_middleware: []
+requires_env: []

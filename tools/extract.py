@@ -1,0 +1,754 @@
+#!/usr/bin/env python3
+"""Read-only Hermes replay API. Importing this module never reads or writes data.
+
+CLI: extract.py [hours=12] [--config config.json] [--output replay.json]
+Cursors are opaque URL-safe strings: source high-water marks plus fingerprints of
+mutable rows. Pass them unchanged to collect_since; invalid cursors raise ValueError.
+"""
+import argparse
+import base64
+import datetime
+import hashlib
+import ipaddress
+import json
+import os
+from pathlib import Path
+import re
+import sqlite3
+import time
+import unicodedata
+import zlib
+
+DEFAULTS = {
+    'profiles': 'auto', 'captain': 'auto', 'show_titles': False,
+    'classes': {'developer': 'warrior', 'tester': 'ranger', 'reviewer': 'paladin',
+                'devops': 'engineer', 'operator': 'engineer', 'researcher': 'mage',
+                'analyst': 'sage'},
+    'regions': {'commander': 'castle', 'warrior': 'forge', 'ranger': 'forest',
+                'paladin': 'citadel', 'engineer': 'port', 'mage': 'tower', 'sage': 'observatory'},
+    'stages': {'sage': 'PLAN', 'mage': 'PLAN', 'warrior': 'BUILD', 'ranger': 'TEST',
+               'paladin': 'REVIEW', 'engineer': 'DEPLOY'},
+    'stage_regions': {'PLAN': 'observatory', 'BUILD': 'forge', 'TEST': 'forest',
+                      'REVIEW': 'citadel', 'DEPLOY': 'port', 'VERIFY': 'forest'},
+}
+GIT = r'\bgit\s+(commit|push|merge|rebase|checkout|worktree|diff|status|log|pull|fetch)\b'
+UTIL = {'skill_view': 'tome', 'tool_search': 'tome', 'tool_describe': 'tome',
+        'web_search': 'crystal', 'web_extract': 'crystal', 'mnemosyne_recall': 'memory',
+        'mnemosyne_shared_recall': 'memory', 'mnemosyne_forget': 'memory', 'lcm_grep': 'memory',
+        'kanban_comment': 'pigeon', 'kanban_create': 'spawn', 'kanban_show': 'scout',
+        'kanban_list': 'scout', 'read_file': 'read', 'search_files': 'read'}
+CAP_ACT = {'kanban_create': 'create', 'kanban_reassign': 'reassign',
+           'kanban_extend_runtime': 'extend', 'kanban_link': 'link', 'kanban_unlink': 'unlink',
+           'kanban_unblock': 'unblock', 'kanban_block': 'block', 'kanban_comment': 'note'}
+CMD = [('test', r'\b(jest|vitest|go test|pytest|playwright|npm (run )?test|check\.py)\b'),
+       ('build', r'\b(npm (run )?build|webpack|tsc|next build|make|go build|docker build)\b'),
+       ('deploy', r'\b(kubectl|helm|deploy|ssh|scp|sshpass|jenkins)\b'),
+       ('git', r'\bgit\b'), ('probe', r'\b(curl|psql|mysql|wget|sqlite3)\b')]
+
+
+def load_config(path=None):
+    cfg = json.loads(json.dumps(DEFAULTS))
+    cfg['hermes_home'] = os.environ.get('HERMES_HOME', '~/.hermes')
+    path = path or os.environ.get('HERMES_QUEST_CONFIG')
+    if path:
+        with open(os.path.expanduser(str(path)), encoding='utf-8') as f:
+            custom = json.load(f)
+        if not isinstance(custom, dict):
+            raise ValueError('config must be a JSON object')
+        cfg.update(custom)
+    cfg['hermes_home'] = str(Path(cfg['hermes_home']).expanduser().resolve())
+    if cfg['profiles'] != 'auto' and not isinstance(cfg['profiles'], list):
+        raise ValueError('profiles must be auto or a list of profile IDs')
+    if not isinstance(cfg['show_titles'], bool):
+        raise ValueError('show_titles must be boolean')
+    for p in ([] if cfg['profiles'] == 'auto' else cfg['profiles']) + [cfg['captain']]:
+        if not isinstance(p, str) or not re.fullmatch(r'[\w-]+', p):
+            raise ValueError('invalid profile ID')
+    for key in ('classes', 'regions', 'stages', 'stage_regions'):
+        if not isinstance(cfg[key], dict):
+            raise ValueError(f'{key} must be an object')
+    return cfg
+
+
+def _normalize_text(value):
+    """One alphabet for keys, separators, values and the final token gate.
+
+    Keep JSON containers structural; canonicalize other paired wrappers as
+    quotes too (including CJK/ornamental quotes). Drop invisible format chars
+    before matching so they cannot split a sensitive label or separator.
+    """
+    single = "‘’‚‛❛❜"
+    double = '❝❞❮❯〝〞〟<>'
+    text = unicodedata.normalize('NFKC', str(value or ''))
+    return ''.join(
+        "'" if char in single else
+        '"' if char in double or (unicodedata.category(char) in {'Pi', 'Pf', 'Ps', 'Pe'}
+                                  and char not in '[]{}') else char
+        for char in text if unicodedata.category(char) != 'Cf')
+
+
+def redact(s, n=80):
+    """Conservative screenshot-safe text. Redact before truncation, never keep suffixes."""
+    s = _normalize_text(s)
+    # Consume outer paths before an inner URL/IP can destroy their boundaries.
+    s = re.sub(r""""(?:[A-Za-z]:[\\/]|\\\\|/)(?:\\.|[^"\\])*"|'(?:[A-Za-z]:[\\/]|\\\\|/)(?:\\.|[^'\\])*'""", '[path]', s)
+    # Balanced labeled values may contain spaces inside quotes/braces. Treat
+    # comma/semicolon as separators only when an actual next field follows.
+    label = r'''(?i)\b(?:(?:[\w-]*[_-])?(?:authorization|token|password|passwd|secret|key|credentials?|api[_-]?key|access[_-]?key)(?:[_-][\w-]+)?|(?:customer|client|account|cust)[-_ ]?id|host|hostname)\b["']?\s*[:=]\s*'''
+    pieces, end = [], 0
+    for match in re.finditer(label, s):
+        if match.start() < end:
+            continue
+        start = i = match.end()
+        scheme = re.match(r'(?i)(?:basic|bearer)\s+', s[i:]) if 'authorization' in match.group().lower() else None
+        if scheme:
+            i += scheme.end()
+        value_start = i
+        stack, quote = [], None
+        quoted = i < len(s) and s[i] in '\"\''
+        while i < len(s):
+            char = s[i]
+            if char == '\\':
+                i += 2
+                continue
+            if quote:
+                if char == quote:
+                    quote = None
+                    if quoted and not stack:
+                        i += 1
+                        # A same-quote nested value has no trustworthy end.
+                        # Never release its tail as ordinary opt-in prose.
+                        if i < len(s) and not (s[i].isspace() or s[i] in ',;}]'):
+                            i = len(s)
+                        elif re.match(r'''\s+[^,;}]*["']''', s[i:]):
+                            i = len(s)
+                        break
+            elif char in '\"\'':
+                if i == value_start or stack:
+                    quote = char
+                else:
+                    break  # Closing quote of an entire quoted assignment.
+            elif char in '{[':
+                stack.append('}' if char == '{' else ']')
+            elif stack and char == stack[-1]:
+                stack.pop()
+            elif not stack:
+                # Unquoted labeled spans have no trustworthy word boundary:
+                # ASCII/Unicode whitespace may both separate secret components.
+                # Fail closed until a container closes or a real next field starts.
+                if char in '}]':
+                    break
+                if char.isspace() and re.match(r'''\s+["']?[\w-]+["']?\s*[:=]''', s[i:]):
+                    break
+                if char in ',;' and re.match(r'''[,;]\s*["']?[\w-]+["']?\s*[:=]''', s[i:]):
+                    break
+            i += 1
+        if i > start:
+            pieces.extend((s[end:match.start()], '[redacted]'))
+            end = min(i, len(s))
+    s = ''.join(pieces) + s[end:]
+    def ip_replace(m):
+        value = m.group().strip('[]').rstrip('.,;')
+        try:
+            ipaddress.ip_address(value.split('%')[0])
+            return '[ip]'
+        except ValueError:
+            return m.group()
+    s = re.sub(r'(?<!\w)(?:\d{1,3}\.){3}\d{1,3}(?!\w)|(?<!\w)\[?[0-9a-fA-F]*:[0-9a-fA-F:.%\w]*\]?', ip_replace, s)
+    # Commas are value punctuation unless followed by another labeled field.
+    # Quoted values may contain escaped quotes, whitespace and delimiters.
+    value = (r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|'''
+             r'''[^\s"']+?(?=[;,]\s*["']?[\w-]+["']?\s*[:=]|[\s"']|$))''')
+    masked = r'(?i)[\w-]*[x*•]{2,}[\w*•-]*(?:\s+[x*•]{2,}[\w*•-]*)*(?:\s+\d[\w-]*)?|\b\d+[x*•]+[\w*•-]*'
+    patterns = [
+        (r'(?is)-----BEGIN [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)-----.*?-----END [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)-----', '[secret]'),
+        (r'(?i)\b(?:authorization\b["\']?\s*[:=]?\s*["\']?\s*)?(?:basic|bearer)\s+[^\s"\';}]+', '[secret]'),
+        (r'(?i)\b(?:[\w-]*[_-])?(?:authorization|bearer|token|password|passwd|secret|key|credentials?|api[_-]?key|access[_-]?key)(?:[_-][\w-]+)?\b(?!\])["\']?\s*[:=]?\s*' + value, '[secret]'),
+        (masked, '[id]'),
+        (r'(?i)\b(?:customer|client|account|cust)[-_ ]?id\b["\']?\s*[:=]?\s*' + value, '[id]'),
+        (r'(?i)\b(?:host|hostname)\b["\']?\s*[:=]\s*' + value, '[host]'),
+        # Consume separated identifiers before path/hostname rules can split them.
+        (r'(?i)(?:\b(?:customer|client|account|cust)[-_ ]?(?:id)?\s*[:=]?\s*)?[\w-]*\d(?:[ ._/-]?\d){5,}[\w-]*', '[id]'),
+        (r'\b(?:https?|ftp|ssh|file|wss?)://[^\s<>]+|\bwww\.[^\s<>]+', '[url]'),
+        (r'(?i)\b(?:[\w-]+\.)+[a-z][\w-]*(?::\d+)?[/?#][^\s<>"\']*', '[url]'),
+        (r'[\w.+-]+@[\w.-]+', '[email]'),
+        (r""""(?:[A-Za-z]:[\\/]|\\\\|/)(?:\\.|[^"\\])*"|'(?:[A-Za-z]:[\\/]|\\\\|/)(?:\\.|[^'\\])*'""", '[path]'),
+        (r'(?<!\w)(?:[A-Za-z]:[\\/]|\\\\)(?:\\[ \t]|[^\s<>"\'])+|(?<![\w:])/(?:\\[ \t]|[^\s<>"\'])+', '[path]'),
+        (r'(?i)\b(?:[\w-]+\.)+(?:[a-z][\w-]*)(?::\d+)?\b', '[host]'),
+        (r'(?i)\b(?:srv|host|db|uat|sit|prod|internal|server)[-_][\w-]+\b', '[host]'),
+        (r'(?i)\b[\w-]+[-_](?:server|db|uat|sit|prod|internal)\b', '[host]'),
+        (r'(?i)\b(?:localhost|(?:srv|host|db|uat|sit|prod|server)\d[\w-]*|ip[-_][\d-]+)\b', '[host]'),
+        (r'\b(?:sk|ghp|gho|github_pat|AKIA)[-_]?[A-Za-z0-9_\-]{12,}\b|\beyJ[A-Za-z0-9_\-.]+', '[secret]'),
+        (r'(?i)\b(?=[A-Za-z0-9_+\-=]{24,}\b)(?=[A-Za-z0-9_+\-=]*[a-z])(?=[A-Za-z0-9_+\-=]*\d)[A-Za-z0-9_+\-=]+', '[secret]'),
+    ]
+    for pattern, replacement in patterns:
+        s = re.sub(pattern, replacement, s)
+
+    s = ' '.join(s.split())
+    return s[:n] + ('…' if len(s) > n else '')
+
+
+# Include every sensitive label handled by redact; substrings intentionally catch
+# compound/prefixed labels too. No separator or value boundary is trustworthy.
+SENSITIVE_LABELS = (
+    'authorization', 'bearer', 'token', 'password', 'passwd', 'secret', 'key',
+    'credential', 'apikey', 'accesskey', 'customerid', 'clientid', 'accountid',
+    'custid', 'host', 'hostname',
+)
+
+
+def _label_skeleton(value):
+    """Decompose before/after casefold so marks cannot hide sensitive labels."""
+    normalized = unicodedata.normalize('NFKD', str(value or ''))
+    normalized = ''.join(char for char in normalized
+                         if unicodedata.category(char)[0] != 'M')
+    normalized = unicodedata.normalize('NFKD', normalized.casefold())
+    normalized = ''.join(char for char in normalized
+                         if unicodedata.category(char)[0] != 'M')
+    return ''.join(char for char in normalized
+                   if unicodedata.category(char)[0] in 'LN')
+
+
+def _has_sensitive_label(value):
+    # Preserve compatibility spellings. Fail closed on source nonletters that
+    # expand to letters/numbers: they may be inserted symbols, not label letters.
+    skeleton = _label_skeleton(value)
+    if any(label in skeleton for label in SENSITIVE_LABELS):
+        return True
+    return any(unicodedata.category(char)[0] not in 'LN' and _label_skeleton(char)
+               for char in str(value or ''))
+
+
+def _opt_in_text(value, n=120):
+    """Fail closed on the whole text, scanning labels before any span redaction."""
+    if _has_sensitive_label(value):
+        return '[redacted]'
+    # Gate source brackets, not placeholders produced by the span redactor.
+    if re.search(r'[\[\]]', _normalize_text(value)):
+        return '[redacted]'
+    text = redact(value, max(len(str(value or '')), n))
+    risky = r'''[=:/\\@{};"']|\d{5,}|(?:[\w-]+\.)+[a-zA-Z][\w-]*'''
+    if re.search(risky, text):
+        return '[redacted]'
+    return text[:n] + ('…' if len(text) > n else '')
+
+
+def _bot_id(value):
+    return 'bot-' + _hash(str(value))[:20] if value else ''
+
+
+# Source-controlled enumerations: unknown upstream strings never become default text.
+TEXT_ENUMS = {
+    'status': {'triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review', 'done', 'archived'},
+    'kind': {'created', 'assigned', 'claimed', 'spawned', 'heartbeat', 'completed', 'failed',
+             'blocked', 'unblocked', 'reassigned', 'promoted', 'scheduled', 'linked', 'unlinked',
+             'comment', 'run_start', 'run_end', 'summon', 'tool', 'hurt', 'tests', 'mana', 'compress',
+             'captain', 'review_requested', 'changes_requested', 'dependency_wait', 'wake', 'moa'},
+    'outcome': {'', 'completed', 'failed', 'interrupted', 'timed_out', 'blocked', 'review', 'success'},
+    'tool': set(UTIL) | set(CAP_ACT) | {'terminal', 'patch', 'write_file', 'tool', 'delegate_task',
+                                      'vision_analyze', 'web_extract', 'execute_code'},
+    'effort': {'max', 'xhigh', 'high', 'medium', 'low', 'minimal', 'none'},
+    'tag': {'', '[failover]', '[extend-done]', '[moa-limit]', '[REASSIGN]'},
+    'wallet': {'agy', 'codex', 'claude'},
+    'model': {'gpt', 'gemini', 'claude', 'unknown'},
+    'campaign': {'quests'},
+    'cat': {cat for cat, _ in CMD} | {'shell'},
+    'git': {'commit', 'push', 'merge', 'rebase', 'checkout', 'worktree', 'diff', 'status', 'log', 'pull', 'fetch'},
+    'util': set(UTIL.values()), 'act': set(CAP_ACT.values()),
+}
+
+
+def ro(path):
+    db = sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=5)
+    db.row_factory = sqlite3.Row
+    db.execute('PRAGMA query_only=ON')
+    db.execute('BEGIN')  # High-water marks and rows use the same database snapshot.
+    return db
+
+
+def _json(value, default):
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value or 'null') or default
+    except (ValueError, TypeError):
+        return default
+
+
+def _has_json1(db):
+    try:
+        db.execute("SELECT json_group_array(json_object('probe',json_extract(value,'$'))) "
+                   "FROM json_each(CASE WHEN json_valid('[]') THEN '[]' ELSE '[]' END)").fetchone()
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _tool_calls_sql(captain=False, json1=True):
+    # Project call identity in SQLite: memory queries/arguments must never be
+    # returned to Python merely to classify a generated gesture. Keep order/IDs
+    # and retrieve arguments only for real consumers. Without JSON1 omit call
+    # gestures (not the replay) rather than load private memory arguments into
+    # Python. Terminal results, usage, lifecycle and comments remain available.
+    if not json1:
+        return "'[]'"
+    consumers = {'terminal', 'patch', 'write_file'} | (set(CAP_ACT) if captain else set())
+    names = ','.join("'" + name + "'" for name in sorted(consumers))
+    return f"""(SELECT json_group_array(json_object(
+        'id',json_extract(value,'$.id'), 'call_id',json_extract(value,'$.call_id'),
+        'function',json_object('name',json_extract(value,'$.function.name'),
+        'arguments',CASE WHEN json_extract(value,'$.function.name') IN ({names})
+                        THEN json_extract(value,'$.function.arguments') END)))
+        FROM json_each(CASE WHEN json_valid(tool_calls) THEN tool_calls ELSE '[]' END)
+        WHERE type='object')"""
+
+
+def _message_columns(captain=False, json1=True):
+    return ("session_id,role,tool_name,tool_call_id,timestamp,token_count,"
+            "CASE WHEN role='tool' AND tool_name='terminal' THEN content END AS content,"
+            + _tool_calls_sql(captain, json1) + " AS tool_calls")
+
+
+def _hash(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+
+def _cursor(state):
+    data = json.dumps(state, separators=(',', ':'), sort_keys=True).encode()
+    return base64.urlsafe_b64encode(zlib.compress(data)).decode().rstrip('=')
+
+
+def _decode(cursor):
+    if not cursor:
+        return {}
+    try:
+        if not isinstance(cursor, str) or len(cursor) > 1024 * 1024:
+            raise ValueError()
+        data = base64.b64decode(cursor + '=' * (-len(cursor) % 4), altchars=b'-_', validate=True)
+        decoder = zlib.decompressobj()
+        unpacked = decoder.decompress(data, 2 * 1024 * 1024)
+        if not decoder.eof or decoder.unused_data:
+            raise ValueError()
+        state = json.loads(unpacked)
+        if state.get('v') != 1 or not isinstance(state.get('marks'), dict):
+            raise ValueError()
+        if any(not isinstance(state.get(key), dict) for key in ('tasks', 'bots', 'runs')):
+            raise ValueError()
+        for key, value in state['marks'].items():
+            values = value if key.startswith('compression-') and isinstance(value, list) and len(value) == 2 else [value]
+            if any(not isinstance(v, int) or v < 0 for v in values):
+                raise ValueError()
+        if not isinstance(state.get('pending', []), list):
+            raise ValueError()
+        delivered = state.get('delivered', [])
+        if not isinstance(delivered, list) or any(not isinstance(seq, str) or not re.fullmatch(r'[0-9]+', seq) for seq in delivered):
+            raise ValueError()
+        captain_pending = state.get('captain_pending', {})
+        if not isinstance(captain_pending, dict) or any(
+                not re.fullmatch(r'[0-9]+', seq) or not isinstance(indices, list) or
+                any(not isinstance(i, int) or i < 0 for i in indices)
+                for seq, indices in captain_pending.items()):
+            raise ValueError()
+        compression_pending = state.get('compression_pending', [])
+        if not isinstance(compression_pending, list) or any(
+                not isinstance(e, dict) or not all(isinstance(e.get(k), str) for k in ('source', 'seq', 'session')) or
+                not all(isinstance(e.get(k), (int, float)) for k in ('t', 'before', 'after'))
+                for e in compression_pending):
+            raise ValueError()
+        return state
+    except (ValueError, TypeError, AttributeError, zlib.error):
+        raise ValueError('invalid Hermes Quest cursor') from None
+
+
+def _class(prof, cfg, captain):
+    if prof == captain:
+        return 'commander'
+    return next((c for role, c in cfg['classes'].items() if prof.startswith(role)), 'mage')
+
+
+def _bot(prof, cfg, captain):
+    root = Path(cfg['hermes_home']) / 'profiles' / prof
+    def text(name):
+        try:
+            return (root / name).read_text(encoding='utf-8')
+        except FileNotFoundError:
+            return ''
+    display = re.search(r'^display_name:\s*(.+)$', text('profile.yaml'), re.M)
+    conf = text('config.yaml')
+    model = re.search(r'^model:\s*\n(?:[ \t]+.*\n)*?[ \t]+default:\s*(\S+)', conf, re.M)
+    effort = re.search(r'^agent:\s*\n((?:[ \t]+.*\n)+)', conf, re.M)
+    effort = effort and re.search(r'reasoning_effort:\s*(\S+)', effort.group(1))
+    model = model.group(1).strip('"\'') if model else ''
+    effort = effort.group(1).strip('"\'') if effort else next(
+        (x for x in ('max', 'xhigh', 'high', 'medium', 'low') if model.endswith('-' + x)),
+        'high' if 'thinking' in model else 'medium')
+    cls = _class(prof, cfg, captain)
+    wallet = 'agy' if 'gemini' in model.lower() else 'codex' if any(x in model.lower() for x in ('gpt', 'codex', 'sol')) else 'claude'
+    # Default labels are generated, never redacted copies of upstream prose.
+    name = _opt_in_text(display.group(1)) if display and cfg['show_titles'] else _bot_id(prof)
+    if not cfg['show_titles']:
+        model = ('gemini' if 'gemini' in model.lower() else 'gpt' if wallet == 'codex'
+                 else 'claude' if 'claude' in model.lower() else 'unknown')
+    return dict(id=_bot_id(prof), name=name,
+                cls=cls, region=cfg['regions'].get(cls, cfg['regions'].get('mage', 'tower')),
+                wallet=wallet, model=model, effort=effort)
+
+
+def _snapshot(cfg, previous=None, t0=None):
+    previous = previous or {}
+    old = previous.get('marks', {})
+    state = dict(v=1, marks=dict(old), runs={}, tasks={}, bots={}, pending=[],
+                 captain_pending={}, compression_pending=[])
+    marks, events, tasks, task_keys = state['marks'], [], {}, {}
+    home = Path(cfg['hermes_home'])
+    captain = cfg['captain'] if cfg['captain'] != 'auto' else ''
+    def safe(value, key=''):
+        if isinstance(value, str):
+            if key in ('id', 'task', 'other', 'parents'):
+                if re.fullmatch(r'(?:t_[0-9a-f]{8}|e_[0-9a-f]{64}|bot-[0-9a-f]{20})', value):
+                    return value
+                return _bot_id(value)
+            if key in ('bot', 'author', 'captain'):
+                return _bot_id(value)
+            if cfg['show_titles']:
+                return _opt_in_text(value)
+            if key in TEXT_ENUMS:
+                return value if value in TEXT_ENUMS[key] else 'unknown'
+            if key in ('title', 'note', 'name'):
+                return value  # Generated by this module only in default mode.
+            if key == 'sub' and re.fullmatch(r'[0-9a-f]{6}', value):
+                return value
+            configured = {'cls': set(cfg['classes'].values()) | {'commander', 'mage'},
+                          'region': set(cfg['regions'].values()) | {'tower'},
+                          'stage': set(cfg['stages'].values()) | {'BUILD', 'VERIFY'}}
+            if value in configured.get(key, set()):
+                return _opt_in_text(value)
+            return 'unknown'
+        if isinstance(value, list):
+            return [safe(v, key) for v in value]
+        if isinstance(value, dict):
+            return {k: safe(v, k) for k, v in value.items()}
+        return value
+    def meta():
+        # Mapping labels are explicit configured game enums, not source free text.
+        return dict(captain=_bot_id(captain),
+                    **{key: {_opt_in_text(k): _opt_in_text(v) for k, v in cfg[key].items()}
+                       for key in ('classes', 'regions', 'stage_regions')},
+                    show_titles=cfg['show_titles'], source='live', mock=False,
+                    config_revision=_hash([cfg, captain]))
+    path = home / 'kanban.db'
+    try:
+        path.stat()
+    except FileNotFoundError:
+        if path.is_symlink():
+            raise  # A broken configured source is not an absent database.
+        # No board means no live observations. Preserve an existing cursor so a
+        # temporarily absent source cannot acknowledge rows or duplicate recovery.
+        return dict(meta=meta(), tasks=[], bots=[], events=[], cursor=_cursor(previous or state))
+    def emit(source, seq, event):
+        event['id'] = 'e_' + _hash([source, seq])
+        if t0 is None or event['t'] >= t0:
+            events.append(event)
+    def rows(db, table, source, timestamp, deferred=(), columns='*'):
+        hi = db.execute(f'SELECT coalesce(max(rowid),0) FROM {table}').fetchone()[0]
+        marks[source] = hi
+        for seq in sorted(int(seq) for seq in deferred if int(seq) <= old.get(source, 0)):
+            row = db.execute(f'SELECT rowid AS seq,{columns} FROM {table} WHERE rowid=? AND rowid<=?', (seq, hi)).fetchone()
+            if row is not None:
+                yield row
+        yield from db.execute(f'SELECT rowid AS seq,{columns} FROM {table} WHERE rowid>? AND rowid<=?' +
+                              (f' AND {timestamp}>=?' if t0 is not None else '') + ' ORDER BY rowid',
+                              (old.get(source, 0), hi) + ((t0,) if t0 is not None else ()))
+    k = ro(home / 'kanban.db')
+    try:
+        captain = cfg['captain']
+        if captain == 'auto':
+            row = k.execute('SELECT created_by,count(*) AS n FROM tasks WHERE created_by IS NOT NULL '
+                            'GROUP BY created_by ORDER BY n DESC,created_by LIMIT 1').fetchone()
+            captain = row[0] if row else ''
+        for row in k.execute('SELECT rowid AS seq,* FROM tasks ORDER BY rowid'):
+            r = dict(row); prof = r['assignee'] or ''
+            task_keys[r['id']] = str(r['seq'])
+            stage = cfg['stages'].get(_class(prof, cfg, captain), 'BUILD')
+            if stage == 'TEST' and re.search(r'smoke|verify|retest|หลัง deploy', r['title'], re.I):
+                stage = 'VERIFY'
+            title = r['title'] if cfg['show_titles'] else f'Quest #{r["seq"]} · {stage}'
+            tasks[r['id']] = dict(id=r['id'], title=title, bot=r['assignee'], status=r['status'],
+                                  created=r['created_at'], started=r['started_at'], completed=r['completed_at'],
+                                  campaign='quests', moa=r.get('provider_override') == 'moa',
+                                  max_rt=r.get('max_runtime_seconds') or 1800, parents=[], stage=stage)
+        for r in k.execute('SELECT * FROM task_links'):
+            if r['child_id'] in tasks:
+                tasks[r['child_id']]['parents'].append(r['parent_id'])
+        def note(tid, kind, raw):
+            if cfg['show_titles']:
+                return str(raw)
+            return f'{tasks.get(tid, {}).get("title", "Quest")} · {kind if kind in TEXT_ENUMS["kind"] else "unknown"}'
+        for r in rows(k, 'task_events', 'kanban-events', 'created_at'):
+            pl = _json(r['payload'], {})
+            if not isinstance(pl, dict):
+                pl = {}
+            e = dict(t=r['created_at'], task=r['task_id'], kind=r['kind'])
+            raw = pl.get('note') or pl.get('summary') or pl.get('reason')
+            if raw:
+                e['note'] = note(r['task_id'], r['kind'], raw)
+            if r['kind'] in ('assigned', 'claimed') and pl.get('assignee'):
+                e['bot'] = pl['assignee']
+            emit('kanban-events', r['seq'], e)
+        for r in rows(k, 'task_comments', 'kanban-comments', 'created_at'):
+            body = r['body'] or ''
+            tag = next((t for t in ('[failover]', '[extend-done]', '[moa-limit]', '[REASSIGN]') if body.startswith(t)), '')
+            emit('kanban-comments', r['seq'], dict(t=r['created_at'], task=r['task_id'], kind='comment',
+                 author=r['author'], tag=tag, note=note(r['task_id'], 'comment', body)))
+        marks['kanban-runs'] = k.execute('SELECT coalesce(max(id),0) FROM task_runs').fetchone()[0]
+        for r in k.execute('SELECT * FROM task_runs'):
+            for field, kind in (('started_at', 'run_start'), ('ended_at', 'run_end')):
+                key = f'{r["id"]}:{kind}'
+                stamp = [r[field], _hash(r['outcome'])[:16] if field == 'ended_at' else None]
+                if not r['ended_at']:
+                    state['runs'][key] = stamp
+                is_new = r['id'] > old.get('kanban-runs', 0)
+                was_running = f'{r["id"]}:run_start' in previous.get('runs', {})
+                if r[field] and (is_new or (kind == 'run_end' and was_running)):
+                    e = dict(t=r[field], task=r['task_id'], kind=kind, bot=r['profile'])
+                    if kind == 'run_end':
+                        e['outcome'] = r['outcome'] or ''
+                    emit('kanban-runs', key, e)
+    finally:
+        k.close()
+    if cfg['profiles'] == 'auto':
+        try:
+            profiles = sorted(p.name for p in (home / 'profiles').iterdir() if p.is_dir())
+        except FileNotFoundError:
+            profiles = []
+    else:
+        profiles = sorted(cfg['profiles'])
+    sid_map, nonworker_sessions = {}, set()
+    for prof in profiles:
+        path = home / 'profiles' / prof / 'state.db'
+        if not path.exists():
+            continue
+        s = ro(path)
+        try:
+            json1 = _has_json1(s)
+            sessions = {r['id']: dict(r) for r in s.execute('SELECT rowid AS seq,* FROM sessions')}
+            nonworker_sessions.update(_hash([prof, sid]) for sid, r in sessions.items()
+                                      if r['source'] != 'kanban' and not r['parent_session_id'])
+            message_source = 'messages-' + _hash(prof)[:20]
+            session_source = 'sessions-' + _hash(prof)[:20]
+            message_hi = s.execute('SELECT coalesce(max(rowid),0) FROM messages').fetchone()[0]
+            marks[message_source] = message_hi
+            marks[session_source] = max((r['seq'] for r in sessions.values()), default=0)
+            mapping, newly_mapped = {}, set()
+            for sid, r in sessions.items():
+                if r['source'] != 'kanban' or r['parent_session_id']:
+                    continue
+                first = s.execute("SELECT content,rowid FROM messages WHERE session_id=? AND role='user' ORDER BY rowid LIMIT 1", (sid,)).fetchone()
+                match = re.search(r't_[0-9a-f]{8}', (first[0] if first else '') or '')
+                root_key = _hash([prof, sid])[:20]
+                if match and match.group() not in tasks:
+                    # Kanban and state.db are separate snapshots. Don't acknowledge
+                    # a newly created worker before its task is visible next poll.
+                    state['pending'].append(root_key)
+                if match and match.group() in tasks:
+                    mapping[sid] = match.group()
+                    if first[1] > old.get(message_source, 0) or root_key in previous.get('pending', []):
+                        newly_mapped.add(sid)
+            pending = set(sessions) - set(mapping)
+            while pending:
+                found = {sid for sid in pending if sessions[sid]['parent_session_id'] in mapping}
+                if not found:
+                    break
+                for sid in found:
+                    mapping[sid] = mapping[sessions[sid]['parent_session_id']]
+                    if sessions[sid]['parent_session_id'] in newly_mapped:
+                        newly_mapped.add(sid)
+                pending -= found
+            for sid, tid in mapping.items():
+                sid_map[(prof, sid)] = tid
+                r = sessions[sid]
+                source = 'session-' + _hash([prof, sid])[:20]
+                if r['parent_session_id'] and (r.get('title') or '').startswith('Subagent'):
+                    if r['seq'] > old.get(session_source, 0) or sid in newly_mapped:
+                        emit(source, 'summon', dict(t=r['started_at'], task=tid, kind='summon', bot=prof,
+                             sub=_hash(sid)[:6], note=note(tid, 'summon', r['title'][9:])))
+                lower = 0 if sid in newly_mapped else old.get(message_source, 0)
+                messages = s.execute(f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages WHERE session_id=? AND rowid>? AND rowid<=?' +
+                                     (' AND timestamp>=?' if t0 is not None else '') + ' ORDER BY rowid',
+                                     (sid, lower, message_hi) + ((t0,) if t0 is not None else ()))
+                for m in messages:
+                    base = dict(t=m['timestamp'], task=tid, bot=prof)
+                    sub = _hash(sid)[:6] if r['parent_session_id'] else None
+                    for i, call in enumerate(_json(m['tool_calls'], [])):
+                        fn = call.get('function') or {}
+                        name = fn.get('name') or 'tool'
+                        e = dict(base, kind='tool', tool=name)
+                        if sub:
+                            e['sub'] = sub
+                        if name in ('terminal', 'patch', 'write_file'):
+                            args = fn.get('arguments') or ''
+                            if not isinstance(args, str):
+                                args = json.dumps(args)
+                        if name == 'terminal':
+                            e['cat'] = next((cat for cat, rx in CMD if re.search(rx, args)), 'shell')
+                            g = re.search(GIT, args)
+                            if g:
+                                e['git'] = g.group(1)
+                        elif name in UTIL:
+                            e['util'] = UTIL[name]
+                        elif name in ('patch', 'write_file'):
+                            e.update(plus=len(re.findall(r'\\n\+', args)) or args.count('\\n'), minus=len(re.findall(r'\\n-', args)))
+                        emit(source, f'{m["seq"]}:tool:{i}', e)
+                    if m['role'] == 'tool' and m['tool_name'] == 'terminal':
+                        content = m['content'] or ''
+                        fail = re.search(r'"exit_code"\s*:\s*(-?\d+)', content)
+                        passed = re.search(r'(\d{1,6}) (?:passed|tests? passed)|"tests_passed"\s*:\s*(\d+)', content)
+                        if fail and int(fail.group(1)):
+                            emit(source, f'{m["seq"]}:hurt', dict(base, kind='hurt', code=int(fail.group(1))))
+                        if passed:
+                            emit(source, f'{m["seq"]}:tests', dict(base, kind='tests', passed=int(passed.group(1) or passed.group(2))))
+                    if m['role'] == 'assistant' and m['token_count']:
+                        emit(source, f'{m["seq"]}:mana', dict(base, kind='mana', tokens=m['token_count']))
+                if s.execute("SELECT 1 FROM sqlite_master WHERE name='session_model_usage'").fetchone():
+                    tok = s.execute('SELECT coalesce(sum(input_tokens+output_tokens),0) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
+                    tasks[tid]['tokens'] = tasks[tid].get('tokens', 0) + tok
+            if prof == captain:
+                deferred = previous.get('captain_pending', {})
+                for m in rows(s, 'messages', 'captain-messages', 'timestamp', deferred, _message_columns(True, json1)):
+                    if m['session_id'] in mapping:
+                        continue
+                    calls = _json(m['tool_calls'], [])
+                    result = None
+                    if m['role'] == 'tool' and m['tool_call_id']:
+                        # A create call's ID is known only once its result arrives.
+                        for a in s.execute(f'SELECT {_tool_calls_sql(True, json1)} FROM messages WHERE session_id=? AND tool_calls IS NOT NULL AND rowid<?', (m['session_id'], m['seq'])):
+                            found = [c for c in _json(a[0], []) if (c.get('id') or c.get('call_id')) == m['tool_call_id']]
+                            if found:
+                                calls = found; result = ''
+                                if any((c.get('function') or {}).get('name') == 'kanban_create' for c in found):
+                                    # Some historical result rows omit tool_name;
+                                    # the matched call, not that nullable column,
+                                    # proves this result has an actual consumer.
+                                    result = s.execute('SELECT content FROM messages WHERE rowid=?', (m['seq'],)).fetchone()[0] or ''
+                                break
+                    for i, call in enumerate(calls):
+                        # Deferred rows can contain already-delivered actions.
+                        if m['seq'] <= old.get('captain-messages', 0) and i not in deferred.get(str(m['seq']), []):
+                            continue
+                        fn = call.get('function') or {}; act = CAP_ACT.get(fn.get('name'))
+                        if not act:
+                            continue
+                        args = _json(fn.get('arguments'), {})
+                        tid = args.get('task_id') or args.get('child_id')
+                        if result is not None:
+                            if tid:
+                                continue
+                            match = re.search(r'"(?:task_id|id)"\s*:\s*"(t_[0-9a-f]{8})"', result)
+                            tid = match.group(1) if match else None
+                        if tid and tid not in tasks:
+                            # Keep only row/call coordinates, never raw arguments/results.
+                            state['captain_pending'].setdefault(str(m['seq']), []).append(i)
+                        if tid in tasks:
+                            e = dict(t=m['timestamp'], task=tid, kind='captain', act=act)
+                            if args.get('assignee'):
+                                e['bot'] = args['assignee']
+                            if act == 'link' and args.get('parent_id'):
+                                e['other'] = args['parent_id']
+                            emit('captain-messages', f'{m["seq"]}:{i}', e)
+        finally:
+            s.close()
+    compression_mapping = {_hash([prof, sid]): (tid, prof) for (prof, sid), tid in sid_map.items()}
+    compression_seen = set()
+    def compression(event):
+        key = (event['source'], event['seq'])
+        if key in compression_seen or event['session'] in nonworker_sessions:
+            return
+        compression_seen.add(key)
+        target = compression_mapping.get(event['session'])
+        if target:
+            tid, prof = target
+            emit(event['source'], event['seq'], dict(t=event['t'], task=tid, kind='compress',
+                 bot=prof, before=event['before'], after=event['after']))
+        elif t0 is None or event['t'] >= t0:
+            # A complete line is consumed, but not acknowledged as delivered until
+            # its session/task is visible across the independent source snapshots.
+            state['compression_pending'].append(event)
+    for event in previous.get('compression_pending', []):
+        compression(event)
+    for prof in profiles:
+        path = home / 'profiles' / prof / 'logs' / 'agent.log'
+        if not path.exists():
+            continue
+        source = 'compression-' + _hash(prof)[:20]
+        with path.open('rb') as f:
+            stat = os.fstat(f.fileno())
+            marker = old.get(source, [0, 0])
+            offset = marker[1] if marker[0] == stat.st_ino and marker[1] <= stat.st_size else 0
+            f.seek(offset)
+            while f.tell() < stat.st_size:
+                start = f.tell(); line = f.readline(stat.st_size - start)
+                if not line.endswith(b'\n'):
+                    f.seek(start); break
+                match = re.search(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d).*context compression done.*session=(\S+) messages=(\d+)->(\d+)', line.decode(errors='replace'))
+                if match:
+                    stamp = datetime.datetime.strptime(match[1], '%Y-%m-%d %H:%M:%S').timestamp()
+                    compression(dict(source=source, seq=f'{stat.st_ino}:{start}', session=_hash([prof, match[2]]),
+                                     t=stamp, before=int(match[3]), after=int(match[4])))
+            marks[source] = [stat.st_ino, f.tell()]
+    bot_ids = set(profiles) | {t['bot'] for t in tasks.values() if t['bot']} | ({captain} if captain else set())
+    bot_ids |= {e[key] for e in events for key in ('bot', 'author') if e.get(key)}
+    bots = [_bot(p, cfg, captain) for p in sorted(bot_ids) if re.fullmatch(r'[\w-]+', p)]
+    tasks = [safe(t) for t in tasks.values()]
+    bots = safe(bots)
+    state['tasks'] = {task_keys[t['id']]: _hash(t)[:16] for t in tasks}
+    state['bots'] = {b['id']: _hash(b)[:16] for b in bots}
+    changed_tasks = [t for t in tasks if previous.get('tasks', {}).get(task_keys[t['id']]) != state['tasks'][task_keys[t['id']]]]
+    changed_bots = [b for b in bots if previous.get('bots', {}).get(b['id']) != state['bots'][b['id']]]
+    referenced = {e['task'] for e in events} | {e['other'] for e in events if e.get('other')}
+    # Older v1 cursors lack delivery tracking: resend first-referenced snapshots
+    # rather than assume every fingerprint was actually delivered to the client.
+    delivered = set(previous.get('delivered', []))
+    if t0 is not None:
+        changed_tasks = [t for t in changed_tasks if t['completed'] is None or t['completed'] >= t0 or t['id'] in referenced]
+    else:
+        changed_ids = {t['id'] for t in changed_tasks}
+        changed_tasks += [t for t in tasks if t['id'] in referenced and t['id'] not in changed_ids and task_keys[t['id']] not in delivered]
+    state['delivered'] = sorted((delivered | {task_keys[t['id']] for t in changed_tasks}) & set(state['tasks']))
+    events = safe(events)
+    events.sort(key=lambda e: (e['t'], e['id']))
+    return dict(meta=meta(), tasks=changed_tasks, bots=changed_bots, events=events, cursor=_cursor(state))
+
+
+def build_replay(cfg, hours=12):
+    hours = float(hours)
+    if not 0 < hours <= 24 * 365:
+        raise ValueError('hours must be positive and at most one year')
+    now = time.time()
+    result = _snapshot(cfg, t0=now - hours * 3600)
+    result['meta'].update(from_=now - hours * 3600, to=now, hours=hours, generated=now)
+    return result
+
+
+def collect_since(cfg, cursor):
+    result = _snapshot(cfg, previous=_decode(cursor))
+    # Additive delta schema: the same safe identity/config revision as replay.
+    # A client must rebase before accepting rows/cursor under a new revision.
+    return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('hours', nargs='?', type=float, default=12)
+    parser.add_argument('--config')
+    parser.add_argument('--output', default=str(Path(__file__).resolve().parent.parent / 'data' / 'replay.json'))
+    args = parser.parse_args()
+    result = build_replay(load_config(args.config), args.hours)
+    path = Path(args.output).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open('w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False)
+    print(f'tasks={len(result["tasks"])} bots={len(result["bots"])} events={len(result["events"])}')
+
+
+if __name__ == '__main__':
+    main()
