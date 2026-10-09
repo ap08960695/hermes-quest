@@ -605,6 +605,39 @@ async function runHeroInspect(browser,base,vp) {
       return before===JSON.stringify([S,D.events,following,cursor]);
     });
     check(invariant,'120 follow/render frames leave replay, hero paths and ledger unchanged');
+    const trajectory=await page.evaluate(()=>{
+      const saved=cloneState(S),camera={...cam},selection={...inspect};
+      // Identical simulation inputs, with and without presentation follow.
+      const run=enabled=>{
+        Object.assign(S,cloneState(saved));Object.assign(cam,camera);inspect.follow=enabled;
+        S.heroes.child.path=[[S.heroes.child.x,S.heroes.child.y],[1200,700]];
+        for(let i=0;i<1800;i++){
+          update(1/60);
+          if(enabled){renderInspection();followCharacter(1/60);}
+          // Sample actual painted poses, not just camera targets.
+          if(i%30===0)draw();
+        }
+        return JSON.stringify([S,D.events,following,cursor]);
+      };
+      try{return{frames:1800,seconds:30,equal:run(false)===run(true)};}
+      finally{Object.assign(S,saved);Object.assign(cam,camera);Object.assign(inspect,selection);inspect.key='';renderInspection();draw();}
+    });
+    check(trajectory.equal,'30 seconds of moving follow and no-follow produce identical simulation state');
+    const zoomed=await page.evaluate(()=>{
+      const saved={state:cloneState(S),camera:{...cam}};const results=[];
+      try{
+        for(const zoom of [1,3])for(const pose of ['standing','attack','rest']){
+          cam.zi=zoom;Object.assign(S.heroes.child,{atk:pose==='attack'?.2:-1,sleep:pose==='rest',down:0});
+          draw();renderInspection();followCharacter(1);draw();renderInspection();followCharacter(1);draw();
+          const p=inspect.picks.find(p=>p.type==='hero'&&p.id==='child'),c=$('#character-card').getBoundingClientRect(),b=$('#focus-bar').getBoundingClientRect();
+          const overlapsBar=p.body.left<b.right&&p.body.right>b.left&&p.body.top<b.bottom&&p.body.bottom>b.top;
+          results.push({zoom,pose,body:p.body,card:c.toJSON(),bar:b.toJSON(),clear:!overlapsBar&&p.body.top>=8&&p.body.left>=8&&p.body.right<=innerWidth-8&&c.top-p.body.bottom>=8,hit:p.hit.right-p.hit.left>=44&&p.hit.bottom-p.hit.top>=44});
+        }
+        return results;
+      }finally{Object.assign(S,saved.state);Object.assign(cam,saved.camera);inspect.key='';draw();renderInspection();followCharacter(1);draw();}
+    });
+    fs.writeFileSync(path.join(outDir,`${browserName}-${vp.name}-hero-motion.json`),JSON.stringify({trajectory,zoomed},null,2));
+    check(zoomed.every(r=>r.clear&&r.hit),'zoom 1/3 standing, attack and rotated rest poses stay clear with 44 CSS px targets');
     if(browserName==='chromium'){
       const cdp=await ctx.newCDPSession(page),saved=await page.evaluate(()=>({...cam}));
       const a={x:40,y:120,id:1},b={x:90,y:120,id:2};
