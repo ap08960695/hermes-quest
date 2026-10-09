@@ -60,7 +60,8 @@ with contextlib.redirect_stdout(sys.stderr):
     modern = all(callable(getattr(module, name, None)) for name in
                  ("load_config", "build_replay", "collect_since"))
     if modern:
-        cfg = module.load_config(os.environ.get("HERMES_QUEST_CONFIG") or None)
+        loader = getattr(module, "load_backend_config", module.load_config)
+        cfg = loader(os.environ.get("HERMES_QUEST_CONFIG") or None)
         if isinstance(cfg, dict):
             cfg['show_profile_names'] = show_profile_names
         payload = (module.build_replay(cfg, float(value)) if mode == "replay"
@@ -115,7 +116,7 @@ def _history_settings(root=None, env=None):
     module = types.ModuleType("hermes_quest_botstatus_history")
     module.__file__ = str(source)
     exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), module.__dict__)
-    return module, module.load_settings(env.get("HERMES_QUEST_CONFIG") or None, env=env)
+    return module, module.load_settings(env.get("HERMES_QUEST_CONFIG") or None, env=env, backend=True)
 
 
 def _ensure_session_key() -> str | None:

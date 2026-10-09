@@ -147,6 +147,11 @@ def probe(name):
         elif name == "real_history_lifespan":
             source = home / "bot-status.json"
             source.write_text(json.dumps({"bots": {"dev": {"status": "limited"}}}))
+            # This isolated process has no Hermes host resolver. Select its
+            # synthetic data root explicitly, as a standalone install would.
+            config = home / "quest.json"
+            config.write_text(json.dumps({"hermes_home": str(home)}))
+            os.environ["HERMES_QUEST_CONFIG"] = str(config)
             with patch.object(api, "_extract", return_value={"events": []}):
                 app = FastAPI()
                 app.include_router(api.router, prefix="/api/plugins/hermes-quest")

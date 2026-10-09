@@ -10,7 +10,7 @@ A copy of every option is in [`config.example.json`](../config.example.json).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `hermes_home` | `$HERMES_HOME`, else `~/.hermes` | Hermes data directory to read (read-only) |
+| `hermes_home` | `$HERMES_HOME`, else `~/.hermes` (backend: official shared root) | Hermes data directory to read (read-only); an explicit value always wins |
 | `profiles` | `"auto"` | `"auto"` uses every directory under `<hermes_home>/profiles`; or a list of profile IDs |
 | `captain` | `"auto"` | Profile that creates most cards (shown as the commander), or an explicit profile ID |
 | `show_titles` | `false` | Opt in to showing redacted text (see Privacy). Must be a boolean |
@@ -21,6 +21,15 @@ A copy of every option is in [`config.example.json`](../config.example.json).
 | `stage_regions` | PLAN: observatory, BUILD: forge, TEST: forest, REVIEW: citadel, DEPLOY: port, VERIFY: forest | Stage to region where its monster fights |
 
 Notes:
+
+- With no explicit `hermes_home`, the dashboard backend uses the installed Hermes
+  `get_default_hermes_root` resolver to read the shared board and profile roster.
+  Only the root itself or a direct `profiles/<name>` home can select that root;
+  unsupported discovery fails closed (HTTP 503), without guessing parent paths.
+  The sampler and session-key store use the same resolved home. Existing explicit
+  `history_dir` and `botstatus_path` settings still take precedence.
+- An explicit Quest `hermes_home` always wins, including a profile-local home.
+  Standalone CLI/library extraction keeps `$HERMES_HOME` (or `~/.hermes`) unchanged.
 
 - A key you set replaces the whole default object for that key (the merge is shallow). Include every mapping you
   still need.

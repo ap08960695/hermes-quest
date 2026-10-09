@@ -50,16 +50,27 @@ CMD = [('test', r'\b(jest|vitest|go test|pytest|playwright|npm (run )?test|check
        ('git', r'\bgit\b'), ('probe', r'\b(curl|psql|mysql|wget|sqlite3)\b')]
 
 
-def load_config(path=None):
+def load_backend_config(path=None):
+    """Host-only entry point; CLI/library callers keep their original home scope."""
+    return load_config(path, backend=True)
+
+
+def load_config(path=None, *, backend=False):
     cfg = json.loads(json.dumps(DEFAULTS))
     cfg['hermes_home'] = os.environ.get('HERMES_HOME', '~/.hermes')
     path = path or os.environ.get('HERMES_QUEST_CONFIG')
+    custom = {}
     if path:
         with open(os.path.expanduser(str(path)), encoding='utf-8') as f:
             custom = json.load(f)
         if not isinstance(custom, dict):
             raise ValueError('config must be a JSON object')
         cfg.update(custom)
+    if backend and 'hermes_home' not in custom:
+        history = _history_module()
+        if history is None:
+            raise ValueError('backend data root unavailable')
+        cfg['hermes_home'] = str(history.resolve_data_home(backend=True))
     if not isinstance(cfg['hermes_home'], str) or not cfg['hermes_home'].strip() or '\0' in cfg['hermes_home']:
         raise ValueError('hermes_home must be a non-empty path string')
     cfg['hermes_home'] = str(Path(cfg['hermes_home']).expanduser().resolve())

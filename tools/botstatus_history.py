@@ -84,13 +84,43 @@ def _read_regular(path, cap, tail=False):
         os.close(fd)
 
 
-def resolve_settings(cfg=None, env=None):
+def resolve_data_home(env=None, *, backend=False):
+    """Standalone stays profile-scoped; the backend discovers the shared data root.
+
+    Never guess a parent or search other installations when the host seam is absent.
+    The official resolver also supports custom roots and platform defaults.
+    """
+    env = os.environ if env is None else env
+    home = env.get('HERMES_HOME') or '~/.hermes'
+    if not backend:
+        return Path(home).expanduser().resolve()
+    try:
+        from hermes_constants import get_default_hermes_root, get_process_hermes_home
+        value = env.get('HERMES_HOME', '').strip()
+        active = Path(os.path.expandvars(value)).expanduser() if value else get_process_hermes_home()
+        root = get_default_hermes_root(home=active).expanduser().resolve()
+        current = active.resolve()
+        # The resolver maps any native-home descendant to the default root. Only
+        # the root itself or a direct profile-layout home may widen reads.
+        if root != current and (root / 'profiles' / active.name).resolve() != current:
+            raise ValueError('unrecognized backend home')
+        return root
+    except (ImportError, OSError, RuntimeError, TypeError, AttributeError) as exc:
+        raise ValueError('backend data root unavailable') from exc
+
+
+def resolve_settings(cfg=None, env=None, *, backend=False):
     """Validate a config mapping (may be partial) and return absolute settings."""
     env = os.environ if env is None else env
     cfg = cfg or {}
     if not isinstance(cfg, dict):
         raise ValueError('config must be a JSON object')
-    home = Path(str(cfg.get('hermes_home') or env.get('HERMES_HOME') or '~/.hermes')).expanduser().resolve()
+    if backend and 'hermes_home' in cfg:
+        value = cfg['hermes_home']
+        if not isinstance(value, str) or not value.strip() or '\0' in value:
+            raise ValueError('hermes_home must be a non-empty path string')
+    home = (Path(str(cfg['hermes_home'])).expanduser().resolve() if cfg.get('hermes_home')
+            else resolve_data_home(env, backend=backend))
     out = dict(home=home)
     for key, (low, high) in LIMITS.items():
         value = cfg.get(key, DEFAULTS[key])
@@ -106,13 +136,13 @@ def resolve_settings(cfg=None, env=None):
     return out
 
 
-def load_settings(config_path=None, env=None):
+def load_settings(config_path=None, env=None, *, backend=False):
     env = os.environ if env is None else env
     cfg = {}
     path = config_path or env.get('HERMES_QUEST_CONFIG')
     if path:
         cfg = json.loads(_read_regular(os.path.expanduser(str(path)), MAX_CONFIG_BYTES)[0])
-    return resolve_settings(cfg, env)
+    return resolve_settings(cfg, env, backend=backend)
 
 
 def _files(settings):
