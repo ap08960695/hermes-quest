@@ -339,6 +339,36 @@ async function runRetention(browser,base) {
     await page.evaluate(()=>quest(S.tasks['retention-5']||D.tasks.find(t=>t.id==='retention-5')));
     await evict(b0);after=await snap();
     check(after.dialogOpen&&after.text.includes('retention-5'),'detail for a retained task closed or lost content');
+    // 6) Production poll path: pollEvents (HTTP) -> connection() with the previous overview -> dialog close
+    // -> HUD rebuilds the summary lists. mergeDelta+hud alone cannot see focus handed to a Details button
+    // that the next HUD pass deletes, so the delta is served over the real /events route.
+    let queued=null;const requests=[];
+    await page.route('**/api/plugins/hermes-quest/**',route=>{const u=new URL(route.request().url());requests.push(u.pathname);
+      if(u.pathname.endsWith('/events')&&queued)return route.fulfill({contentType:'application/json',body:JSON.stringify(queued)});
+      return route.fulfill({status:404,body:'not found'});});
+    const pollEvict=async(base,opener)=>{
+      queued={events:Array.from({length:2100},(_,i)=>({id:'retention-delta-'+i,t:base+10+i,task:'retention-256',bot:'retention-hero-0',kind:'heartbeat'})),tasks:[],bots:[],cursor:'after',state:'online'};
+      await page.locator(opener).first().focus();await page.click(opener+' >> nth=0');
+      await page.evaluate(()=>document.querySelector('#quest .close').focus());
+      const reqStart=requests.length;await page.evaluate(()=>pollEvents());
+      await page.evaluate(()=>{clearTimeout(pollTimer);hudT=1;hud(0);});await page.waitForTimeout(250);
+      check(requests.slice(reqStart).some(u=>u.endsWith('/events'))&&!requests.slice(reqStart).some(u=>u.endsWith('/replay')),'poll case did not use /events only');
+      return page.evaluate(()=>{const a=document.activeElement;return {open:!document.querySelector('#quest').hidden,tag:a.tagName,id:a.id,
+        key:a.closest('.item-summary')?.dataset.key||'',connected:a.isConnected,visible:a.getClientRects().length>0,
+        gone:!JSON.stringify([D,S]).includes('SYNTHETIC_EVICTED')&&!document.body.textContent.includes('SYNTHETIC_EVICTED')};});
+    };
+    const settled=f=>f.connected&&f.visible&&f.tag!=='BODY'&&(f.id==='tasks-all'||f.id==='heroes-all'||f.id==='menu-toggle'||f.key!=='');
+    for(const [kind,opener,expectOwn] of [['task','#tasks-list [data-key="retention-old"] button','tasks-all'],['hero','#heroes-list [data-key="retention-hero-old"] button','heroes-all']]){
+      ({base:b0}=await setup());
+      const f=await pollEvict(b0,opener);
+      check(!f.open&&f.gone,'poll: '+kind+' detail for evicted subject stayed open or leaked');
+      check(settled(f),'poll: focus after '+kind+' detail closed is '+JSON.stringify(f)+' (expected a connected control, not BODY)');
+      check(f.id===expectOwn,'poll: focus after '+kind+' detail should land on '+expectOwn+', got '+JSON.stringify(f));
+      results['pollFocus-'+kind]=f;
+      // The scheduled HUD tick must keep that control stable (no second deletion).
+      await page.evaluate(()=>{hudT=1;hud(0);});await page.waitForTimeout(150);
+      check(settled(await page.evaluate(()=>{const a=document.activeElement;return {tag:a.tagName,id:a.id,key:a.closest('.item-summary')?.dataset.key||'',connected:a.isConnected,visible:a.getClientRects().length>0};})),'poll: focus lost on later HUD pass ('+kind+')');
+    }
     check(errors.length===0,errors.join('; '));
     fs.writeFileSync(path.join(outDir,browserName+'-retention.json'),JSON.stringify({synthetic:true,results,errors},null,2));
     console.log('PASS '+browserName+' open View all/task/hero dialogs follow retained history (rows 257 -> 256, evicted task/hero removed, focus returned)');

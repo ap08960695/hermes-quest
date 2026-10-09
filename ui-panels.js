@@ -187,6 +187,18 @@
       text.textContent=row.summary;entry.append(text);button(entry,'Details',row.details);el.append(entry);
     }
   }
+  // A summary list is rebuilt on every changed overview, which deletes the focused Details button.
+  // Whatever focus the list owns (including focus a closing dialog just returned to a stale row)
+  // moves to the same row by key if it is still retained, else View all, else the Menu toggle.
+  function keepListFocus(listSelector,allSelector,rebuild) {
+    const list=$(listSelector), active=document.activeElement, owned=list?.contains(active)&&active!==list;
+    const key=owned?active.closest('.item-summary')?.dataset.key:undefined;
+    rebuild();
+    if(!owned||document.activeElement===active)return;
+    const row=Array.from(list.querySelectorAll('.item-summary')).find(e=>e.dataset.key===key);
+    const own=row?.querySelector('button'), all=$(allSelector);
+    (visible(own)?own:visible(all)?all:$('#menu-toggle')).focus();
+  }
   function overview(data) {overviewView(data);refreshDialog();} // Dialog last: list rows exist again for focus return.
   function overviewView(data) {
     overviewData=data;
@@ -202,7 +214,8 @@
     if($('#menu').hidden||!$('#group-overview').open)return;
     const key=JSON.stringify([data.summary,data.tasks.map(t=>[t.key,t.summary]),data.heroes.map(h=>[h.key,h.summary])]);
     if(key===overviewKey)return;overviewKey=key;
-    itemList('#tasks-list',data.tasks,data.empty);itemList('#heroes-list',data.heroes,'No heroes in this replay range');
+    keepListFocus('#tasks-list','#tasks-all',()=>itemList('#tasks-list',data.tasks,data.empty));
+    keepListFocus('#heroes-list','#heroes-all',()=>itemList('#heroes-list',data.heroes,'No heroes in this replay range'));
     $('#tasks-all').onclick=()=>listDialog('All tasks',()=>overviewData?.tasks,overviewData.empty);
     $('#heroes-all').onclick=()=>listDialog('All heroes',()=>overviewData?.heroes,'No heroes in this replay range');
   }
