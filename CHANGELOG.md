@@ -13,7 +13,10 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   landscape dashboard iframe that fits the available height.
 - C1 backend: token-based mana accounting with a text-size fallback and signed
   corrections, plus read-only botstatus history for pause, resume and failover
-  events. Game UI integration is not included yet.
+  events.
+- C-UI: token-based mana percentages against simulated wallet capacity (not real
+  quota), signed corrections without double counting, and heroes walking to the
+  rest camp on pause/failover and returning on resume.
 
 ### Known limitations
 
