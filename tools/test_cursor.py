@@ -85,6 +85,203 @@ class CursorRoundtripTests(unittest.TestCase):
     def total(self, result):
         return sum(e['tokens'] for e in result['events'] if e['kind'] == 'mana')
 
+    def lifecycle_columns(self):
+        self.s.execute('ALTER TABLE sessions ADD COLUMN ended_at REAL')
+        self.s.execute('ALTER TABLE sessions ADD COLUMN last_activity_at REAL')
+        self.s.execute('CREATE INDEX messages_session ON messages(session_id)')
+
+    def message_at(self, role, stamp, **kwargs):
+        self.f.message(role, **kwargs)
+        self.s.execute('UPDATE messages SET timestamp=? WHERE rowid=last_insert_rowid()', (stamp,))
+
+    def test_history_does_not_grow_window_cursor(self):
+        self.lifecycle_columns()
+        now, ancient = self.f.now, self.f.now - 48 * 3600
+
+        def add_tasks(first, last, stamp):
+            for i in range(first, last):
+                tid = f't_{i:08x}'
+                self.f.add_task(tid)
+                self.f.k.execute('UPDATE tasks SET status=?,created_at=?,started_at=?,completed_at=? WHERE id=?',
+                                 ('done', stamp, stamp, stamp, tid))
+            self.f.k.commit()
+
+        def add_sessions(first, last, stamp, task_first, task_count):
+            for i in range(first, last):
+                sid = f'synthetic-history-{i}'
+                tid = f't_{task_first + i % task_count:08x}'
+                self.s.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?,?)',
+                               (sid, 'kanban', None, stamp, 'Synthetic', stamp, stamp))
+                self.message_at('user', stamp, sid=sid, content='work kanban task ' + tid)
+                self.message_at('assistant', stamp, sid=sid, token_count=5)
+                self.s.execute('INSERT INTO session_model_usage VALUES(?,?,0)', (sid, 100 + i))
+            self.s.commit()
+
+        add_tasks(1, 200, now)
+        add_sessions(0, 299, now, 1, 199)
+        with patch.object(extract.time, 'time', return_value=now):
+            small = extract.build_replay(self.cfg, 12)
+        add_tasks(200, 5000, ancient)
+        add_sessions(299, 9999, ancient, 200, 4800)
+        with patch.object(extract.time, 'time', return_value=now):
+            large = extract.build_replay(self.cfg, 12)
+            self.assertEqual(extract.collect_since(self.cfg, large['cursor'])['events'], [])
+        state = extract._decode(large['cursor'])
+        self.assertEqual(len(state['mana']), 300)
+        self.assertEqual(len(state['tasks']), 200)
+        self.assertLessEqual(len(large['cursor']), 16384)
+        self.assertLessEqual(abs(len(large['cursor']) - len(small['cursor'])), len(small['cursor']) * .05)
+        # Migration must bound an already accumulated historical ledger too,
+        # not just a fresh replay. Decoder accepts legacy cursors up to 1 MiB.
+        accumulated = copy.deepcopy(state)
+        for i in range(299, 9999):
+            key = 'session-' + extract._hash(['developer-demo', f'synthetic-history-{i}'])[:20]
+            accumulated['mana'][key] = 100 + i
+            accumulated['mana_versions'][key] = 1
+        for i in range(201, 5001):
+            accumulated['tasks'][str(i)] = extract._hash(['old-task', i])[:16]
+            accumulated['delivered'].append(str(i))
+        with patch.object(extract.time, 'time', return_value=now):
+            migrated = extract.collect_since(self.cfg, legacy_cursor(accumulated))
+            self.assertEqual(migrated['events'], [])
+            self.assertLessEqual(len(migrated['cursor']), 16384)
+            migrated_state = extract._decode(migrated['cursor'])
+            self.assertEqual(len(migrated_state['mana']), 300)
+            self.assertEqual(len(migrated_state['tasks']), 200)
+        print(f'History 10000 sessions/5000 tasks: window 300/200; '
+              f'window-only={len(small["cursor"])} bytes; history={len(large["cursor"])} bytes', flush=True)
+
+    def test_eviction_reentry_and_signed_corrections_do_not_duplicate(self):
+        self.lifecycle_columns()
+        now = self.f.now
+        self.s.execute('UPDATE sessions SET ended_at=?,last_activity_at=?', (now, now))
+        self.s.commit()
+        self.f.k.execute('UPDATE tasks SET status=?,completed_at=?', ('done', now))
+        self.f.k.execute('UPDATE task_runs SET ended_at=?', (now,))
+        self.f.k.commit()
+        with patch.object(extract.time, 'time', return_value=now):
+            first = extract.build_replay(self.cfg, 12)
+        live_ids = {e['id'] for e in first['events']}
+        # The grace keeps both fingerprints and ledgers for one extra hour.
+        with patch.object(extract.time, 'time', return_value=now + 12.5 * 3600):
+            grace = extract.collect_since(self.cfg, first['cursor'])
+            self.assertEqual(len(extract._decode(grace['cursor'])['mana']), 1)
+        later = now + 14 * 3600
+        with patch.object(extract.time, 'time', return_value=later):
+            expired = extract.collect_since(self.cfg, grace['cursor'])
+            state = extract._decode(expired['cursor'])
+            for field in ('mana', 'mana_versions', 'tasks', 'delivered'):
+                self.assertFalse(state[field])
+            self.assertEqual(expired['events'], [])
+            self.assertEqual(expired['tasks'], [])
+            self.assertEqual(extract.collect_since(self.cfg, expired['cursor']), expired)
+            self.message_at('assistant', later, token_count=10,
+                           tool_calls=json.dumps([{'function': {'name': 'patch', 'arguments': '{}'}}]))
+            self.s.execute('UPDATE session_model_usage SET input_tokens=130,output_tokens=0')
+            self.s.execute('UPDATE sessions SET last_activity_at=?', (later,))
+            self.s.commit()
+            self.f.event('heartbeat', stamp=later)
+            self.f.k.commit()
+            returning = extract.collect_since(self.cfg, expired['cursor'])
+            self.assertEqual(self.total(returning), 10, 'do not recharge historical usage')
+            self.assertEqual(len(returning['tasks']), 1)
+            self.assertEqual({e['kind'] for e in returning['events']}, {'heartbeat', 'tool', 'mana'})
+            self.assertFalse(live_ids & {e['id'] for e in returning['events']})
+            self.assertEqual(extract.collect_since(self.cfg, expired['cursor']), returning)
+            cursor = returning['cursor']
+            for usage, delta in ((180, 50), (155, -25), (180, 25)):
+                self.s.execute('UPDATE session_model_usage SET input_tokens=?', (usage,))
+                self.s.commit()
+                result = extract.collect_since(self.cfg, cursor)
+                self.assertEqual(self.total(result), delta)
+                self.assertEqual(extract.collect_since(self.cfg, cursor), result)
+                ids = {e['id'] for e in result['events']}
+                self.assertFalse(live_ids & ids)
+                live_ids |= ids
+                cursor = result['cursor']
+                self.assertEqual(extract.collect_since(self.cfg, cursor)['events'], [])
+        # Reenter with activity only (no new message high-water mark). Repeated
+        # usage values after a second eviction must still have fresh event IDs.
+        later += 14 * 3600
+        with patch.object(extract.time, 'time', return_value=later):
+            expired = extract.collect_since(self.cfg, cursor)
+            self.s.execute('UPDATE sessions SET last_activity_at=?', (later,))
+            self.s.execute('UPDATE session_model_usage SET input_tokens=130')
+            self.s.commit()
+            baseline = extract.collect_since(self.cfg, expired['cursor'])
+            self.assertEqual(baseline['events'], [])
+            self.s.execute('UPDATE session_model_usage SET input_tokens=180')
+            self.s.commit()
+            correction = extract.collect_since(self.cfg, baseline['cursor'])
+            self.assertEqual(self.total(correction), 50)
+            self.assertFalse(live_ids & {e['id'] for e in correction['events']})
+
+    def test_active_and_custom_window_and_legacy_retention(self):
+        self.lifecycle_columns()
+        ancient = self.f.now - 48 * 3600
+        self.s.execute('UPDATE sessions SET started_at=?,last_activity_at=?', (ancient, ancient))
+        self.s.execute('UPDATE messages SET timestamp=?', (ancient,))
+        self.s.commit()
+        first = extract.build_replay(self.cfg, 1)
+        self.assertEqual(len(extract._decode(first['cursor'])['mana']), 1, 'active sessions survive')
+        self.assertEqual(extract._decode(first['cursor'])['window_hours'], 1)
+        self.s.execute('UPDATE sessions SET ended_at=?', (ancient,))
+        self.s.commit()
+        state = extract._decode(first['cursor'])
+        state.pop('window_hours')  # Old JSON/HQ2 cursors default to 12 hours.
+        result = extract.collect_since(self.cfg, legacy_cursor(state))
+        self.assertEqual(result['events'], [])
+        self.assertFalse(extract._decode(result['cursor'])['mana'])
+
+    def test_task_only_reentry_preserves_event_high_water_marks(self):
+        self.f.k.execute('UPDATE task_runs SET ended_at=?', (self.f.now,))
+        self.f.k.commit()
+        first = extract.build_replay(self.cfg, 12)
+        self.f.k.execute('UPDATE tasks SET status=?,created_at=?,started_at=?,completed_at=?',
+                         ('archived', 1, 1, 1))
+        self.f.k.execute('UPDATE task_events SET created_at=1')
+        self.f.k.execute('UPDATE task_runs SET started_at=1,ended_at=1')
+        self.f.k.commit()
+        db = self.f.home / 'profiles' / 'developer-demo' / 'state.db'
+        absent = db.with_suffix('.absent')
+        db.rename(absent)
+        self.addCleanup(lambda: absent.rename(db))
+        expired = extract.collect_since(self.cfg, first['cursor'])
+        self.assertFalse(extract._decode(expired['cursor'])['tasks'])
+        self.f.event('heartbeat')
+        self.f.k.commit()
+        returning = extract.collect_since(self.cfg, expired['cursor'])
+        self.assertEqual([e['kind'] for e in returning['events']], ['heartbeat'])
+        self.assertEqual(len(returning['tasks']), 1)
+        self.assertEqual(extract.collect_since(self.cfg, expired['cursor']), returning)
+        after = extract.collect_since(self.cfg, returning['cursor'])
+        self.assertEqual(after['events'], [])
+        self.assertEqual(after['tasks'], [])
+
+    def test_returning_session_with_delayed_usage_does_not_recharge_history(self):
+        self.lifecycle_columns()
+        now, later = self.f.now, self.f.now + 14 * 3600
+        self.s.execute('UPDATE sessions SET ended_at=?', (now,))
+        self.s.commit()
+        first = extract.build_replay(self.cfg, 12)
+        with patch.object(extract.time, 'time', return_value=later):
+            expired = extract.collect_since(self.cfg, first['cursor'])
+            self.s.execute('DELETE FROM session_model_usage')
+            self.message_at('assistant', later, token_count=10)
+            self.s.commit()
+            returning = extract.collect_since(self.cfg, expired['cursor'])
+            self.assertEqual(self.total(returning), 10)
+            self.assertEqual(extract.collect_since(self.cfg, returning['cursor'])['events'], [])
+            self.s.execute('INSERT INTO session_model_usage VALUES(?,?,0)', ('worker', 130))
+            self.s.commit()
+            baseline = extract.collect_since(self.cfg, returning['cursor'])
+            self.assertEqual(self.total(baseline), 0, 'late usage must not recharge history')
+            self.s.execute('UPDATE session_model_usage SET input_tokens=180')
+            self.s.commit()
+            correction = extract.collect_since(self.cfg, baseline['cursor'])
+            self.assertEqual(self.total(correction), 50)
+            self.assertEqual(extract.collect_since(self.cfg, baseline['cursor']), correction)
+
     def test_old_ledger_migrates_and_retries_without_rebase(self):
         first = extract.build_replay(self.cfg, 12)
         old = legacy_cursor(extract._decode(first['cursor']))

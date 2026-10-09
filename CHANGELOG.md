@@ -20,6 +20,17 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known limitations
 
+- Live cursors retain session mana ledgers and task snapshot/delivery metadata
+  only for the replay window plus one hour, or while active. Event high-water
+  marks and unresolved deliveries are preserved; returning tasks receive their
+  snapshot with new events. Returning sessions baseline historical usage rather
+  than charge it again; new message tokens and subsequent signed corrections
+  remain incremental. If returning usage is unavailable, historical baselining
+  waits for usage; earlier new-message estimates are not retroactively corrected.
+  Missing profile sources conservatively retain ledgers.
+  Legacy cursors without a window use 12 hours. The 32 KiB guard fails closed
+  if retained active/recent state still exceeds capacity.
+
 - B/UI2 was tested with Chromium/Firefox emulation only, not physical phones.
 - Fractional DPR (such as 2.625) and pinch zoom are measured but not release gates.
 - CPU 6x throttling has no acceptance threshold.

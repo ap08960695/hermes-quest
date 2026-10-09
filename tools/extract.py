@@ -342,6 +342,7 @@ def _hash(value):
 
 
 CURSOR_LIMIT = 32768
+CURSOR_GRACE = 3600
 _CURSOR_MAGIC = b'HQ2\0'
 
 
@@ -445,6 +446,9 @@ def _decode(cursor):
         if not decoder.eof or decoder.unused_data:
             raise ValueError()
         state = _unpack_cursor(unpacked)
+        hours = state.get('window_hours', 12)
+        if isinstance(hours, bool) or not isinstance(hours, (int, float)) or not 0 < hours <= 24 * 365:
+            raise ValueError()
         if state.get('v') != 1 or not isinstance(state.get('marks'), dict):
             raise ValueError()
         if any(not isinstance(state.get(key), dict) for key in ('tasks', 'bots', 'runs')):
@@ -516,10 +520,13 @@ def _bot(prof, cfg, captain):
                 wallet=wallet, model=model, effort=effort)
 
 
-def _snapshot(cfg, previous=None, t0=None):
+def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     previous = previous or {}
     old = previous.get('marks', {})
-    state = dict(v=1, marks=dict(old), runs={}, tasks={}, bots={}, pending=[],
+    hours = window_hours if window_hours is not None else previous.get('window_hours', 12)
+    cutoff = time.time() - hours * 3600 - CURSOR_GRACE
+    state: dict = dict(v=1, marks=dict(old), runs={}, tasks={}, bots={}, pending=[],
+                 window_hours=hours,
                  captain_pending={}, compression_pending=[],
                  mana=dict(previous.get('mana', {})),
                  mana_versions=dict(previous.get('mana_versions', {})))
@@ -589,6 +596,7 @@ def _snapshot(cfg, previous=None, t0=None):
                               (f' AND {timestamp}>=?' if t0 is not None else '') + ' ORDER BY rowid',
                               (old.get(source, 0), hi) + ((t0,) if t0 is not None else ()))
     k = ro(home / 'kanban.db')
+    task_activity, active_tasks = {}, set()
     try:
         captain = cfg['captain']
         if captain == 'auto':
@@ -597,6 +605,9 @@ def _snapshot(cfg, previous=None, t0=None):
             captain = row[0] if row else ''
         for row in k.execute('SELECT rowid AS seq,* FROM tasks ORDER BY rowid'):
             r = dict(row); prof = r['assignee'] or ''
+            task_activity[r['id']] = max(r['created_at'] or 0, r['started_at'] or 0, r['completed_at'] or 0)
+            if r['status'] not in ('done', 'archived'):
+                active_tasks.add(r['id'])
             task_keys[r['id']] = str(r['seq'])
             stage = cfg['stages'].get(_class(prof, cfg, captain), 'BUILD')
             if stage == 'TEST' and re.search(r'smoke|verify|retest|หลัง deploy', r['title'], re.I):
@@ -606,6 +617,10 @@ def _snapshot(cfg, previous=None, t0=None):
                                   created=r['created_at'], started=r['started_at'], completed=r['completed_at'],
                                   campaign='quests', moa=r.get('provider_override') == 'moa',
                                   max_rt=r.get('max_runtime_seconds') or 1800, parents=[], stage=stage)
+        for table, timestamp in (('task_events', 'created_at'), ('task_comments', 'created_at'),
+                                 ('task_runs', 'started_at'), ('task_runs', 'ended_at')):
+            for r in k.execute(f'SELECT task_id,max({timestamp}) AS stamp FROM {table} GROUP BY task_id'):
+                task_activity[r['task_id']] = max(task_activity.get(r['task_id'], 0), r['stamp'] or 0)
         for r in k.execute('SELECT * FROM task_links'):
             if r['child_id'] in tasks:
                 tasks[r['child_id']]['parents'].append(r['parent_id'])
@@ -697,6 +712,12 @@ def _snapshot(cfg, previous=None, t0=None):
                 sid_map[(prof, sid)] = tid
                 r = sessions[sid]
                 source = 'session-' + _hash([prof, sid])[:20]
+                last_stamp = s.execute('SELECT coalesce(max(timestamp),?) FROM messages WHERE session_id=? AND rowid<=?',
+                                       (r['started_at'], sid, message_hi)).fetchone()[0]
+                activity = max(r['started_at'] or 0, r.get('ended_at') or 0,
+                               r.get('last_activity_at') or 0, last_stamp or 0)
+                task_activity[tid] = max(task_activity.get(tid, 0), activity)
+                retain_mana = r.get('ended_at') is None or activity >= cutoff
                 if r['parent_session_id'] and (r.get('title') or '').startswith('Subagent'):
                     if r['seq'] > old.get(session_source, 0) or sid in newly_mapped:
                         emit(source, 'summon', dict(t=r['started_at'], task=tid, kind='summon', bot=prof,
@@ -713,8 +734,6 @@ def _snapshot(cfg, previous=None, t0=None):
                 ledger = previous.get('mana', {}).get(source)
                 accounted = ledger if ledger is not None else 0
                 charged = 0
-                last_stamp = s.execute('SELECT coalesce(max(timestamp),?) FROM messages WHERE session_id=? AND rowid<=?',
-                                       (r['started_at'], sid, message_hi)).fetchone()[0]
                 for m in messages:
                     base = dict(t=m['timestamp'], task=tid, bot=prof)
                     sub = _hash(sid)[:6] if r['parent_session_id'] else None
@@ -756,6 +775,12 @@ def _snapshot(cfg, previous=None, t0=None):
                             charged += guess
                             emit(source, f'{m["seq"]}:mana', dict(
                                 base, kind='mana', estimated=True, tokens=guess, basis='chars'))
+                returning = ledger is None and previous and sid not in newly_mapped
+                if returning:
+                    # A returning session has no retained accounting baseline.
+                    # Do not recharge its historical usage; new message tokens
+                    # still arrive through the global message high-water mark.
+                    accounted = usage - charged if usage else 0
                 if usage:
                     # Append a signed reconciliation, never mutate an existing ID.
                     # Negative deltas refund an earlier chars estimate when delayed
@@ -765,7 +790,7 @@ def _snapshot(cfg, previous=None, t0=None):
                     if delta:
                         version = previous.get('mana_versions', {}).get(source, 0) + 1
                         state['mana_versions'][source] = version
-                        emit(source, f'usage:{version}:{message_hi}:{accounted}:{usage}',
+                        emit(source, f'usage:{version}:{message_hi}:{accounted}:{usage}:{activity}',
                              dict(t=last_stamp,
                                   task=tid, bot=prof, kind='mana', tokens=delta,
                                   estimated=True, basis='usage', correction=True))
@@ -773,6 +798,13 @@ def _snapshot(cfg, previous=None, t0=None):
                 else:
                     accounted += charged
                 state['mana'][source] = accounted
+                if not retain_mana or (returning and not usage):
+                    # Without authoritative usage a returning session has no
+                    # reconstructible historical baseline. Keep message marks,
+                    # but defer baselining until usage arrives rather than later
+                    # charging all of its old usage against a partial total.
+                    state['mana'].pop(source, None)
+                    state['mana_versions'].pop(source, None)
                 if s.execute("SELECT 1 FROM sqlite_master WHERE name='session_model_usage'").fetchone():
                     tok = s.execute('SELECT coalesce(sum(input_tokens+output_tokens),0) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
                     tasks[tid]['tokens'] = tasks[tid].get('tokens', 0) + tok
@@ -883,12 +915,18 @@ def _snapshot(cfg, previous=None, t0=None):
     bots = [_bot(p, cfg, captain) for p in sorted(bot_ids) if re.fullmatch(r'[\w-]+', p)]
     tasks = [safe(t) for t in tasks.values()]
     bots = safe(bots)
-    state['tasks'] = {task_keys[t['id']]: _hash(t)[:16] for t in tasks}
+    # Event high-water marks, not task fingerprints, deduplicate events. Keep a
+    # snapshot fingerprint/delivery bit only while active, recent or referenced
+    # by this response, so a returning task's snapshot accompanies its new event.
+    referenced = {e['task'] for e in events if e.get('task')} | {e['other'] for e in events if e.get('other') and e.get('task')}
+    retained_tasks = {t['id'] for t in tasks if t['id'] in active_tasks or
+                      task_activity.get(t['id'], 0) >= cutoff or t['id'] in referenced}
+    state['tasks'] = {task_keys[t['id']]: _hash(t)[:16] for t in tasks if t['id'] in retained_tasks}
     state['bots'] = {b['id']: _hash(b)[:16] for b in bots}
-    changed_tasks = [t for t in tasks if previous.get('tasks', {}).get(task_keys[t['id']]) != state['tasks'][task_keys[t['id']]]]
+    changed_tasks = [t for t in tasks if t['id'] in retained_tasks and
+                     previous.get('tasks', {}).get(task_keys[t['id']]) != state['tasks'][task_keys[t['id']]]]
     changed_bots = [b for b in bots if previous.get('bots', {}).get(b['id']) != state['bots'][b['id']]]
     # Bot-level events (pause/resume/failover) have no task; failover's `other` is a bot.
-    referenced = {e['task'] for e in events if e.get('task')} | {e['other'] for e in events if e.get('other') and e.get('task')}
     # Older v1 cursors lack delivery tracking: resend first-referenced snapshots
     # rather than assume every fingerprint was actually delivered to the client.
     delivered = set(previous.get('delivered', []))
@@ -908,7 +946,7 @@ def build_replay(cfg, hours=12):
     if not 0 < hours <= 24 * 365:
         raise ValueError('hours must be positive and at most one year')
     now = time.time()
-    result = _snapshot(cfg, t0=now - hours * 3600)
+    result = _snapshot(cfg, t0=now - hours * 3600, window_hours=hours)
     result['meta'].update(from_=now - hours * 3600, to=now, hours=hours, generated=now)
     return result
 
