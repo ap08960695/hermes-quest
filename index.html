@@ -25,6 +25,9 @@ select{min-height:44px;max-width:100%;background:#1b2742;color:var(--ink);border
 select:focus-visible{outline:2px solid var(--gold)}
 #focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px;max-width:calc(100vw - 16px)}
 #live-note{flex:0 0 100%;font-size:11px;padding:2px 6px;background:var(--panel);border:1px solid var(--red);border-radius:4px;color:#ffbba7}
+#focus-bar.inspection-side #mode{display:none}
+#focus-bar.inspection-side #issues{width:100%;height:auto;overflow-wrap:anywhere}
+#focus-bar.inspection-side #live-note{overflow-wrap:anywhere}
 #menu-toggle{width:64px;background:var(--navy)}
 #tag{position:static;display:flex;align-items:center;gap:2px;padding:0;min-width:0}
 #mode{font-size:11px;padding:0 4px}

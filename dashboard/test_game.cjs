@@ -121,6 +121,29 @@ const lineage=JSON.parse(run(`JSON.stringify((()=>{
 })())`));
 assert.deepStrictEqual(lineage,['Not a sub-agent','Parent: Root','Parent unknown',null,'22222222222222222222','Parent unknown','Hero 2']);
 console.log('PASS inspection: root/child/orphan, multi-session choice, no task-parent inference, independent name privacy gate');
+// Regression F2: the production delta contract REPLACES supplied sessions.
+run(`loadReplay({meta:{from_:0,to:100,show_profile_names:true},cursor:'sessions',events:[],tasks:[],
+  bots:[{id:'root',display_name:'Root'},{id:'child',display_name:'Child'}],sessions:[
+    {bot:'root',session_ref:'11111111111111111111',parent_session_ref:null,is_subagent:false},
+    {bot:'child',session_ref:'22222222222222222222',parent_session_ref:'11111111111111111111',is_subagent:true}]});
+  reset(100);inspect.bot='child';inspect.session='22222222222222222222';
+  mergeDelta({events:[],tasks:[],bots:[],cursor:'no-session-field'});`);
+assert.strictEqual(run('D.sessions.length'),2,'absent inventory preserves sessions');
+assert.strictEqual(run('parentLabel(selectedSession())'),'Parent: Root');
+run(`mergeDelta({events:[],tasks:[],bots:[],sessions:[D.sessions[1]],cursor:'removed-parent'});`);
+assert.strictEqual(run('D.sessions.length'),1,'supplied inventory replaces the old one');
+assert.strictEqual(run('parentLabel(selectedSession())'),'Parent unknown','deleted ancestor cannot persist');
+run(`mergeDelta({events:[],tasks:[],bots:[],sessions:[],cursor:'removed-child'});`);
+assert.strictEqual(run('D.sessions.length'),0);assert.strictEqual(run('inspect.session'),null);
+assert.strictEqual(run('selectedSession()'),null);
+const sessionCursor=run('cursor');
+assert.throws(()=>run(`mergeDelta({events:[],tasks:[],bots:[],sessions:{},cursor:'invalid'})`),/session inventory/);
+assert.strictEqual(run('cursor'),sessionCursor);
+run(`mergeDelta({events:[],tasks:[],bots:[],sessions:[null,{bot:'child',session_ref:'invalid'},
+  {bot:'child',session_ref:'22222222222222222222',parent_session_ref:'invalid'},
+  ...Array.from({length:3000},(_,i)=>({bot:'child',session_ref:i.toString(16).padStart(20,'0')}))],cursor:'bounded'});`);
+assert.strictEqual(run('D.sessions.length'),2256);
+console.log('PASS session replacement: absent/empty, removed ancestor/selection, invalid inventory and finite bounds');
 // Fake clock exercises the production 35s deadline without waiting in CI.
 // Both stalled headers and stalled JSON bodies must abort and then recover via
 // the scheduled 10s retry with the SAME cursor and no overlapping poll.
