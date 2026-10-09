@@ -411,11 +411,25 @@ function sceneName(entity) {
   const name = D.meta.show_titles === true ? (hero ? entity.name : entity.title) : '';
   return name && !/(?:t_[a-f\d]+|[a-f\d]{8,}|[a-f\d]{8}-[a-f\d-]+)/i.test(name) ? name.slice(0,14) : fallback;
 }
+function selectedEntity() {
+  return S.heroes[selectedScene] || (S.tasks[selectedScene]?.alpha > 0 ? S.tasks[selectedScene] : null);
+}
+function sceneSelection(v) {
+  const entity = selectedEntity();
+  if (UI?.selected) UI.selected(entity ? sceneName(entity) : null, entity?.id ? 'quests' : 'delegate');
+  if (UI) UI.bounds();
+  if (!entity || !UI) return;
+  // Selected identification precedes regions/effects. The highlighted compact
+  // representative remains visible even when no world-label lane fits.
+  const x = entity.mx ?? entity.x, y = entity.my ?? entity.y;
+  if (!overflowed(entity) && onScreen(v,x,y,180,180))
+    UI.screenLabel(sceneName(entity),(v.ox+x*v.Z)/DPR,(v.oy+(y-110)*v.Z)/DPR,true);
+}
 function sceneOverflow(v) {
   if (!UI?.sceneOverflow) return;
   const entities = [...Object.values(S.heroes), ...Object.values(S.tasks).filter(t => t.alpha > 0)];
   UI.sceneOverflow(Object.entries(W.regions).flatMap(([region,r]) => {
-    const items = entities.filter(o => overflowed(o) && o.placement.region === region);
+    const items = entities.filter(o => overflowed(o) && o !== selectedEntity() && o.placement.region === region);
     if (!items.length) return [];
     const [x,y] = plazaOf(region).center;
     if (!onScreen(v,x,y,300,220)) return [];
@@ -1108,6 +1122,7 @@ function draw() {
   cx.fillStyle = '#0b1220'; cx.fillRect(0, 0, cv.width, cv.height);
   if (privacyPending) { if(UI)UI.flush(); return; }
   if (BG) cx.drawImage(BG, v.ox, v.oy, W.size[0] * v.Z, W.size[1] * v.Z);
+  sceneSelection(v);
   for (const [k,r] of Object.entries(W.regions)) banner(v,k,r);
   const ents = [...(W.layered ? W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
     ...(Object.values(S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
@@ -1215,7 +1230,7 @@ function heroDraw(v, h) {
   if (h.sleep && !walking) emoji('💤', hx + 12 * v.Z, top + 28 * v.Z - Math.sin(performance.now() / 400) * 4 * v.Z, 14 * v.Z);
 
   if (h.bubble) bubble(hx, top - 16 * DPR, h.bubble.text);
-  if (UI && !walking && selectedScene === h.bot) UI.screenLabel(sceneName(h),hx/DPR,(top-34*DPR)/DPR);
+
 }
 // Effort/attack colours come from the character itself: the dominant saturated hue of its first frame, plus a
 // light tint of it for glows. So a violet Sonnet knight glows violet-lilac, a moon sage glows pale silver-blue.
@@ -1318,7 +1333,7 @@ function monster(v, t) {
   }
 
   if (t.state === 'caged' && !walking) emoji('⛓', v.ox + (bx + 14) * v.Z, v.oy + (top + 10) * v.Z, 10 * v.Z);
-  if (UI && !walking && selectedScene === t.id) UI.screenLabel(sceneName(t),(v.ox+bx*v.Z)/DPR,(v.oy+(top-12)*v.Z)/DPR);
+
   if (t.alpha > .5 && !t.dying && t.region !== 'camp') {                  // HP bar = time left; camp monsters just wait
     const w = 36, x0 = bx - w / 2;
     cx.fillStyle = '#141824'; cx.fillRect(v.ox + (x0 - 2) * v.Z, v.oy + (top - 2) * v.Z, (w + 4) * v.Z, 6 * v.Z);
@@ -1402,15 +1417,15 @@ function say(html, t, key, minGap = 0) {
 function renderFeed() {
   if(!UI||$('#chron').hidden||$('#menu').hidden||!$('#group-overview').open)return;
   UI.feed(S.feed.map(f=>{
-    const detailText=fmt(f.t)+' '+UI.plain(f.html);
+    let detailText=fmt(f.t)+' '+UI.plain(f.html);
     let text=UI.plain(f.html).replace(/ — .*$/u,'');
     if(/^💬|^🐦‍⬛ Captain:/.test(text))text='💬 Message; open Details';
     else if(/^💀/.test(text))text='💀 Work stopped; open Details';
     else if(/^🌀/.test(text))text='🌀 Quest handoff; open Details';
     else if(/^🦊/.test(text))text='🦊 Subagent summoned; open Details';
     if(D.meta.show_titles!==true){
-      for(const t of D.tasks)text=text.split(t.id).join('Task details hidden');
-      for(const b of D.bots)text=text.split(b.id).join('Hero');
+      for(const t of D.tasks){text=text.split(t.id).join('Task details hidden');detailText=detailText.split(t.id).join('Task details hidden');}
+      for(const b of D.bots){text=text.split(b.id).join('Hero');detailText=detailText.split(b.id).join('Hero');}
     }
     return {text:fmt(f.t)+' '+text,detailText};
   }));
@@ -1421,7 +1436,7 @@ function renderCamps() {
   const by={};for(const t of D.tasks)(by[t.campaign]||=[]).push(t);
   const rows=Object.entries(by).map(([title,ts])=>{
     const live=ts.map(t=>S.tasks[t.id]).filter(Boolean),done=live.filter(t=>t.state==='done').length;
-    return {title,count:done+'/'+ts.length+' quests',blocked:live.find(t=>t.state==='blocked')?.title,
+    return {title,count:done+'/'+ts.length+' quests',blocked:live.some(t=>t.state==='blocked')?(D.meta.show_titles===true?live.find(t=>t.state==='blocked').title:'Task details hidden · Blocked'):null,
       stages:STAGES.map(st=>{const group=live.filter(t=>t.stage===st);return {id:st.toLowerCase(),state:group.some(t=>t.state==='fight')?'selected':group.length&&group.every(t=>t.state==='done')?'normal':'disabled'};})};
   });UI.camps(rows);
 }
@@ -1505,8 +1520,8 @@ function click(e) {
 }
 function questLines(t) {
   const h=t.bot&&S.heroes[t.bot], elapsed=t.runStart?Math.round((S.t-t.runStart)/60):0;
-  return ['Task ID: '+t.id,D.meta.show_titles===true?t.title:'Task details hidden',
-    'Assigned to: '+(h?h.name+' ('+h.bot+')':'Not provided'),
+  return [D.meta.show_titles===true?'Task ID: '+t.id:sceneName(t),D.meta.show_titles===true?t.title:'Task details hidden',
+    'Assigned to: '+(h?(D.meta.show_titles===true?h.name+' ('+h.bot+')':sceneName(h)):'Not provided'),
     'Stage: '+(STAGE_TH[t.stage]||'Unknown')+' · Status: '+(TASK_STATES[t.state]||'Not started in selected range'),
     ...(t.runStart?['Run elapsed: '+elapsed+' minutes']:[]),
     ...(Number.isFinite(t.max_rt)?['Run time limit: '+Math.round(t.max_rt/60)+' minutes']:[]),
@@ -1532,7 +1547,7 @@ function heroStatus(h) {
 }
 function heroDetails(h) {
   const ledger = S.tokenNetByBot[h.bot],source=D.bots.find(b=>b.id===h.bot),current=h.task&&S.tasks[h.task];
-  return [D.meta.show_titles===true?h.name:'Hero details hidden','Hero ID: '+h.bot,
+  return [D.meta.show_titles===true?h.name:'Hero details hidden',D.meta.show_titles===true?'Hero ID: '+h.bot:sceneName(h),
     'Game class: '+h.cls,'Model: '+(source?.model||'Not provided'),'Effort: '+(source?.effort||'Not provided'),heroStatus(h),
     'Scene region: '+(W.regions[h.region]?.label||'Unknown'),
     'Current task: '+(current?(D.meta.show_titles===true?current.title:'Task details hidden'):'No current task in selected range'),

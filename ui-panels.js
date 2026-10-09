@@ -29,7 +29,7 @@
   function number(selector,text,label) {paint($(selector),numericImage(text),label+': '+text);}
   const visible=el=>el&&!el.hidden&&getComputedStyle(el).display!=='none'&&(!el.getClientRects||el.getClientRects().length>0);
   function bounds() {
-    const fixed=['#focus-bar','#menu','#quest','#scene-overflow'].map($).filter(visible).map(el=>el.getBoundingClientRect());
+    const fixed=['#focus-bar','#menu','#quest','#scene-overflow','#scene-selected'].map($).filter(visible).map(el=>el.getBoundingClientRect());
     reserved=fixed.map(r=>({left:r.left-8,top:r.top-8,right:r.right+8,bottom:r.bottom+8}));
     const outer=fixed.filter((r,i)=>!fixed.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
     budget=Math.max(0,innerWidth*innerHeight*(innerWidth<=760||innerHeight<=500?.25:.2)-outer.reduce((n,r)=>n+r.width*r.height,0));
@@ -67,6 +67,19 @@
       const top=y+lane*18;if(fits(x-2,top-2,im.width+4,im.height+4)){image(im,x,top);break;}}
   }
   let overflowKey='',overflowGroups=[];
+  function selected(label,id='quests') {
+    let el=$('#scene-selected');
+    if(!el){el=document.createElement('div');el.id='scene-selected';el.setAttribute('role','img');
+      el.style.cssText='position:fixed;left:8px;z-index:7;max-width:calc(100vw - 16px);display:flex;align-items:center;gap:4px;padding:4px;background:#0d1423;border:2px solid #ffd36b;border-radius:4px;pointer-events:none';
+      document.body.append(el);}
+    el.hidden=!label;
+    if(!label){el.replaceChildren();el.removeAttribute('aria-label');delete el.dataset.label;return;}
+    el.style.top=(($('#focus-bar')?.getBoundingClientRect().bottom||52)+8)+'px';
+    el.setAttribute('aria-label','Selected '+label);
+    if(el.dataset.label===label+' '+id)return;el.dataset.label=label+' '+id;el.replaceChildren();
+    const symbol=iconImage(id).cloneNode(true);symbol.getContext('2d').drawImage(iconImage(id),0,0);symbol.setAttribute('aria-hidden','true');
+    const text=document.createElement('span');paint(text,numericImage(label.toUpperCase()),'Selected '+label);el.append(symbol,text);
+  }
   function sceneOverflow(groups) {
     overflowGroups=groups;
     let el=$('#scene-overflow');
@@ -205,9 +218,19 @@
     const el=typeof target==='string'?$(target):target;el.replaceChildren();
     if(!rows.length){const p=document.createElement('p');p.textContent=empty;el.append(p);return;}
     for(const row of rows.slice(0,all?rows.length:3)){
-      const entry=document.createElement('div');entry.className='item-summary';entry.dataset.key=String(row.key??'');const text=document.createElement('span');
+      const entry=document.createElement('div');entry.className='item-summary';entry.dataset.key=presentationKey(row.key);const text=document.createElement('span');
       text.textContent=row.summary;entry.append(text);button(entry,'Details',row.details);el.append(entry);
     }
+  }
+  // Focus keys stay stable across rebuilds without exposing source IDs in DOM.
+  const presentationKeys=new Map();let nextPresentationKey=0;
+  function presentationKey(key) {
+    key=String(key??'');
+    if(!presentationKeys.has(key)){
+      if(presentationKeys.size>=16384)presentationKeys.delete(presentationKeys.keys().next().value);
+      presentationKeys.set(key,'item-'+(++nextPresentationKey));
+    }
+    return presentationKeys.get(key);
   }
   // A summary list is rebuilt on every changed overview, which deletes the focused Details button.
   // Whatever focus the list owns (including focus a closing dialog just returned to a stale row)
@@ -227,7 +250,7 @@
     const issueCount=data.blocked+data.errors.length;
     const badge=$('#issues'),down=connectionState==='offline'||connectionState==='snapshot'||connectionState==='stale';badge.hidden=!issueCount&&!down;
     const label=[data.blocked?data.blocked+' blocked':null,data.errors.length?data.errors.length+' issues':null,
-      connectionState==='stale'?'Live paused · not updating':connectionState==='offline'?'Offline':connectionState==='snapshot'?'Snapshot':null].filter(Boolean).join(' · ');
+      connectionState==='stale'?'Live paused · not updating':connectionState==='offline'?'Offline':connectionState==='snapshot'?connectionText:null].filter(Boolean).join(' · ');
     badge.textContent=label;badge.setAttribute('aria-label',label||'No observed issues');
     badge.onclick=()=>detail([data.blocked+' tasks blocked',...data.errors,
       ...(down?[connectionText,...staleLines()]:[]),
@@ -249,6 +272,7 @@
     $('#mode').setAttribute('aria-label',text+' data source · '+connectionLabel);
   }
   function privacy() {
+    selected(null);presentationKeys.clear();
     sceneOverflow([]);
     epoch++;T.clearCache();numbers.clear();feedKey='';campKey='';overviewKey='';overviewData=null;lastFeed=[];lastCamps=[];
     close();$('#quest').replaceChildren();$('#tasks-list').replaceChildren();$('#heroes-list').replaceChildren();
@@ -341,7 +365,7 @@
     if(was==='stale'||state==='stale')bounds();
     if(overviewData)overview(overviewData);
     else if(state==='offline'||state==='snapshot'||state==='stale'){
-      $('#issues').hidden=false;$('#issues').textContent=state==='stale'?'Live paused · not updating':state==='offline'?'Offline':'Snapshot';
+      $('#issues').hidden=false;$('#issues').textContent=state==='stale'?'Live paused · not updating':state==='offline'?'Offline':text;
       $('#issues').setAttribute('aria-label',text);$('#issues').onclick=$('#connection').onclick;
     }
   }
@@ -387,6 +411,6 @@
     });
     addEventListener('resize',resize);resize();
   }
-  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,sceneOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
+  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,selected,sceneOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
     diagnostics:()=>({grid,epoch,reserved,drawn})};
 })(window);

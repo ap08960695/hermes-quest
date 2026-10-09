@@ -10,6 +10,7 @@ module.exports = function loadUI(box, el) {
       classList: {toggle: noop, contains: name => value.className.split(' ').includes(name)},
       setAttribute: (key, text) => attrs.set(key, String(text)),
       getAttribute: key => attrs.get(key) ?? null,
+      removeAttribute: key => attrs.delete(key),
       getContext: () => ({save: noop, restore: noop, fillRect: noop, drawImage: noop}),
       append: (...items) => children.push(...items),
       replaceChildren: (...items) => {children.splice(0, children.length, ...items);},
