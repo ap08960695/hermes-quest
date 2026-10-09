@@ -17,6 +17,11 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Live status warning: after 3 failed polls in a row (about 30 s) or any 4xx response the compact
+  indicator shows "Live paused · not updating" with the last successful update time and a short reason
+  (sign-in needed, server rejected, server error, offline). Details are in Menu > Overview and the
+  Connection details dialog; a polite live region announces the change. One successful poll returns to
+  Live; playback, camera and cursor are untouched and no payload, cursor or URL is shown.
 - UI2: fixed pixel-text HUD and semantic atlas icons, bitmap Thai details,
   mobile-safe panels, cached hurt effects, visibility-aware replay and a
   landscape dashboard iframe that fits the available height.
