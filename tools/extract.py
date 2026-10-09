@@ -923,6 +923,25 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     tasks[tid]['tokens'] = tasks[tid].get('tokens', 0) + tok
             if prof == captain:
                 deferred = previous.get('captain_pending', {})
+                call_indexes = {}
+                def call_index(session_id):
+                    # call ID -> (rowid, matching calls) of the earliest row that
+                    # names it, built lazily once per session in rowid order.
+                    index = call_indexes.get(session_id)
+                    if index is None:
+                        index = call_indexes[session_id] = {}
+                        for a in s.execute(f'SELECT rowid,{_tool_calls_sql(True, json1)} FROM messages WHERE session_id=? AND tool_calls IS NOT NULL ORDER BY rowid', (session_id,)):
+                            grouped = {}
+                            for c in _json(a[1], []):
+                                key = c.get('id') or c.get('call_id')
+                                try:
+                                    if key and key not in index:
+                                        grouped.setdefault(key, []).append(c)
+                                except TypeError:
+                                    continue  # unhashable ID can never equal a result's call ID
+                            for key, found in grouped.items():
+                                index[key] = (a[0], found)
+                    return index
                 for m in rows(s, 'messages', 'captain-messages', 'timestamp', deferred, _message_columns(True, json1)):
                     if m['session_id'] in mapping:
                         continue
@@ -930,16 +949,18 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     result = None
                     if m['role'] == 'tool' and m['tool_call_id']:
                         # A create call's ID is known only once its result arrives.
-                        for a in s.execute(f'SELECT {_tool_calls_sql(True, json1)} FROM messages WHERE session_id=? AND tool_calls IS NOT NULL AND rowid<?', (m['session_id'], m['seq'])):
-                            found = [c for c in _json(a[0], []) if (c.get('id') or c.get('call_id')) == m['tool_call_id']]
-                            if found:
-                                calls = found; result = ''
-                                if any((c.get('function') or {}).get('name') == 'kanban_create' for c in found):
-                                    # Some historical result rows omit tool_name;
-                                    # the matched call, not that nullable column,
-                                    # proves this result has an actual consumer.
-                                    result = s.execute('SELECT content FROM messages WHERE rowid=?', (m['seq'],)).fetchone()[0] or ''
-                                break
+                        # The earliest preceding row naming this ID wins. The
+                        # per-session index is built once, so a long history is
+                        # scanned O(n) rather than once per tool result.
+                        first = call_index(m['session_id']).get(m['tool_call_id'])
+                        if first and first[0] < m['seq']:
+                            found = first[1]
+                            calls = found; result = ''
+                            if any((c.get('function') or {}).get('name') == 'kanban_create' for c in found):
+                                # Some historical result rows omit tool_name;
+                                # the matched call, not that nullable column,
+                                # proves this result has an actual consumer.
+                                result = s.execute('SELECT content FROM messages WHERE rowid=?', (m['seq'],)).fetchone()[0] or ''
                     for i, call in enumerate(calls):
                         # Deferred rows can contain already-delivered actions.
                         if m['seq'] <= old.get('captain-messages', 0) and i not in deferred.get(str(m['seq']), []):

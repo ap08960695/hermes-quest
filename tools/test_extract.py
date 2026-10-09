@@ -1094,5 +1094,143 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
             extract.load_config(path)
 
 
+# --- Long Captain history: lookup scaling and byte-identical output ---------------
+CAPTAIN_FIXTURE_MESSAGES = 20_000
+# sha256 (config_revision excluded: it hashes the random temp home) of the initial replay, the delta after the pending tasks appear, and the
+# following idle delta, produced by the pre-fix extractor (edf13c5, per-result
+# rescan of the session) on exactly this fixture. The lookup rewrite must not
+# change a single byte; do not regenerate it from the current code.
+CAPTAIN_FIXTURE_DIGEST = '0de15e0e61521c3fd9deba4d39b982f311fa632f148ff5afa0b5c19d13d79a65'
+CAPTAIN_FIXTURE_CEILING_SECONDS = 10.0
+
+
+def build_captain_fixture(home, now, n=CAPTAIN_FIXTURE_MESSAGES):
+    """Synthetic Captain DB with one very long session (no real data).
+
+    Covers parallel calls in one assistant row, calls identified by `call_id`,
+    results without tool_name, a deferred (non-extracted) tool, a repeated call
+    ID, a result that precedes its call, results whose call is outside the replay
+    window, and kanban_create results naming tasks that are not visible yet.
+    """
+    home = Path(home)
+    (home / 'hermes-quest').mkdir(mode=0o700)
+    key = home / 'hermes-quest' / 'session-ref.key'
+    key.write_bytes(bytes(range(32)))  # fixed so the digest is reproducible
+    key.chmod(0o600)
+    k = sqlite3.connect(home / 'kanban.db')
+    k.executescript("""
+CREATE TABLE tasks(id TEXT PRIMARY KEY,title TEXT,assignee TEXT,status TEXT,created_by TEXT,
+created_at REAL,started_at REAL,completed_at REAL,workspace_path TEXT,provider_override TEXT,max_runtime_seconds INTEGER);
+CREATE TABLE task_events(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT,run_id INTEGER,kind TEXT,payload TEXT,created_at REAL);
+CREATE TABLE task_comments(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT,author TEXT,body TEXT,created_at REAL);
+CREATE TABLE task_runs(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT,profile TEXT,started_at REAL,ended_at REAL,outcome TEXT);
+CREATE TABLE task_links(parent_id TEXT,child_id TEXT);
+""")
+    visible = ['t_%08x' % (0x1000 + i) for i in range(40)]
+    pending = ['t_%08x' % (0xa000 + i) for i in range(25)]
+    for tid in visible:
+        k.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                  (tid, 'Synthetic', 'developer-demo', 'running', 'planner-demo', now, now, None, None, None, 1800))
+    k.commit()
+    root = home / 'profiles' / 'planner-demo'
+    root.mkdir(parents=True)
+    s = sqlite3.connect(root / 'state.db')
+    s.executescript("""
+CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,parent_session_id TEXT,started_at REAL,title TEXT);
+CREATE TABLE messages(id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT,role TEXT,content TEXT,
+ tool_calls TEXT,tool_name TEXT,tool_call_id TEXT,timestamp REAL,token_count INTEGER);
+CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tokens INTEGER);
+""")
+    s.execute('INSERT INTO sessions VALUES(?,?,?,?,?)', ('chat', 'chat', None, now - 40 * 3600, 'Synthetic chat'))
+    s.execute('INSERT INTO sessions VALUES(?,?,?,?,?)', ('chat2', 'chat', None, now - 2 * 3600, 'Synthetic chat 2'))
+    rows = []
+    turn = 0
+    while len(rows) < n:
+        # The first quarter of the history is older than the 12 h replay window.
+        stamp = now - 30 * 3600 + (len(rows) / n) * 30 * 3600 - 60
+        tid = visible[turn % len(visible)]
+        late = pending[turn % len(pending)] if turn % 7 == 0 else None
+        sid = 'chat2' if turn % 11 == 0 else 'chat'
+        key_name = 'call_id' if turn % 5 == 0 else 'id'
+        ids = [f'call-{turn}-{j}' for j in range(4)]
+        if turn % 13 == 0:
+            ids[3] = 'call-dup'  # same ID reused across turns: the earliest row wins
+        calls = [
+            {key_name: ids[0], 'function': {'name': 'kanban_comment', 'arguments': json.dumps({'task_id': tid, 'body': 'x'})}},
+            {key_name: ids[1], 'function': {'name': 'kanban_create', 'arguments': json.dumps({'title': 'x', 'assignee': 'developer-demo'})}},
+            {key_name: ids[2], 'function': {'name': 'tool_call', 'arguments': json.dumps({'name': 'kanban_create'})}},  # deferred wrapper
+            {key_name: ids[3], 'function': {'name': 'kanban_link', 'arguments': json.dumps({'parent_id': tid, 'child_id': visible[(turn + 1) % len(visible)]})}},
+        ]
+        rows.append((sid, 'assistant', None, json.dumps(calls), None, None, stamp, None))
+        created = late or visible[(turn * 3) % len(visible)]
+        rows.append((sid, 'tool', json.dumps({'task': {'id': tid}}), None, 'kanban_comment', ids[0], stamp, None))
+        # kanban_create result: every third one omits tool_name (historical rows).
+        rows.append((sid, 'tool', json.dumps({'task': {'id': created}}), None,
+                     None if turn % 3 == 0 else 'kanban_create', ids[1], stamp, None))
+        rows.append((sid, 'tool', '{}', None, 'tool_call', ids[2], stamp, None))
+        rows.append((sid, 'tool', '{}', None, None, ids[3], stamp, 7))
+        if turn % 17 == 0:
+            rows.append((sid, 'tool', '{}', None, None, f'orphan-{turn}', stamp, None))  # no such call
+            rows.append((sid, 'tool', json.dumps({'task': {'id': tid}}), None, 'kanban_create', f'early-{turn}', stamp, None))
+            early = [{'id': f'early-{turn}', 'function': {'name': 'kanban_create', 'arguments': '{}'}}]
+            rows.append((sid, 'assistant', None, json.dumps(early), None, None, stamp, None))  # call after its result
+        for j in range(3):  # prose that is never an extraction input
+            rows.append((sid, 'user' if j == 0 else 'assistant', f'filler {turn}-{j}', None, None, None, stamp, None))
+        turn += 1
+    s.executemany('INSERT INTO messages(session_id,role,content,tool_calls,tool_name,tool_call_id,timestamp,token_count) '
+                  'VALUES(?,?,?,?,?,?,?,?)', rows)
+    s.commit()
+    return k, s, pending
+
+
+def captain_fixture_digest(extract_module, n=CAPTAIN_FIXTURE_MESSAGES, timings=None):
+    """Replay, then reveal the pending tasks, then an idle delta; hash all three."""
+    now = 1_800_000_000.0
+    with tempfile.TemporaryDirectory() as tmp, \
+            patch.object(extract_module.time, 'time', return_value=now), \
+            patch.dict(os.environ, {'HERMES_HOME': tmp, 'HERMES_QUEST_CONFIG': ''}):
+        k, s, pending = build_captain_fixture(tmp, now, n)
+        try:
+            cfg = extract_module.load_config()
+            started = time.monotonic()
+            initial = extract_module.build_replay(cfg, 12)
+            if timings is not None:
+                timings['replay'] = time.monotonic() - started
+            for tid in pending:
+                k.execute('INSERT INTO tasks VALUES(?,?,?,?,?,?,?,?,?,?,?)',
+                          (tid, 'Synthetic', 'developer-demo', 'running', 'planner-demo', now, now, None, None, None, 1800))
+            k.commit()
+            started = time.monotonic()
+            delta = extract_module.collect_since(cfg, initial['cursor'])
+            if timings is not None:
+                timings['delta'] = time.monotonic() - started
+            idle = extract_module.collect_since(cfg, delta['cursor'])
+        finally:
+            k.close(); s.close()
+    digest = __import__('hashlib').sha256()
+    for part in (initial, delta, idle):
+        # config_revision hashes the random temporary hermes_home path; the code
+        # that computes it is outside this change, every other byte is compared.
+        part = dict(part, meta={k: v for k, v in part['meta'].items() if k != 'config_revision'})
+        digest.update(json.dumps(part, sort_keys=True, ensure_ascii=False).encode())
+    return digest.hexdigest(), initial, delta, idle
+
+
+class CaptainLongHistoryTests(unittest.TestCase):
+    def test_long_captain_history_is_identical_and_bounded(self):
+        timings = {}
+        digest, initial, delta, idle = captain_fixture_digest(extract, timings=timings)
+        captain = lambda payload: [e for e in payload['events'] if e['kind'] == 'captain']
+        # The fixture really exercises every branch: calls matched through id and
+        # call_id, results without tool_name, and pending creates delivered later.
+        self.assertGreater(len(captain(initial)), 1000)
+        self.assertEqual({e['act'] for e in captain(initial)}, {'note', 'link', 'create'})
+        self.assertTrue(captain(delta))
+        self.assertEqual(idle['events'], [])
+        self.assertEqual(digest, CAPTAIN_FIXTURE_DIGEST)
+        self.assertLess(timings['replay'], CAPTAIN_FIXTURE_CEILING_SECONDS, timings)
+        self.assertLess(timings['delta'], CAPTAIN_FIXTURE_CEILING_SECONDS, timings)
+
+
 if __name__ == '__main__':
     unittest.main()
