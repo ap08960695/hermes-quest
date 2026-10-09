@@ -1,0 +1,50 @@
+name: Bug report
+description: Report a reproducible problem using synthetic data only.
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never upload live replay files, private logs, configuration, credentials,
+        real bot/profile names, paths, customer data or live screenshots.
+        Reproduce with `python3 tools/mock.py` and share only synthetic evidence.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions and environment
+      description: Quest commit/release, Hermes version, OS and browser. No local paths or profile names.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Standalone synthetic demo
+        - Dashboard plugin (synthetic reproduction)
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction steps
+      description: Include expected and actual behavior; omit all live data.
+    validations:
+      required: true
+  - type: textarea
+    id: checks
+    attributes:
+      label: Validation results
+      description: If using a source checkout, include results of backtest and check_public (not private logs). Mark anything not run.
+      placeholder: |
+        node tools/backtest.js: PASS / FAIL / not run
+        python3 tools/check_public.py: PASS / FAIL / not run
+        python3 tools/check_public.py --history: PASS / FAIL / not run
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Public evidence checklist
+      options:
+        - label: This report and all attachments contain no real data or live images; any game capture comes only from tools/mock.py.
+          required: true

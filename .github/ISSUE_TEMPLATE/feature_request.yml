@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an improvement without sharing private board data.
+title: "[Feature] "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: Use fictional examples only. Do not share private configuration, live data or live images.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and desired behavior
+      description: Describe the user flow and how success could be tested with synthetic data.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution and alternatives
+      description: Include any privacy or read-only constraints.
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Public evidence checklist
+      options:
+        - label: No real data or live images are included; any game capture comes only from tools/mock.py.
+          required: true
