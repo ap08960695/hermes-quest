@@ -35,6 +35,12 @@ const server=http.createServer((req,res)=>{
   try{const data=baseline?cp.execFileSync('git',['show',base+':'+name.slice(1)],{cwd:root,maxBuffer:32*1024*1024,stdio:['ignore','pipe','ignore']}):fs.readFileSync(path.join(root,name));res.setHeader('Content-Type',mime[path.extname(name)]||'application/octet-stream');res.end(data);}catch{res.writeHead(404);res.end();}
 });
 async function ready(page,url){await page.goto(url);await page.waitForFunction(()=>typeof S==='object'&&typeof W==='object'&&W&&typeof loop.last==='number',{},{timeout:30000});}
+// Navigation only: relocated controls retain their original behavioral gates.
+async function openGroup(page,id){
+  if(await page.locator('#menu').isHidden())await page.click('#menu-toggle');
+  const group=page.locator('#group-'+id);
+  if(!await group.evaluate(el=>el.open))await group.locator('summary').click();
+}
 function errors(page){const all=[];page.on('pageerror',e=>all.push('page: '+e.message));page.on('console',m=>{if(m.type()==='error')all.push('console: '+m.text());});page.on('requestfailed',r=>all.push('request: '+r.url()));page.on('response',r=>{if(r.status()>=400)all.push('http: '+r.status()+' '+r.url());});return all;}
 function monitor(){
   window.measurement={frames:[],tasks:[],start:performance.now(),last:null};
@@ -79,14 +85,16 @@ function monitor(){
       const pending=await page.evaluate(()=>({pending:privacyPending,dom:document.body.textContent.includes('UI_CANARY'),data:JSON.stringify(D).includes('UI_CANARY'),state:JSON.stringify(S).includes('UI_CANARY'),epoch:UIPanels.diagnostics().epoch}));
       assert.equal(pending.dom,false);assert.equal(pending.data,false);assert.equal(pending.state,false);release();await page.evaluate(()=>pollProof);assert(await page.evaluate(()=>privacyPending));
       await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();clearTimeout(pollTimer);pollTimer=null;});assert.equal(await page.evaluate(()=>privacyPending),false);
+      await openGroup(page,'playback');
       await page.click('#live');assert(await page.evaluate(()=>following));await page.click('#play');assert.equal(await page.evaluate(()=>following),false);
       await page.locator('#speeds').focus();await page.keyboard.press('Enter');assert.equal(await page.evaluate(()=>S.speed),30);
-      await page.click('#calm');assert.equal(await page.locator('#calm').getAttribute('aria-pressed'),'true');
-      await page.locator('#scrub').focus();await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>S.t),await page.evaluate(()=>D.meta.from_));
-      await page.click('#world');assert(await page.locator('#quest').isVisible());await page.keyboard.press('Escape');assert(await page.locator('#quest').isHidden());
-      await page.click('#help');await page.waitForTimeout(500);assert.equal(await page.locator('.legend-row').count(),46);assert.equal(await page.evaluate(()=>document.querySelector('#quest').scrollWidth>document.querySelector('#quest').clientWidth+1),false);
+      await openGroup(page,'settings');await page.click('#calm');assert.equal(await page.locator('#calm').getAttribute('aria-pressed'),'true');
+      await openGroup(page,'playback');await page.locator('#scrub').focus();await page.keyboard.press('Home');assert.equal(await page.evaluate(()=>S.t),await page.evaluate(()=>D.meta.from_));
+      await openGroup(page,'world');await page.click('#world');assert(await page.locator('#quest').isVisible());await page.keyboard.press('Escape');assert(await page.locator('#quest').isHidden());
+      await openGroup(page,'settings');await page.click('#help');await page.waitForTimeout(500);assert.equal(await page.locator('.legend-row').count(),46);assert.equal(await page.evaluate(()=>document.querySelector('#quest').scrollWidth>document.querySelector('#quest').clientWidth+1),false);
       await page.screenshot({path:path.join(out,'legend-320.png')});await page.keyboard.press('Escape');
       const pure=await page.evaluate(()=>{S.play=false;const old=JSON.stringify(S);for(let i=0;i<10;i++)draw();return old===JSON.stringify(S);});assert(pure,'draw must not mutate simulation');
+      await page.click('#menu-toggle');assert(await page.locator('#menu').isHidden());
       await page.setViewportSize({width:390,height:844});await page.evaluate(()=>UIPanels.resize());
       const glyphs=await page.evaluate(()=>{UIPanels.clear();for(let i=0;i<10;i++)UIPanels.screenNumber('10',160,200);const d=UIPanels.diagnostics();return {count:d.drawn.length,rows:d.drawn.map(r=>r.top)};});assert.equal(glyphs.count,3);
       report.records.push({pending,replayCount,pure,glyphs,errorsExpected503:err});assert.equal(err.filter(e=>!e.includes('503')).length,0);await page.close();
@@ -115,7 +123,7 @@ function monitor(){
         const host=await page.locator('iframe').boundingBox();
         const geometry=await game.evaluate(()=>{
           const rect=el=>{const r=el.getBoundingClientRect();return {id:el.id,x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom};};
-          return {width:innerWidth,height:innerHeight,hud:rect(document.querySelector('#hud')),buttons:[...document.querySelectorAll('button')].filter(b=>!b.hidden&&!b.closest('[hidden]')).map(rect)};
+          return {width:innerWidth,height:innerHeight,hud:rect(document.querySelector('#focus-bar')),toolbarRects:document.querySelector('#hud').getClientRects().length,canvas:rect(document.querySelector('#stage')),buttons:[...document.querySelectorAll('button')].filter(b=>b.getClientRects().length&&!b.hidden&&!b.closest('[hidden]')).map(rect)};
         });
         assert(host.x>=0&&host.y>=0&&host.x+host.width<=width&&host.y+host.height<=height,'iframe viewport bounds');
         assert.equal(host.height,height-144,'dashboard available height');
@@ -123,7 +131,11 @@ function monitor(){
           assert(b.x>=-1&&b.x+b.w<=geometry.width+1&&b.y>=-1&&b.bottom<=geometry.height+1,b.id+' iframe bounds');
           assert(host.x+b.x>=-1&&host.x+b.x+b.w<=width+1&&host.y+b.y>=-1&&host.y+b.bottom<=height+1,b.id+' host bounds');
         }
-        assert.equal(geometry.hud.h,geometry.width<=760&&geometry.height>=geometry.width?116:56,'unchanged HUD layout');
+        assert.equal(geometry.toolbarRects,0,'old toolbar absent in focus mode');
+        assert.equal(geometry.hud.h,46,'compact overlay: 44px controls plus tag borders');
+        assert(geometry.hud.w<geometry.width-16,'compact overlay does not become a full-width toolbar');
+        assert.equal(geometry.canvas.w,geometry.width);assert.equal(geometry.canvas.h,geometry.height);
+        for(const b of geometry.buttons)assert(b.w>=44&&b.h>=44,b.id+' touch target');
         assert.deepEqual(err,[]);
         if(width>height&&width<1000)await page.screenshot({path:path.join(out,'dashboard-'+width+'x'+height+'.png')});
         report.records.push({width,height,host,geometry,errors:[...err]});console.log('PASS dashboard '+width+'x'+height);
@@ -135,15 +147,16 @@ function monitor(){
         await ready(page,url);await page.evaluate(z=>{S.play=false;reset(D.meta.from_+2100);cam.zi=z;draw();},zoom);await page.waitForTimeout(150);
         const geometry=await page.evaluate(()=>{
           const rect=s=>{const r=document.querySelector(s).getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,bottom:r.bottom};};
-          const boxes=['#hud','#tag','#help','#clock','#scrub'].map(s=>document.querySelector(s).getBoundingClientRect());
+          const boxes=['#focus-bar'].map(s=>document.querySelector(s).getBoundingClientRect());
           const outer=boxes.filter((r,i)=>!boxes.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
           const bitmaps=[...document.querySelectorAll('#ui-stage canvas')].filter(c=>!c.hidden).map(c=>c.getBoundingClientRect());
           const occlusion=outer.concat(bitmaps).reduce((a,r)=>a+r.width*r.height,0)/(innerWidth*innerHeight);
-          return {occlusion,hud:rect('#hud'),buttons:[...document.querySelectorAll('button')].filter(b=>!b.hidden&&!b.closest('[hidden]')).map(b=>({id:b.id,...rect('#'+b.id)})),scroll:document.documentElement.scrollWidth,grid:UIPanels.diagnostics().grid,worldDPR:DPR,visibleText:document.body.innerText.trim()};
+          return {occlusion,hud:rect('#focus-bar'),toolbarRects:document.querySelector('#hud').getClientRects().length,buttons:[...document.querySelectorAll('button')].filter(b=>b.getClientRects().length&&!b.hidden&&!b.closest('[hidden]')).map(b=>({id:b.id,...rect('#'+b.id)})),scroll:document.documentElement.scrollWidth,grid:UIPanels.diagnostics().grid,worldDPR:DPR,visibleText:document.body.innerText.trim()};
         });
-        assert.equal(geometry.visibleText,'');assert(geometry.hud.h<=(width>760&&height>500?64:176));assert(geometry.scroll<=width+1);assert(geometry.occlusion<=(width>760&&height>500?.2:.25),'closed UI occlusion budget '+JSON.stringify({width,height,zoom,geometry}));
+        assert.equal(geometry.visibleText,'Menu\nDEMO');assert.equal(geometry.toolbarRects,0);assert(geometry.hud.h<=(width>760&&height>500?64:176));assert(geometry.scroll<=width+1);assert(geometry.occlusion<=(width>760&&height>500?.2:.25),'closed UI occlusion budget '+JSON.stringify({width,height,zoom,geometry}));
         for(const b of geometry.buttons){assert(b.w>=44&&b.h>=44,b.id+' hitbox');assert(b.x>=-1&&b.x+b.w<=width+1&&b.y>=-1&&b.bottom<=height+1,b.id+' bounds');}
-        await page.click('#log');const log=await page.evaluate(()=>{const c=document.querySelector('#chron').getBoundingClientRect(),h=document.querySelector('#hud').getBoundingClientRect();return {bottom:c.bottom,hudTop:h.top};});assert(log.bottom<=log.hudTop);
+        await openGroup(page,'overview');await page.click('#log');const log=await page.evaluate(()=>{const c=document.querySelector('#chron').getBoundingClientRect(),m=document.querySelector('#menu'),r=m.getBoundingClientRect();return {x:c.x,w:c.width,menuX:r.x,menuW:r.width,menuBottom:r.bottom,overflow:m.scrollWidth>m.clientWidth+1};});assert(log.x>=log.menuX&&log.x+log.w<=log.menuX+log.menuW&&log.menuBottom<=height-8&&!log.overflow,'feed stays in scrollable Menu');
+        await page.click('#chron-close');assert(await page.locator('#chron').isHidden());
         await page.click('#quests');assert(await page.locator('#chron').isHidden());assert(await page.locator('#camp').isVisible());
         await page.click('#quests');await page.evaluate(()=>UIPanels.detail(['กี่ กุ้ง น้ำ ฤทธิ์ ปี่ '+'A'.repeat(1024)],'synthetic detail'));await page.waitForTimeout(1000);
         const detail=await page.evaluate(()=>{const el=document.querySelector('#quest'),r=el.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,scroll:el.scrollWidth,client:el.clientWidth,canvases:el.querySelectorAll('canvas').length};});
