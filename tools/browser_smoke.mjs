@@ -227,7 +227,12 @@ async function runLiveMenu(browser,base) {
     for(let n=1;n<polls.length;n++)check(polls[n]-polls[n-1]>=9000&&polls[n]-polls[n-1]<=13000,'Polling cadence changed');
     check(await page.locator('#issues').isVisible(),'Blocked badge hidden with Menu');
     await page.tap('#menu-toggle');await page.click('#group-overview > summary');
-    await page.click('#log');await page.selectOption('#feed-filter','work');
+    await page.click('#log');
+    const filterState=await page.evaluate(()=>{const f=document.querySelector('#feed-filter'),l=document.querySelector('label[for="feed-filter"]');return {tag:f.tagName,value:f.value,options:[...f.options].map(o=>o.value).join(),name:f.getAttribute('aria-label'),label:l&&l.textContent,slot:!!document.querySelector('#feed-filter-slot'),count:document.querySelectorAll('#feed-filter').length};});
+    check(filterState.tag==='SELECT'&&filterState.value==='all'&&filterState.options==='all,work,issues'&&filterState.name==='Activity'&&filterState.label==='Activity'&&filterState.count===1,'Runtime Activity filter lost id/label/options/default');
+    await page.focus('#feed-filter');await page.keyboard.press('ArrowDown');
+    check(await page.evaluate(()=>document.querySelector('#feed-filter').value)==='work','Activity filter not keyboard operable');
+    await page.selectOption('#feed-filter','work');
     check(await page.locator('#issues').isVisible(),'Feed filter hid blocked badge');
     await page.click('#tasks-all');check(await page.locator('#quest .item-summary').count()===demo.tasks.length,'View all escaped or omitted loaded task window');
     await page.keyboard.press('Escape');

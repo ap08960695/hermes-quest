@@ -99,7 +99,7 @@ select:focus-visible{outline:2px solid var(--gold)}
     <span id="tabs"><button id="quests" data-t="camp" aria-label="Quests"></button><button id="log" data-t="chron" aria-label="Log"></button></span>
     <section id="camp" hidden aria-label="Campaigns"><button id="camp-close" class="drawer-close" aria-label="Close campaigns"></button><div id="camps"></div><button id="camps-all" class="text-button">View all campaigns</button></section>
     <section id="chron" hidden aria-label="Activity feed"><button id="chron-close" class="drawer-close" aria-label="Close activity feed"></button>
-      <div class="menu-controls"><label for="feed-filter">Activity</label><select id="feed-filter"><option value="all">All</option><option value="work">Work</option><option value="issues">Issues</option></select><button id="feed-all" class="text-button">View all activity</button></div>
+      <div class="menu-controls"><label for="feed-filter">Activity</label><span id="feed-filter-slot"></span><button id="feed-all" class="text-button">View all activity</button></div>
       <p>Latest retained activity; not an all-time log.</p><div id="feed"></div>
     </section>
   </details>

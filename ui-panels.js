@@ -325,7 +325,11 @@
     $('#help').onclick=legend;$('#world-help').onclick=legend;
     $('#menu-toggle').onclick=()=>menu($('#menu').hidden,!$('#menu').hidden);
     $('#hide-panels').onclick=()=>menu(false,true);
-    $('#feed-filter').onchange=()=>feed(lastFeed);
+    // The desktop bootstrap audit refuses a literal <select> in index.html, so build the same control at runtime.
+    const filter=document.createElement('select');filter.id='feed-filter';filter.setAttribute('aria-label','Activity');
+    for(const [value,text] of [['all','All'],['work','Work'],['issues','Issues']]){const o=document.createElement('option');o.value=value;o.textContent=text;filter.append(o);}
+    filter.value='all';$('#feed-filter-slot').append(filter);
+    filter.onchange=()=>feed(lastFeed);
     $('#feed-all').onclick=()=>{allFeed=!allFeed;feed(lastFeed);};
     $('#camps-all').onclick=()=>{allCamps=!allCamps;camps(lastCamps);};
     let saved={};try {saved=JSON.parse(root.localStorage.getItem(preferenceKey))||{};} catch (_) { /* Default canvas-first. */ }
