@@ -12,6 +12,14 @@ if (args.length && (args.length !== 2 || args[0] !== '--data' || !args[1])) {
 const dataPath = args.length ? path.resolve(args[1]) : path.join(root, 'data/demo.json');
 const D = JSON.parse(fs.readFileSync(dataPath));
 const W = JSON.parse(fs.readFileSync(path.join(root, 'data/world.json')));
+// Independent oracle: include the actual C standing ellipses as well as the
+// legacy entry apron. Movement thresholds below are deliberately unchanged.
+function inStandingArea(x,y) {
+  return Object.values(W.regions).some(r => {
+    const ellipses = [[r.spot,[120,72]], ...(r.plaza ? [[r.plaza.center,r.plaza.standing]] : [])];
+    return ellipses.some(([[cx,cy],[rx,ry]]) => ((x-cx)/rx)**2 + ((y-cy)/ry)**2 < 1);
+  });
+}
 
 // Minimal DOM/canvas stubs: game.js runs its update loop unchanged, drawing is a no-op.
 const noop = () => {}, el = () => ({style: {}, classList: {toggle: noop}, set innerHTML(v) {}, set textContent(v) {}, set value(v) {},
@@ -105,7 +113,7 @@ while (G.S.t < D.meta.to + 30 && stats.frames < 60 * 60 * 30) {
     if (!t.mpath || t.emerge > 0 || t.mx === undefined) continue;
     mon.frames++;
     const d = Math.min(distToRoads(t.mx, t.my), distToAny(t.mx, t.my, wildSegs));
-    const zone = Object.values(W.regions).some(r => ((t.mx - r.spot[0]) / PLAZA_RX) ** 2 + ((t.my - r.spot[1]) / PLAZA_RY) ** 2 < 1)
+    const zone = inStandingArea(t.mx,t.my)
       || Object.values(W.lairs || {}).some(l => Math.hypot(t.mx - l.spot[0], (t.my - l.spot[1]) * 1.5) < 130);
     if (d > 8 && !zone) { mon.off++; mon.offMax = Math.max(mon.offMax, d); const key = Math.round(t.mx / 40) * 40 + ',' + Math.round(t.my / 40) * 40; mon.where[key] = (mon.where[key] || 0) + 1; }
   }
@@ -118,7 +126,7 @@ while (G.S.t < D.meta.to + 30 && stats.frames < 60 * 60 * 30) {
         // foot slide: distance moved must equal distance the walk cycle accounts for (frames are tied to h.dist)
         const slide = Math.abs(step - (h.dist - p.dist)); stats.slide += slide; stats.slideMax = Math.max(stats.slideMax, slide);
         const off = distToRoads(h.x, h.y);
-        const plaza = Object.values(W.regions).some(r => ((h.x - r.spot[0]) / PLAZA_RX) ** 2 + ((h.y - r.spot[1]) / PLAZA_RY) ** 2 < 1);
+        const plaza = inStandingArea(h.x,h.y);
         if (off > 6 && !plaza) { stats.offRoad++; stats.offRoadMax = Math.max(stats.offRoadMax, off);
           const key = Math.round(h.x / 40) * 40 + ',' + Math.round(h.y / 40) * 40; stats.where[key] = (stats.where[key] || 0) + 1;
           if (process.env.DEBUG && !stats.dbg) { stats.dbg = 1; console.error('OFFROAD', h.bot, h.region, h.home, JSON.stringify(h.path.map(p => p.map(Math.round)))); } }

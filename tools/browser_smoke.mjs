@@ -464,6 +464,96 @@ async function runRetention(browser,base) {
   } finally {await ctx.close();}
 }
 
+// Same 15-hero/10-monster composition as the pre-change visual audit. Real
+// reducer + 150s of fixed-dt movement; geometry is measured from opaque pixels,
+// independently of formation()/its slot count. Synthetic input only.
+async function runSceneTruth(browser,base) {
+  const ctx=await browser.newContext({viewport:{width:1280,height:800},deviceScaleFactor:1});
+  const errors=[],views=[],selections=[];
+  await ctx.addInitScript(()=>{let seed=7;Math.random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
+    window.__clock=0;Object.defineProperty(performance,'now',{value:()=>window.__clock});window.requestAnimationFrame=()=>0;});
+  const page=await ctx.newPage();page.on('pageerror',e=>errors.push(e.message));
+  page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+  page.on('response',r=>{if(r.status()>=400)errors.push(r.status()+' '+new URL(r.url()).pathname);});
+  const fixture={meta:{from_:0,to:600,captain:'none',source:'demo',show_titles:false},bots:[],tasks:[],events:[]};
+  for(const [region,cls,stage,n,m] of [['forge','warrior','BUILD',6,4],['port','ranger','DEPLOY',5,3],['castle','commander','PLAN',4,3]]){
+    for(let i=0;i<n;i++)fixture.bots.push({id:`synthetic-${region}-${i}`,name:'Synthetic hero',entity_type:'bot',availability:'unknown',cls,region,model:'Sol',effort:'medium'});
+    for(let i=0;i<m;i++){const id=`synthetic-task-${region}-${i}`,bot=`synthetic-${region}-${i}`;
+      fixture.tasks.push({id,bot,stage,max_rt:1800,campaign:'Synthetic crowd'});fixture.events.push({id:'run-'+id,t:1,kind:'run_start',task:id,bot});}}
+  await page.route('**/data/demo.json',r=>r.fulfill({status:200,contentType:'application/json',body:JSON.stringify(fixture)}));
+  const check=(ok,msg)=>{if(!ok)throw new Error(msg);};
+  try {
+    await page.goto(base+'/',{waitUntil:'load'});
+    await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Replay file normal',null,{polling:100});
+    await page.evaluate(()=>{reset(0);
+      // Hold idle social timers for this standing fixture, not product behavior:
+      // all 25 entities must settle in their assigned yards, not wander out of
+      // the measurement. Travel and combat still use the real update loop.
+      for(const h of Object.values(S.heroes)){h.act=null;h.idle=1e6;goHome(h);}
+      S.play=true;S.speed=1;for(let i=0;i<9000;i++){window.__clock+=1000/60;update(1/60);}S.play=false;
+      window.__labels=[];const real=UI.screenLabel;UI.screenLabel=(...args)=>{const before=UI.diagnostics().drawn.length;real(...args);window.__labels.push({text:args[0],drawn:UI.diagnostics().drawn.length>before});};});
+    for(const width of [1280,375,320]){
+      await page.setViewportSize({width,height:width===1280?800:667});
+      for(const region of ['forge','port','castle'])for(const zoom of [1,3]){
+        const metric=await page.evaluate(({region,zoom})=>{
+          resize();const [x,y]=W.regions[region].plaza.center;Object.assign(cam,{x,tx:x,y:y-40,ty:y-40,zi:zoom});S.trauma=0;window.__labels=[];draw();hud(1);
+          const v=view(),bodies=[];
+          const body=(id,kind,reg,im,M,fr,bx,by,flip=false)=>{
+            const c=document.createElement('canvas');c.width=M.fw;c.height=M.fh;const g=c.getContext('2d');
+            g.drawImage(im,fr*M.fw,0,M.fw,M.fh,0,0,M.fw,M.fh);const pixels=g.getImageData(0,0,M.fw,M.fh).data;
+            let l=M.fw,r=0,t=M.fh,b=0;for(let yy=0;yy<M.fh;yy++)for(let xx=0;xx<M.fw;xx++)if(pixels[(yy*M.fw+xx)*4+3]>=200){l=Math.min(l,xx);r=Math.max(r,xx+1);t=Math.min(t,yy);b=Math.max(b,yy+1);}
+            if(flip){const old=l;l=M.fw-r;r=M.fw-old;}
+            const nx=flip?bx-(M.fw-M.ax):bx-M.ax;
+            bodies.push({id,kind,region:reg,left:(v.ox+(nx+l)*v.Z)/DPR,right:(v.ox+(nx+r)*v.Z)/DPR,top:(v.oy+(by-M.base+t)*v.Z)/DPR,bottom:(v.oy+(by-M.base+b)*v.Z)/DPR});};
+          for(const h of Object.values(S.heroes))if(!overflowed(h))body(h.bot,'hero',h.region,SPRV[`${h.cls}-${h.st.tag}`]||SPR[h.cls],HMETA,HMETA.idle[Math.floor(performance.now()/200+h.homeK)%HMETA.idle.length]||0,h.x,h.y,h.face<0);
+          for(const t of Object.values(S.tasks))if(t.alpha>.5&&!overflowed(t)){const key=mtype(t)+'-'+mtier(t);body(t.id,'monster',t.region,MON2[key],MMETA2[key],Math.floor(performance.now()/380+t.slot)%2?0:2,t.mx??t.x,t.mx!==undefined?t.my:t.y);}
+          const overlap=(a,b)=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;
+          const visible=bodies.filter(b=>b.left<innerWidth&&b.right>0&&b.top<innerHeight&&b.bottom>0),target=visible.filter(b=>b.region===region);
+          const pairs=target.flatMap((a,i)=>target.slice(i+1).filter(b=>overlap(a,b)).map(b=>[a.id,b.id]));
+          const diag=UI.diagnostics(),labelPairs=diag.drawn.flatMap((a,i)=>diag.drawn.slice(i+1).filter(b=>overlap(a,b)).map(()=>1)).length;
+          return {width:innerWidth,region,zoom,bodyPairs:pairs,visibleBodies:target.length,totalBodies:bodies.length,labelPairs,labels:window.__labels,
+            overflow:Object.values(S.tasks).filter(t=>t.alpha>0&&overflowed(t)).length,
+            marching:Object.values(S.tasks).filter(t=>t.mpath).length,scroll:document.documentElement.scrollWidth>innerWidth,
+            bodyEnvelope:'opaque idle alpha >=200, not attack/NPC/familiar envelope'};
+        },{region,zoom});
+        views.push(metric);check(metric.totalBodies===25,'standing fixture lost or hid an entity: '+metric.totalBodies);
+        check(metric.bodyPairs.length<=2,region+' idle body pairs '+metric.bodyPairs.length);
+        check(metric.labelPairs===0,'overlapping scene overlays');check(!metric.scroll,'scene horizontal overflow');check(metric.marching===0,'monsters did not settle');
+        check(metric.labels.some(l=>l.drawn&&l.text===({forge:'FORGE CITY',port:'STEAM PORT',castle:'ROYAL CASTLE'})[region]),'region name missing: '+region+' '+width+' z'+zoom);
+        check(metric.labels.every(l=>!/t_[a-f\d]+|[a-f\d]{8,}/i.test(l.text)),'opaque scene name');
+        await page.screenshot({path:path.join(outDir,`${browserName}-scene-${width}-${region}-z${zoom}.png`)});
+      }
+    }
+    for(const width of [1280,375,320])for(const zoom of [1,3]){
+      const sum=views.filter(v=>v.width===width&&v.zoom===zoom).reduce((n,v)=>n+v.bodyPairs.length,0);check(sum<=4,'total body pairs '+sum);}
+    // Eighteen Forge quests: the + badge exposes all members, including those
+    // whose world sprites are outside a narrow viewport; open each real dialog.
+    for(const width of [1280,375,320]){
+      await page.setViewportSize({width,height:width===1280?800:667});
+      await page.evaluate(()=>{loadReplay({meta:{from_:0,to:100,show_titles:false},bots:[],events:[],tasks:Array.from({length:18},(_,i)=>({id:'synthetic-crowd-'+i,stage:'BUILD'}))});reset(0);
+        for(const row of D.tasks)spawnMonster(task(row.id),'forge');reset(0);const [x,y]=W.regions.forge.plaza.center;Object.assign(cam,{x,tx:x,y:y-40,ty:y-40,zi:1});draw();hud(1);});
+      // reset replays the eventless payload; spawn once more, then settle with dt.
+      await page.evaluate(()=>{for(const row of D.tasks)spawnMonster(task(row.id),'forge');S.play=true;S.speed=1;for(let i=0;i<9000;i++){window.__clock+=1000/60;update(1/60);}S.play=false;draw();hud(1);});
+      const badge=page.locator('#scene-overflow button');check(await badge.count()===1,'missing overflow badge');
+      check((await badge.textContent()).includes('+6'),'badge does not count the six hidden monsters');
+      const opened=new Set();for(let i=0;i<18;i++){
+        await badge.click();const members=page.locator('#quest .item-summary');check(await members.count()===18,'overflow omitted members');
+        const id=await members.nth(i).getAttribute('data-key');check(id===`synthetic-crowd-${i}`,'wrong or missing member identity');
+        await members.nth(i).locator('button').click();
+        check(await page.locator('#quest .item-summary').count()===0,'Details did not leave the pick-list');
+        check((await page.locator('#quest').textContent()).includes('Task ID: '+id),'wrong selected overflow task');opened.add(id);
+        await page.locator('#quest .close').click();}
+      check(opened.size===18,'did not open 18 distinct Forge tasks');
+      selections.push({width,tasksOpened:18,hiddenMonsters:6});
+      await badge.click();await page.screenshot({path:path.join(outDir,`${browserName}-scene-${width}-overflow.png`)});await page.locator('#quest .close').click();
+    }
+    check(errors.length===0,errors.join('; '));
+    console.log('PASS '+browserName+' scene truth: 18 crowd views; 18/18 Forge tasks selectable at 1280/375/320');
+  } finally {
+    fs.writeFileSync(path.join(outDir,browserName+'-scene-truth.json'),JSON.stringify({synthetic:true,baselineBodyPairs:48,views,selections,errors},null,2));await ctx.close();
+  }
+}
+
 fs.mkdirSync(outDir, {recursive: true});
 // Regenerate the deterministic synthetic demo exactly as documented (never reads live data).
 execFileSync('python3', [path.join('tools', 'mock.py')], {cwd: root, stdio: 'inherit'});
@@ -482,6 +572,7 @@ for (const vp of VIEWPORTS) {
     for (const p of [...new Set(r.problems)]) console.log(`  - ${p}`);
   } else console.log(`PASS ${browserName} ${r.viewport}`);
 }
+try {await runSceneTruth(browser,base);} catch(e){failed++;console.log('FAIL scene truth: '+e.stack);}
 try {await runLoadStates(browser,base);} catch(e){failed++;console.log('FAIL load states: '+e.message);}
 try {await runRetention(browser,base);} catch(e){failed++;console.log('FAIL retention dialogs: '+e.message);}
 try {await runLiveStale(browser,base);} catch(e){failed++;console.log('FAIL live stale warning: '+e.message);}

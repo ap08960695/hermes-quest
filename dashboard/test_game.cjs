@@ -101,6 +101,52 @@ for(let batch=0;batch<3;batch++) {
 }`);
 assert.strictEqual(run('D.tasks.length'),256); assert.strictEqual(run('D.bots.length'),256);
 assert.strictEqual(run('Object.keys(S.heroes).length'),256); assert.strictEqual(run('eventKeys.size'),0);
+// Scene truth: typed commenters are not workers; archive snapshots are dated
+// tombstones, not a reason to erase the earlier replay or infer inactivity.
+run(`loadReplay({meta:{from_:0,to:120,as_of:100,show_titles:false},cursor:'truth',
+  session_data:{status:'unavailable',reason:'SYNTHETIC_PRIVATE_PATH'},
+  bots:[{id:'worker',entity_type:'profile',availability:{status:'unknown',observed_at:null},region:'forge'},
+    {id:'commenter',entity_type:'actor',region:'forge'}],
+  tasks:[{id:'old',bot:'worker',stage:'BUILD',status:'archived'}],events:[
+    {id:'birth',t:1,kind:'created',task:'old'},
+    {id:'run',t:2,kind:'run_start',task:'old',bot:'worker'},
+    {id:'comment',t:3,kind:'commented',task:'old',bot:'commenter'}]}); reset(90);`);
+assert.strictEqual(run('S.tasks.old.state'),'fight');assert(run('S.tasks.old.alpha')>0);
+assert.strictEqual(run('S.heroes.commenter'),undefined);
+run('reset(100)');assert.strictEqual(run('S.tasks.old.state'),'archived');assert.strictEqual(run('S.tasks.old.alpha'),0);
+assert.strictEqual(run('S.heroes.worker.task'),null);assert(/Unknown/.test(run('heroStatus(S.heroes.worker)')));
+run('connectedStatus(D)');assert(/Session activity unavailable/.test(el('#connection').getAttribute('aria-label')));
+assert(!el('#connection').getAttribute('aria-label').includes('SYNTHETIC_PRIVATE_PATH'));
+run(`apply({t:101,kind:'run_start',task:'old',bot:'worker'},true); reset(90);`);
+assert.strictEqual(run('S.tasks.old.state'),'fight');
+run(`mergeDelta({meta:{as_of:105},tasks:[{id:'old',status:'archived'}],bots:[],events:[],cursor:'truth-delta'});reset(110);`);
+assert.strictEqual(run('S.tasks.old.alpha'),0);
+assert.strictEqual(run('D.events.filter(e=>e.kind==="archived").length'),1);
+// Assignment cancels queued attacks, ranged hits and pending order callbacks.
+run(`loadReplay({meta:{from_:0,to:100},bots:[{id:'a',cls:'ranger',region:'forge'}, {id:'b',region:'forge'}],
+  tasks:[{id:'transfer',bot:'a',stage:'BUILD'}],events:[]});reset(0);
+  apply({t:1,kind:'run_start',task:'transfer',bot:'a'},false);
+  const oldStrike={t:2,kind:'tool',task:'transfer',bot:'a',tool:'write_file'};
+  apply(oldStrike,true);strike(S.heroes.a,S.tasks.transfer,oldStrike);
+  apply({t:3,kind:'assigned',task:'transfer',bot:'b'},true);
+  apply({t:4,kind:'run_start',task:'transfer',bot:'b'},false);
+  S.tasks.transfer.flash=0;S.heroes.a.combo=0;strike(S.heroes.a,S.tasks.transfer,oldStrike);
+  S.rt+=100;for(const pending of S.later)pending.f();S.later=[];`);
+assert.strictEqual(run('S.tasks.transfer.bot'),'b');assert.strictEqual(run('S.heroes.a.task'),null);
+assert.strictEqual(run('S.heroes.a.q.length'),0);assert.strictEqual(run('S.heroes.a.combo'),0);
+assert.strictEqual(run('S.tasks.transfer.flash'),0);
+run(`apply({t:5,kind:'tool',task:'transfer',bot:'b',tool:'write_file'},true);
+  apply({t:6,kind:'run_end',task:'transfer',bot:'b',outcome:'interrupted'},true);`);
+assert.strictEqual(run('S.heroes.b.task'),null);assert.strictEqual(run('S.heroes.b.q.length'),0);
+// Slots reserve shared space for both entity kinds; overflow never wraps to 0.
+run(`loadReplay({meta:{from_:0,to:100},bots:[],events:[],tasks:Array.from({length:18},(_,i)=>({id:'crowd'+i,stage:'BUILD'}))});reset(0);
+  for(const row of D.tasks)spawnMonster(task(row.id),'forge');`);
+assert.strictEqual(run('formation("forge").length'),12);
+assert.strictEqual(run('new Set(Object.values(S.tasks).map(t=>t.placement.k)).size'),18);
+assert.strictEqual(run('Object.values(S.tasks).filter(t=>t.placement.k>=12).length'),6);
+assert(run(`Object.values(S.tasks).filter(t=>t.placement.k<12).every(t=>{
+  const {center:[x,y],standing:[rx,ry]}=plazaOf('forge');return ((t.x-x)/rx)**2+((t.y-y)/ry)**2<=1;})`));
+console.log('PASS scene truth, dated archives, ownership/interrupted queues, unknown/unavailable and 18-task formation');
 // Fake clock exercises the production 35s deadline without waiting in CI.
 // Both stalled headers and stalled JSON bodies must abort and then recover via
 // the scheduled 10s retry with the SAME cursor and no overlapping poll.

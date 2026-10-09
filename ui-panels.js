@@ -29,8 +29,8 @@
   function number(selector,text,label) {paint($(selector),numericImage(text),label+': '+text);}
   const visible=el=>el&&!el.hidden&&getComputedStyle(el).display!=='none'&&(!el.getClientRects||el.getClientRects().length>0);
   function bounds() {
-    const fixed=['#focus-bar','#menu','#quest'].map($).filter(visible).map(el=>el.getBoundingClientRect());
-    reserved=fixed.map(r=>({left:r.left-4,top:r.top-4,right:r.right+4,bottom:r.bottom+4}));
+    const fixed=['#focus-bar','#menu','#quest','#scene-overflow'].map($).filter(visible).map(el=>el.getBoundingClientRect());
+    reserved=fixed.map(r=>({left:r.left-8,top:r.top-8,right:r.right+8,bottom:r.bottom+8}));
     const outer=fixed.filter((r,i)=>!fixed.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
     budget=Math.max(0,innerWidth*innerHeight*(innerWidth<=760||innerHeight<=500?.25:.2)-outer.reduce((n,r)=>n+r.width*r.height,0));
   }
@@ -57,6 +57,28 @@
     const im=numericImage(text,color);x=Math.round(x-im.width/2);y=Math.round(y-im.height);
     for(let lane=0;lane<3;lane++){const top=y-lane*18;
       if(fits(x,top,im.width,im.height)){image(im,x,top);break;}}
+  }
+  function screenLabel(text,x,y,pin=false) {
+    const im=numericImage(text.toUpperCase(),'#ffd36b');
+    x=Math.round(x-im.width/2);y=Math.round(y-im.height);
+    if(pin){x=Math.round(Math.max(8,Math.min(innerWidth-im.width-8,x)));
+      y=Math.round(Math.max(($('#focus-bar')?.getBoundingClientRect().bottom||0)+12,Math.min(innerHeight-im.height-8,y)));}
+    for(let lane=0;lane<(pin?4:1);lane++){
+      const top=y+lane*18;if(fits(x-2,top-2,im.width+4,im.height+4)){image(im,x,top);break;}}
+  }
+  let overflowKey='',overflowGroups=[];
+  function sceneOverflow(groups) {
+    overflowGroups=groups;
+    let el=$('#scene-overflow');
+    if(!el){el=document.createElement('div');el.id='scene-overflow';
+      el.style.cssText='position:fixed;left:8px;bottom:8px;max-width:calc(100vw - 16px);display:flex;flex-wrap:wrap;gap:4px;z-index:5';
+      el.setAttribute('aria-label','Characters outside the standing slots');document.body.append(el);}
+    el.hidden=!groups.length;
+    const key=JSON.stringify(groups.map(g=>[g.region,g.label,g.count,g.blocked]));
+    if(key===overflowKey)return;overflowKey=key;el.replaceChildren();
+    for(const group of groups)button(el,group.label+' +'+group.count+(group.blocked?' · '+group.blocked+' blocked':''),()=>
+      listDialog(group.label+' overflow',()=>overflowGroups.find(g=>g.region===group.region)?.rows()||[],'No characters outside the standing slots'));
+    bounds();
   }
   // Game symbols survive plain() so renderFeed does not erase their meaning.
   // Visible symbols come only from our atlas; no emoji reaches the detail font.
@@ -227,6 +249,7 @@
     $('#mode').setAttribute('aria-label',text+' data source · '+connectionLabel);
   }
   function privacy() {
+    sceneOverflow([]);
     epoch++;T.clearCache();numbers.clear();feedKey='';campKey='';overviewKey='';overviewData=null;lastFeed=[];lastCamps=[];
     close();$('#quest').replaceChildren();$('#tasks-list').replaceChildren();$('#heroes-list').replaceChildren();
     $('#overview-summary').textContent='Loading activity…';$('#issues').hidden=true;$('#issues').onclick=null;
@@ -364,6 +387,6 @@
     });
     addEventListener('resize',resize);resize();
   }
-  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
+  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,sceneOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
     diagnostics:()=>({grid,epoch,reserved,drawn})};
 })(window);

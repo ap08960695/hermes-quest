@@ -75,7 +75,9 @@ function walk(g, seconds, ids = Object.keys(g.S.heroes)) {
       const speed = distance/dt; motion.maxSpeed = Math.max(motion.maxSpeed,speed); motion.frames++;
       assert.ok(speed <= 70 + 1e-7, `speed ${speed} for ${id}`);
       near(distance,h.dist-p[2]);
-      const plaza = Object.values(world.regions).some(r => ((h.x-r.spot[0])/112)**2+((h.y-r.spot[1])/66)**2 <= 1+1e-9);
+      const plaza = Object.values(world.regions).some(r =>
+        [[r.spot,[112,66]], ...(r.plaza ? [[r.plaza.center,r.plaza.standing]] : [])].some(([[x,y],[rx,ry]]) =>
+          ((h.x-x)/rx)**2+((h.y-y)/ry)**2 <= 1+1e-9));
       if (!plaza) { const off = roadDistance(h.x,h.y); motion.maxRoadDistanceOutsidePlaza = Math.max(motion.maxRoadDistanceOutsidePlaza,off); assert.ok(off <= 6 + 1e-7, `off road ${off} for ${id} at [${h.x},${h.y}], phase=${h.rest.phase}, path=${JSON.stringify(h.path)}`); }
     }
   }

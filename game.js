@@ -69,6 +69,15 @@ function normalizeData() {
   // Metadata is opt-in. Sanitize before state, accessible DOM or bitmap caches.
   if (D.meta.show_titles !== true) redactText();
 }
+function archiveSnapshots(payload) {
+  const at = payload.meta?.as_of;
+  if (!Number.isFinite(at)) return [];
+  // Only an explicit tombstone is authoritative. Date it at the snapshot, never
+  // hide the task at earlier playheads just because today's row is archived.
+  return payload.tasks.filter(t => t.status === 'archived' &&
+    ![...(D?.events || []), ...payload.events].some(e => e.task === t.id && e.kind === 'archived' && e.t <= at))
+    .map(t => ({id: 'snapshot-archive:' + t.id + ':' + at, task: t.id, kind: 'archived', t: at}));
+}
 function redactText() {
   D.tasks.forEach(t => { t.title = t.id; delete t.note; });
   D.bots.forEach(b => { b.name = b.id; });
@@ -85,6 +94,10 @@ function eventOrder(a, b) {
   return a.t - b.t || (x < y ? -1 : x > y ? 1 : 0);
 }
 function connection(text, state, extra) { if (UI) UI.status(text, state, extra); }
+function connectedStatus(payload) {
+  if (D.session_data?.status === 'unavailable') return connection('Session activity unavailable', 'snapshot');
+  connection(payload.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', payload.state === 'legacy-fallback' ? 'snapshot' : 'online');
+}
 async function json(url) {
   // One deadline covers both headers and body, allowing backend extraction 30s.
   // Race as well as abort: even a transport that ignores abort cannot stall retry.
@@ -158,7 +171,7 @@ function loadReplay(replay, live = null, at = null) {
   try {
     D = replay; checkpoint = null; eventKeys.clear();
     for (const field of ['tasks', 'bots']) D[field] = [...new Map(D[field].map(v => [v.id, v])).values()];
-    normalizeData();
+    normalizeData(); D.events.push(...archiveSnapshots(D));
     D.events.sort(eventOrder);
     D.events = D.events.filter(e => { const key = eventKey(e); const duplicate = eventKeys.has(key); eventKeys.add(key); return !duplicate; });
     const preserve = live && previous.D?.meta.show_titles === D.meta.show_titles;
@@ -180,10 +193,11 @@ function loadReplay(replay, live = null, at = null) {
 }
 function syncMetadata(includeNew = true) {
   for (const b of D.bots) {
+    if (b.entity_type === 'actor') { delete S.heroes[b.id]; continue; }
     if (!includeNew && !S.heroes[b.id]) continue;
     const h = hero(b.id);
     if (h.home !== b.region) { h.home = b.region; h.homeK = Object.values(S.heroes).filter(other => other !== h && other.home === b.region).length; }
-    Object.assign(h, {name: b.name, cls: b.cls, wallet: b.wallet || h.wallet, model: b.model || '', effort: b.effort || 'medium', st: mstyle(b.model), eff: EFF[b.effort] || EFF.medium});
+    Object.assign(h, {name: b.name, cls: b.cls, availability: b.availability, wallet: b.wallet || h.wallet, model: b.model || '', effort: b.effort || 'medium', st: mstyle(b.model), eff: EFF[b.effort] || EFF.medium});
   }
   for (const t of D.tasks) if (S.tasks[t.id]) {
     // Snapshot metadata must not overwrite event-derived historical state.
@@ -201,6 +215,7 @@ function mergeDelta(delta) {
       (delta.meta?.config_revision !== undefined && delta.meta.config_revision !== D.meta.config_revision) ||
       (delta.meta?.captain !== undefined && delta.meta.captain !== D.meta.captain))
     throw new IdentityChanged('Replay identity changed');
+  delta = {...delta, events: [...delta.events, ...archiveSnapshots(delta)]};
   // Known metadata refreshes do not change history. A newly created task is
   // provably new; unknown older identities still require the bounded-history safeguard.
   const born = new Set(delta.events.filter(e => e.kind === 'created' && e.t > (checkpoint?.t ?? -Infinity)).map(e => e.task));
@@ -219,6 +234,8 @@ function mergeDelta(delta) {
     D[field] = [...byId.values()];
   }
   normalizeData(); FRIENDS = null;
+  if (delta.session_data) D.session_data = {...delta.session_data};
+  if (Number.isFinite(delta.meta?.as_of)) D.meta.as_of = delta.meta.as_of;
   if (D.meta.show_titles !== true) delta.events.forEach(e => { delete e.note; delete e.title; });
   syncMetadata();
   let late = false;
@@ -290,7 +307,7 @@ async function pollEvents() {
       else { loadReplay(replay); reset(playhead); }
     }
     pollFailures = 0; pollStale = false; lastPollOk = Date.now();
-    connection(delta.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', delta.state === 'legacy-fallback' ? 'snapshot' : 'online');
+    connectedStatus(delta);
   } catch (e) { pollFailed(e); }
   finally {
     // Serial requests: no overlap or advancing the cursor on a failed response.
@@ -327,7 +344,7 @@ async function boot() {
   ui();
   if (liveFeed) {
     goLive(); pollFailures = 0; pollStale = false; lastPollOk = Date.now();
-    connection(D.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', D.state === 'legacy-fallback' ? 'snapshot' : 'online');
+    connectedStatus(D);
     if (!document.hidden) pollTimer = setTimeout(pollEvents, 10000);
   } else { reset(D.meta.from_); connection('Replay file', 'file'); }
   if (!document.hidden) raf = requestAnimationFrame(loop);
@@ -360,18 +377,67 @@ function route(from, toNode, wild = false) {
   return [best.q, ...out];
 }
 function spotOf(region) { return (W.regions[region] || W.lairs[region]).spot; }
+function plazaOf(region) {
+  const r = W.regions[region];
+  return {center: r.plaza?.center || r.spot, standing: r.plaza?.standing || [PLAZA_RX, PLAZA_RY], node: r.plaza?.node || r.node || region};
+}
+function formation(region) {
+  const r = W.regions[region]; if (!r?.plaza) return null;
+  const {center: [x,y], standing: [rx,ry]} = plazaOf(region), slots = [];
+  // 102 x 84 idle envelopes, shared by heroes AND monsters. No wrapping or
+  // clamping several slots to the same ellipse edge when capacity is exhausted.
+  for (let dy = -84; dy <= 84; dy += 84) for (let dx = -153; dx <= 153; dx += 102)
+    if ((dx/rx)**2 + (dy/ry)**2 <= 1) slots.push([x+dx,y+dy]);
+  return slots;
+}
+function placeEntity(entity, region) {
+  const slots = formation(region);
+  if (!slots) { entity.placement = null; return null; }
+  if (entity.placement?.region === region) return slots[entity.placement.k] || plazaOf(region).center;
+  const used = new Set([...Object.values(S.heroes), ...Object.values(S.tasks)]
+    .filter(o => o !== entity && o.placement?.region === region && (!o.id || (o.alpha > 0 && !o.dying)))
+    .map(o => o.placement.k));
+  let k = 0; while (used.has(k)) k++;
+  entity.placement = {region, k};
+  return slots[k] || plazaOf(region).center;
+}
+function overflowed(entity) {
+  const p = entity.placement;
+  return !!p && p.k >= formation(p.region).length && !(entity.path?.length > 1 || entity.mpath);
+}
+function sceneName(entity) {
+  const hero = !!entity.bot && !entity.id, rows = hero ? D.bots : D.tasks;
+  const fallback = (hero ? 'Hero ' : 'Task ') + (rows.findIndex(r => r.id === (hero ? entity.bot : entity.id)) + 1);
+  const name = D.meta.show_titles === true ? (hero ? entity.name : entity.title) : '';
+  return name && !/(?:t_[a-f\d]+|[a-f\d]{8,}|[a-f\d]{8}-[a-f\d-]+)/i.test(name) ? name.slice(0,14) : fallback;
+}
+function sceneOverflow(v) {
+  if (!UI?.sceneOverflow) return;
+  const entities = [...Object.values(S.heroes), ...Object.values(S.tasks).filter(t => t.alpha > 0)];
+  UI.sceneOverflow(Object.entries(W.regions).flatMap(([region,r]) => {
+    const items = entities.filter(o => overflowed(o) && o.placement.region === region);
+    if (!items.length) return [];
+    const [x,y] = plazaOf(region).center;
+    if (!onScreen(v,x,y,300,220)) return [];
+    return [{region, label:r.label.split(' · ')[0], count:items.length,
+      blocked:items.filter(o => o.chained || o.state === 'blocked').length,
+      rows:() => entities.filter(o => o.placement?.region === region).map(o => ({key:o.id||o.bot, summary:sceneName(o)+' · '+(overflowed(o)?'Outside standing slots · ':'')+(o.id ? TASK_STATES[o.state]||'Unknown' : heroStatus(o)), details:()=>o.id?quest(o):heroDialog(o)}))}];
+  }));
+}
 function slotPos(region, k, kind) {
+  const slots = formation(region); if (slots) return slots[k] || plazaOf(region).center;
   const [x, y] = spotOf(region);
   if (region === 'camp') return [x - 90 + (k % 6) * 36 + (Math.floor(k / 6) % 2) * 18, y + 40 + Math.floor(k / 6) * 22];   // war camp yard
   // plaza split: idle party waits in a band by the building door (top), fights use the bottom half
   if (kind === 'home') return [x - 72 + (k % 4) * 48 + (Math.floor(k / 4) % 2) * 24, y - 22 + Math.floor(k / 4) * 16];
-  const row = Math.floor(k / 3) % 3;
+  const row = Math.floor(k / 3);
   return [x + ((k % 3) - 1) * 56 + 50, y + 24 + row * 20];
 }
 function regionOf(bot, stage) { const b = D.bots.find(b => b.id === bot); return b ? validRegion(b.region) : validRegion(D.meta.stage_regions?.[stage] || defaultRegion()); }
 
 // ---------- state ----------
 function hero(bot) {
+  if (D.bots.some(b => b.id === bot && b.entity_type === 'actor')) return null;
   if (!S.heroes[bot]) {
     const b = D.bots.find(x => x.id === bot) || {id: bot, name: bot, cls: 'mage', region: defaultRegion(), wallet: ''};
     const home = b.region, k = Object.values(S.heroes).filter(h => h.home === home).length;
@@ -381,6 +447,8 @@ function hero(bot) {
       v: 0, dist: 0, face: 1, task: null, q: [], atk: -1, hurt: 0, sleep: false, down: 0, bubble: null, combo: 0, fam: [],
       idle: 3 + Math.random() * 10, act: null, cheer: 0, talk: 0,
       rest: {state: 'active-unobserved', why: '', savedTask: null, target: null, generation: 0, slot: null, phase: 'idle'}};
+    const h = S.heroes[bot], spot = placeEntity(h, home);
+    if (spot) [h.x, h.y] = spot;
   }
   return S.heroes[bot];
 }
@@ -403,30 +471,31 @@ function spawnMonster(t, region) {
   let k = 0; while (used.includes(k)) k++;
   const born = t.alpha <= 0;
   const from = born ? W.lairs[LAIR_OF[mtype(t)]].spot : [t.mx ?? t.x, t.my ?? t.y];
-  t.region = region; t.slot = k; [t.x, t.y] = slotPos(region, k, 'battle');
+  t.region = region; t.slot = k; [t.x, t.y] = placeEntity(t, region) || slotPos(region, k, 'battle');
   if (W.regions[region]) [t.x, t.y] = inPlaza(region, [t.x, t.y]);      // battle slots stay on the paved square
   t.mx = from[0]; t.my = from[1] + (born ? 8 : 0); t.mdist = t.mdist || 0;
-  t.mpath = [...route([t.mx, t.my], region, true), [t.x, t.y]];
+  t.mpath = [...route([t.mx, t.my], W.regions[region] ? plazaOf(region).node : region, true), [t.x, t.y]];
   S.soc.marches = (S.soc.marches || 0) + 1;
   if (born) { S.soc.spawns = (S.soc.spawns || 0) + 1; t.alpha = .01; t.emerge = .9; S.fx.push({k: 'portal', x: from[0] + 34, y: from[1] + 6, life: 1.2, max: 1.2}); }
 }
 const PLAZA_RX = 112, PLAZA_RY = 66;              // paved square per region (tools/terrain.py ellipse minus margin)
 function inPlaza(region, [x, y]) {                // clamp a final standing spot into the region's plaza
-  const [cx_, cy_] = W.regions[region].spot, dx = (x - cx_) / PLAZA_RX, dy = (y - cy_) / PLAZA_RY, r = Math.hypot(dx, dy);
-  return r <= 1 ? [x, y] : [cx_ + dx / r * PLAZA_RX * .97, cy_ + dy / r * PLAZA_RY * .97];
+  const {center: [cx_,cy_], standing: [rx,ry]} = plazaOf(region), dx = (x-cx_)/rx, dy = (y-cy_)/ry, r = Math.hypot(dx,dy);
+  return r <= 1 ? [x,y] : [cx_+dx/r*rx*.97,cy_+dy/r*ry*.97];
 }
 function walkTo(h, region, spot) {
+  if (h.placement?.region !== region) h.placement = null;
   // The camp's portal sits inside its plaza, closer to an unrelated road.
   // Leave via the camp graph node before joining the road; nearest-segment
   // routing directly from the portal would cut across the edge of the plaza.
   const rest = W.regions[h.rest?.target], center = rest?.spot;
   const inside = center && Math.hypot((h.x-center[0])/PLAZA_RX,(h.y-center[1])/PLAZA_RY) <= 1;
   const exit = inside && W.graph.pts[rest.node || h.rest.target];
-  const p = [...(exit ? [exit] : []), ...route(exit || [h.x, h.y], region)].map(q => q.slice());
+  const p = [...(exit ? [exit] : []), ...route(exit || [h.x, h.y], plazaOf(region).node)].map(q => q.slice());
   if (spot) p.push(inPlaza(region, spot));
   h.path = [[h.x, h.y], ...p]; h.region = region;
 }
-function goHome(h) { if (restLocked(h)) return; walkTo(h, h.home, slotPos(h.home, h.homeK, 'home')); h.task = null; }
+function goHome(h) { if (restLocked(h)) return; walkTo(h, h.home, placeEntity(h, h.home) || slotPos(h.home, h.homeK, 'home')); h.task = null; }
 // Model = element, colour and attack speed; effort = charge time, hit power and crit chance (from each bot's
 // config.yaml: model.default + agent.reasoning_effort, or the effort suffix in the model id).
 const MODEL_STYLE = [
@@ -446,9 +515,9 @@ const EL_PARTICLE = {fire: ['#ff8a3a', -1], frost: ['#e6f0ff', 1], storm: ['#ffe
 // attack range per class (px between hero and monster): melee classes close in, casters/archers keep distance
 const RANGE = {warrior: 46, paladin: 52, engineer: 96, sage: 132, mage: 150, ranger: 176, commander: 64};
 function engage(h, t) {
-  if (restLocked(h)) return;
+  if (restLocked(h) || t.bot !== h.bot || t.state !== 'fight') return;
   if (!t.region) spawnMonster(t, regionOf(h.bot, t.stage));
-  h.task = t.id; walkTo(h, t.region, [t.x - (RANGE[h.cls] || 72), t.y + 2]);
+  h.task = t.id; walkTo(h, t.region, placeEntity(h, t.region) || [t.x - (RANGE[h.cls] || 72), t.y + 2]);
 }
 
 function reset(t, liveKeys = null) {
@@ -482,15 +551,36 @@ function reset(t, liveKeys = null) {
 }
 
 // ---------- events -> game actions (the action table; extend here) ----------
+function cancelTaskActions(t) {
+  for (const h of Object.values(S.heroes)) {
+    h.q = h.q.filter(e => e.task !== t.id);
+    h.fam = h.fam.filter(f => f.task !== t.id);
+    if (h.rest.savedTask === t.id) h.rest.savedTask = null;
+    if (h.task !== t.id) continue;
+    h.rest.generation++; h.atk = -1; h.cur = null; h.charge = 0;
+    goHome(h); h.task = null;
+  }
+}
+function assignTask(t, bot) {
+  if (!bot) return;
+  if (t.bot !== bot) cancelTaskActions(t);
+  t.bot = bot;
+}
+function canStrike(h, t, e) {
+  return !restLocked(h) && S.tasks[t.id] === t && t.state === 'fight' && !t.dying &&
+    t.bot === h.bot && h.task === t.id && e.task === t.id && e.bot === h.bot;
+}
 const ACTIONS = {
   created(e, fx, t) { t.state = 'quest'; if (t.bot && D.tasks.some(x => x.id === t.id)) spawnMonster(t, 'camp'); fx && say(`👹 New monster: <b>${esc(t.title)}</b>`, e.t, 'new' + t.id); },
   specified(e, fx, t) {},
   dependency_wait(e, fx, t) { t.state = 'caged'; if (t.bot && !t.region) spawnMonster(t, 'camp'); },
   promoted(e, fx, t) { if (t.state === 'caged') t.state = 'quest'; },
-  assigned(e, fx, t) { if (e.bot) t.bot = e.bot; },
-  claimed(e, fx, t) { if (e.bot) t.bot = e.bot; },
+  assigned(e, fx, t) { assignTask(t, e.bot); },
+  claimed(e, fx, t) { assignTask(t, e.bot); },
   run_start(e, fx, t) {
-    const h = hero(e.bot); t.bot = e.bot; t.state = 'fight'; t.runStart = e.t;
+    cancelTaskActions(t); assignTask(t, e.bot);
+    const h = hero(e.bot); t.state = 'fight'; t.runStart = e.t;
+    if (!h) return;
     if (h.sleep) wake(h, fx);
     spawnMonster(t, regionOf(e.bot, t.stage));
     if (restLocked(h)) return;
@@ -499,7 +589,7 @@ const ACTIONS = {
     order(h, t, e.t);
   },
   tool(e, fx, t) {
-    const h = hero(e.bot); if (restLocked(h)) return;
+    const h = hero(e.bot); if (restLocked(h) || t.bot !== h.bot || h.task !== t.id || t.state !== 'fight') return;
     if (!fx) return;
     // only work that changes or tests something is an attack; reading, searching, git status/diff, skills,
     // web and memory lookups are gestures (icon + small effect) so the fight reads like the real session
@@ -527,7 +617,7 @@ const ACTIONS = {
     if (e.act === 'reassign' && e.bot) { const h = S.heroes[e.bot]; if (h) S.fx.push({k: 'raven', x0: cap.x, y0: cap.y - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3}); }
     if (e.act !== 'note') say(`👑 Captain ${LINE[0]} ${esc(t.title)}`, e.t, 'cap' + e.act + t.id, 120);
   },
-  tests(e, fx, t) { if (fx) { const h = hero(e.bot); h.q.push({...e, tool: 'tests'}); say(`🏹 ${nm(h)} passed ${e.passed.toLocaleString('en-GB')} tests`, e.t, 'ts' + t.id, 600); } },
+  tests(e, fx, t) { const h = hero(e.bot); if (fx && canStrike(h,t,e)) { h.q.push({...e, tool: 'tests'}); say(`🏹 ${nm(h)} passed ${e.passed.toLocaleString('en-GB')} tests`, e.t, 'ts' + t.id, 600); } },
   hurt(e, fx, t) { if (fx) { const h = hero(e.bot); if (t.state === 'fight' && t.alpha > 0 && !t.mpath) { t.atk = 0; S.soc.fightbacks = (S.soc.fightbacks || 0) + 1; monsterHit(t, h); return say(`💥 ${nm(h)} hit by ${mtype(t)} (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } h.hurt = .35; num(h.x, h.y - HERO_H, `exit ${e.code}`, '#ff6b5a'); say(`💥 ${nm(h)} command failed (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } },
   heartbeat(e, fx, t) { t.note = e.note || t.note; const h = t.bot && S.heroes[t.bot]; if (fx && h && e.note) { h.bubble = {text: e.note, until: 3.5}; say(`💬 ${nm(h)}: ${esc(e.note)}`, e.t, 'hb' + t.id, 900); } },
   commented(e, fx, t) {},
@@ -548,6 +638,7 @@ const ACTIONS = {
   moa(e, fx, t) { if (fx) { const h = hero(e.bot); S.fx.push({k: 'council', h, life: 4}); say(`✨ FABLE + ASTRA council advised ${nm(h)}`, e.t); } },
   review_requested(e, fx, t) { fx && say(`🛡️ Quest submitted for review: ${esc(t.title)}`, e.t); },
   blocked(e, fx, t) {
+    cancelTaskActions(t);
     t.state = 'blocked'; t.chained = true; spawnMonster(t, 'volcano'); t.note = e.note || t.note;
     const h = t.bot && S.heroes[t.bot]; if (h && h.task === t.id) goHome(h);
     if (fx) { S.trauma = Math.min(1, S.trauma + .5); say(`⛓️ Quest blocked: <b>${esc(t.title)}</b> ${e.note ? '— ' + esc(e.note) : ''}`, e.t); }
@@ -556,8 +647,10 @@ const ACTIONS = {
   unblocked(e, fx, t) { t.chained = false; t.state = 'quest'; if (t.bot) spawnMonster(t, t.runStart ? regionOf(t.bot) : 'camp'); fx && say(`🔓 Quest unblocked: ${esc(t.title)}`, e.t); },
   run_end(e, fx, t) {
     const h = hero(e.bot);
+    if (!h) return;
+    if (t.bot === e.bot && t.state !== 'done') cancelTaskActions(t);
     if (e.outcome === 'rate_limited') { sleep(h, fx); return; }
-    if (['timed_out', 'crashed', 'gave_up'].includes(e.outcome)) {
+    if (['timed_out', 'crashed', 'gave_up', 'interrupted'].includes(e.outcome)) {
       if (fx) { h.down = 1.2; num(h.x, h.y - HERO_H, '💀 ' + e.outcome, '#ff6b5a'); say(`💀 ${nm(h)} stopped (${e.outcome})`, e.t); }
       goHome(h);
     }
@@ -565,6 +658,7 @@ const ACTIONS = {
   rate_limited(e, fx, t) {},
   wake(e, fx, t) { wake(hero(e.bot), fx); },
   completed(e, fx, t) {
+    for (const h of Object.values(S.heroes)) { h.q = h.q.filter(e => e.task !== t.id); if (h.task === t.id) { h.atk = -1; h.cur = null; } }
     t.state = 'done'; S.vault++;
     if (fx) {
       t.flash = 1; t.dying = 1; S.stop = .07; S.trauma = Math.min(1, S.trauma + .35);
@@ -574,13 +668,16 @@ const ACTIONS = {
     } else t.alpha = 0;
     const h = t.bot && S.heroes[t.bot]; if (h && h.task === t.id) { if (fx) laterHero(h, .9, () => { if (h.task === t.id) { h.task = null; handOff(t); if (!h.act) goHome(h); } }); else goHome(h); }
   },
-  archived(e, fx, t) { t.alpha = 0; },
+  archived(e, fx, t) { cancelTaskActions(t); t.state = 'archived'; t.alpha = 0; t.chained = false; t.placement = null; t.mpath = null; t.dying = 0; },
 };
 function apply(e, fx) {
+  const actor = e.bot && D.bots.some(b => b.id === e.bot && b.entity_type === 'actor');
+  if (actor && ['mana','pause','resume','failover','tool','tests','hurt','compress','summon','moa','wake'].includes(e.kind)) return;
   if (applyBotEvent(e, fx)) return;
   if (!e.task) return;
   if (['tool','tests','hurt','compress','summon','moa'].includes(e.kind) && e.bot && restLocked(hero(e.bot))) return;
   const t = task(e.task);
+  if (t.state === 'archived') return;
   (ACTIONS[e.kind] || (() => { if (fx && t.alpha > 0) num(t.x, t.y - 30, e.kind, '#8aa0c8', .8); }))(e, fx, t);
 }
 // Bot-level events never fabricate a task or transfer its ownership.
@@ -635,7 +732,8 @@ function walkRest(h, geometry, spot) {
     // the nearest (possibly unrelated) road beyond its edge.
     h.path = [[h.x,h.y], inPlaza(geometry.region, spot)]; h.region = geometry.region; return;
   }
-  const points = route([h.x,h.y], geometry.node);
+  const exit = W.regions[h.region]?.plaza?.center;
+  const points = [...(exit ? [exit] : []), ...route(exit || [h.x,h.y], geometry.node)];
   // A disconnected graph must not produce a direct jump across unpaved terrain.
   if (points.length < 3 && Math.hypot(points[0][0] - W.graph.pts[geometry.node][0],points[0][1] - W.graph.pts[geometry.node][1]) > 1) {
     h.path = []; diagnostic('Rest route unavailable; staying in place'); return;
@@ -643,6 +741,7 @@ function walkRest(h, geometry, spot) {
   h.path = [[h.x,h.y], ...points.map(p => p.slice()), inPlaza(geometry.region, spot)]; h.region = geometry.region;
 }
 function pauseHero(h, kind, why, observed = true, fx = false) {
+  h.placement = null;
   const savedTask = h.task || h.rest.savedTask;
   h.rest = CUI.transitionRest(h.rest, kind, {why, savedTask, observed});
   h.sleep = true; h.task = null; h.act = null; h.q = []; h.atk = -1; h.cur = null;
@@ -700,6 +799,7 @@ function applyBotEvent(e, fx) {
 function sleep(h, fx) { if (restLocked(h) && h.rest.observed) return; pauseHero(h, 'pause', 'limited', false, fx); fx && say(`😴 ${nm(h)} is resting: rate limited`, S.t); }
 function wake(h, fx) { if (!h.sleep || h.rest.observed) return; resumeHero(h); fx && say(`☀️ ${nm(h)} resumed`, S.t); }
 const nm = h => `<span class="who">${esc(h.name)}</span> (${esc(h.bot)})`;
+let selectedScene = null;
 const esc = s => String(s ?? '').replace(/[<>&]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;'}[c]));
 
 // ---------- FX ----------
@@ -727,7 +827,7 @@ function toolLabel(e) {
 }
 function heroAccent(h) { const im = SPRV[`${h.cls}-${(h.st || NO_STYLE).tag}`] || SPR[h.cls]; return im ? accent(im) : {}; }
 function landHit(h, t, e, a0, ix, iy) {
-  if (restLocked(h) || !S.tasks[t.id] || t.dying) return;
+  if (!canStrike(h,t,e)) return;
   const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, ef = h.eff || EFF.medium, crit = Math.random() < ef.crit;
   const a = {...a0, color: a0.kind === 'proj' ? st.color : a0.color, glow: st.glow};
   t.flash = .09 * ef.mult; t.kick = Math.min(1.6, ef.mult * (crit ? 1.4 : 1));
@@ -744,6 +844,7 @@ function landHit(h, t, e, a0, ix, iy) {
   if (h.combo > 1) { num(h.x, h.y - HERO_H - 14, `COMBO x${h.combo}`, '#7fc8ff', .9); h.combo = 0; }
 }
 function strike(h, t, e) {
+  if (!canStrike(h,t,e)) return;
   const a = ATTACK[h.cls] || ATTACK.warrior, ix = t.x - 6, iy = t.y - 22;
   if (a.kind !== 'proj') return landHit(h, t, e, a, ix, iy);
   const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, sx = h.x + 22 * h.face, sy = h.y - 34, dur = Math.max(.12, Math.hypot(ix - sx, iy - sy) / (a.speed * st.speed));
@@ -780,15 +881,15 @@ function monsterHit(t, h) {
 // ---------- orders: the Captain sends a raven, the hero acknowledges, then sets out ----------
 function later(sec, f) { S.later.push({at: S.rt + sec, f}); }
 function order(h, t, ts) {
-  if (restLocked(h)) return;
+  if (restLocked(h) || t.bot !== h.bot || t.state !== 'fight') return;
   const cap = S.heroes[captainId()], [cx_, cy_] = cap ? [cap.x, cap.y] : spotOf(regionOf(captainId()));
   if (cap && !restLocked(cap)) { cap.bubble = {text: `⚔️ ${h.name}, take on ${t.title.slice(0, 24)}`, until: 2.6}; cap.cheer = .5; }
   S.fx.push({k: 'raven', x0: cx_, y0: cy_ - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3});
   S.soc.orders = (S.soc.orders || 0) + 1;
   say(`📯 Captain sent ${nm(h)} to <b>${esc(t.title)}</b>`, ts, 'run' + t.id);
   h.act = null; h.task = t.id;                      // reserved: no hangout while the order is in the air
-  laterHero(h, 1.3, () => { if (h.task !== t.id || t.state !== 'fight') return; h.bubble = {text: '❗ Acknowledged!', until: 1.4}; h.cheer = .5; });
-  laterHero(h, 1.9, () => { if (h.task === t.id && t.state === 'fight') engage(h, t); });
+  laterHero(h, 1.3, () => { if (h.task !== t.id || t.state !== 'fight' || t.bot !== h.bot) return; h.bubble = {text: '❗ Acknowledged!', until: 1.4}; h.cheer = .5; });
+  laterHero(h, 1.9, () => { if (h.task === t.id && t.state === 'fight' && t.bot === h.bot) engage(h, t); });
 }
 
 // ---------- social life ----------
@@ -829,7 +930,7 @@ function startHangout(h, place, withWho = []) {
   party.forEach(m => {                               // smallest free spot in the circle: nobody stands on anybody
     let k = 0; while (used.has(k)) k++; used.add(k);
     m.act = {...place, until: 18 + Math.random() * 20, k};
-    walkTo(m, place.region, hangSpot(place.region, k));
+    walkTo(m, place.region, placeEntity(m, place.region) || hangSpot(place.region, k));
   });
   if (party.length > 1) say(`${place.icon} ${party.map(nm).join(', ')} ${place.th}`, S.t, 'hang' + place.region, 900);
 }
@@ -997,11 +1098,13 @@ function blit(v, im, sx, sy, sw, sh, nx, ny, flip = false) {       // nx,ny: nat
 }
 function draw() {
   const v = view();
+  if (!privacyPending) sceneOverflow(v);
   if (UI) UI.clear();
   cx.imageSmoothingEnabled = false;
   cx.fillStyle = '#0b1220'; cx.fillRect(0, 0, cv.width, cv.height);
   if (privacyPending) { if(UI)UI.flush(); return; }
   if (BG) cx.drawImage(BG, v.ox, v.oy, W.size[0] * v.Z, W.size[1] * v.Z);
+  for (const [k,r] of Object.entries(W.regions)) banner(v,k,r);
   const ents = [...(W.layered ? W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
     ...(Object.values(S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
     ...Object.values(S.tasks).filter(t => t.alpha > 0).map(t => ({y: t.mx !== undefined ? t.my : t.y, f: () => monster(v, t)})),
@@ -1017,7 +1120,7 @@ function draw() {
   }
   for(const group of groups.values())group.slice(0,3).forEach((f,i)=>
     fxDraw(v,{...f,y:f.y-i*18/v.Z*DPR,text:i===2&&group.length>3?'+'+compact(group.length-2):f.text}));
-  for (const [k, r] of Object.entries(W.regions)) banner(v, k, r);
+
   if(UI)UI.flush();
   vignette();
 }
@@ -1048,13 +1151,17 @@ function prop(v, p) {
   blit(v, im, 0, 0, im.width, im.height, bx - Math.floor(im.width / 2), by - im.height + 1);
 }
 function banner(v, key, r) {
+  const [centerX,centerY] = plazaOf(key).center;
+  if (!onScreen(v,centerX,centerY,240,200)) return;
   const pr = W.layered && W.props.find(p => p.region === key), im = pr && BLD[pr.img];
-  const x = v.ox + N(r.spot[0]) * v.Z, y = v.oy + (im ? N(pr.y) - im.height - 10 : N(r.spot[1]) - 60) * v.Z;
+  const [px,py] = r.plaza?.label || [r.spot[0], im ? pr.y-im.height-10 : r.spot[1]-60];
+  const x = v.ox + N(px) * v.Z, y = v.oy + N(py) * v.Z;
   const n = Object.values(S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
-  if(UI){UI.screenIcon(key==='vault'?'coin':STAGES.map(s=>s.toLowerCase()).includes(key)?key:'world',x/DPR,y/DPR);
+  if(UI){UI.screenLabel(r.label.split(' · ')[0],x/DPR,y/DPR,true);
     if(n||key==='vault')UI.screenNumber(compact(key==='vault'?S.vault:n),x/DPR,y/DPR-22,'#ffd36b');}
 }
 function heroDraw(v, h) {
+  if (overflowed(h)) return;
   const img = SPRV[`${h.cls}-${(h.st || NO_STYLE).tag}`] || SPR[h.cls] || SPR.warrior; if (!img) return;
   if (!onScreen(v,h.x,h.y,180,180)) return;
   const M = HMETA, walking = h.path.length > 1;
@@ -1104,6 +1211,7 @@ function heroDraw(v, h) {
   if (h.sleep && !walking) emoji('💤', hx + 12 * v.Z, top + 28 * v.Z - Math.sin(performance.now() / 400) * 4 * v.Z, 14 * v.Z);
 
   if (h.bubble) bubble(hx, top - 16 * DPR, h.bubble.text);
+  if (UI && !walking && selectedScene === h.bot) UI.screenLabel(sceneName(h),hx/DPR,(top-34*DPR)/DPR);
 }
 // Effort/attack colours come from the character itself: the dominant saturated hue of its first frame, plus a
 // light tint of it for glows. So a violet Sonnet knight glows violet-lilac, a moon sage glows pale silver-blue.
@@ -1171,6 +1279,7 @@ function blitMon(v, kind, bx, by, alpha = 1) {
   return im;
 }
 function monster(v, t) {
+  if (overflowed(t)) return;
   if (!onScreen(v,t.mx ?? t.x,t.my ?? t.y,200,200)) return;
   if (t.region === 'camp' && t.slot >= 18) return;                          // camp yard shows the first 18 only
   const kind = mtype(t), key = `${kind}-${mtier(t)}`, im2 = MON2[key], M = MMETA2[key];
@@ -1205,6 +1314,7 @@ function monster(v, t) {
   }
 
   if (t.state === 'caged' && !walking) emoji('⛓', v.ox + (bx + 14) * v.Z, v.oy + (top + 10) * v.Z, 10 * v.Z);
+  if (UI && !walking && selectedScene === t.id) UI.screenLabel(sceneName(t),(v.ox+bx*v.Z)/DPR,(v.oy+(top-12)*v.Z)/DPR);
   if (t.alpha > .5 && !t.dying && t.region !== 'camp') {                  // HP bar = time left; camp monsters just wait
     const w = 36, x0 = bx - w / 2;
     cx.fillStyle = '#141824'; cx.fillRect(v.ox + (x0 - 2) * v.Z, v.oy + (top - 2) * v.Z, (w + 4) * v.Z, 6 * v.Z);
@@ -1311,7 +1421,7 @@ function renderCamps() {
       stages:STAGES.map(st=>{const group=live.filter(t=>t.stage===st);return {id:st.toLowerCase(),state:group.some(t=>t.state==='fight')?'selected':group.length&&group.every(t=>t.state==='done')?'normal':'disabled'};})};
   });UI.camps(rows);
 }
-const TASK_STATES={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Waiting for dependencies',done:'Complete',failed:'Failed'};
+const TASK_STATES={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Waiting for dependencies',done:'Complete',failed:'Failed',archived:'Archived'};
 function renderOverview() {
   const states=Object.values(S.tasks),blocked=states.filter(t=>t.state==='blocked'||t.chained).length;
   const working=states.filter(t=>t.state==='fight').length,waiting=states.filter(t=>['quest','caged'].includes(t.state)).length;
@@ -1381,9 +1491,9 @@ function ui() {
 function click(e) {
   if(privacyPending)return;
   const v = view(), wx = (e.clientX * DPR - v.ox) / v.z, wy = (e.clientY * DPR - v.oy) / v.z;
-  const t = Object.values(S.tasks).filter(t => t.alpha > 0).sort((a, b) => Math.hypot(a.x - wx, a.y - 15 - wy) - Math.hypot(b.x - wx, b.y - 15 - wy))[0];
+  const t = Object.values(S.tasks).filter(t => t.alpha > 0 && !overflowed(t)).sort((a, b) => Math.hypot(a.x - wx, a.y - 15 - wy) - Math.hypot(b.x - wx, b.y - 15 - wy))[0];
   if (t && Math.hypot(t.x - wx, t.y - 15 - wy) < 22) return quest(t);
-  const h=Object.values(S.heroes).find(h=>Math.hypot(h.x-wx,h.y-36-wy)<36);
+  const h=Object.values(S.heroes).find(h=>!overflowed(h)&&Math.hypot(h.x-wx,h.y-36-wy)<36);
   if(h&&UI)return heroDialog(h);
   const r = Object.entries(W.regions).sort((a, b) => Math.hypot(a[1].spot[0] - wx, a[1].spot[1] - wy) - Math.hypot(b[1].spot[0] - wx, b[1].spot[1] - wy))[0];
   Object.assign(cam, {tx: r[1].spot[0], ty: r[1].spot[1] - 20, zi: 2});
@@ -1402,17 +1512,19 @@ function questLines(t) {
 // Open task/hero dialogs follow the identity: refresh while it is retained, close (focus back to the opener) once it is evicted.
 function quest(t) {
   if(privacyPending)return;
+  selectedScene = t.id;
   const id=t.id;
   if(UI)UI.detail(questLines(t),'Quest',{refresh:()=>{
     const current=S.tasks[id]||D.tasks.find(row=>row.id===id);
     return current?questLines(current):null;}});
 }
 function heroDialog(h) {
+  selectedScene = h.bot;
   const id=h.bot;
   UI.detail(heroDetails(h),'Hero',{refresh:()=>{const current=S.heroes[id];if(current)return heroDetails(current);return D.bots.some(b=>b.id===id)?undefined:null;}});
 }
 function heroStatus(h) {
-  return restLocked(h)?(h.rest.phase==='moving'?'Walking to rest':'Resting'):h.task?'Working':h.rest.state==='active-unobserved'?'Status unobserved':'Active';
+  return restLocked(h)?(h.rest.phase==='moving'?'Walking to rest':'Resting'):h.task?'Working':h.rest.state==='active-unobserved'?'Status unobserved · Unknown':'Active';
 }
 function heroDetails(h) {
   const ledger = S.tokenNetByBot[h.bot],source=D.bots.find(b=>b.id===h.bot),current=h.task&&S.tasks[h.task];
