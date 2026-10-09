@@ -4,7 +4,7 @@
   const $=s=>document.querySelector(s), T=root.UIText, I=root.UIGlyphs;
   const icons=new Map(), numbers=new Map();
   let epoch=0, reserved=[], grid=1, drawn=[];
-  const overlay=$('#ui-stage'), ctx=overlay.getContext('2d');
+  const overlay=$('#ui-stage'), slots=[];let slot=0;
   function iconImage(id,state='normal') {
     const key=id+state;if(icons.has(key))return icons.get(key);
     const c=document.createElement('canvas');c.width=c.height=36;
@@ -32,20 +32,29 @@
       .map(el=>el.getBoundingClientRect()).map(r=>({left:r.left-4,top:r.top-4,right:r.right+4,bottom:r.bottom+4}));
   }
   function resize() {
-    grid=Math.ceil(root.devicePixelRatio||1);overlay.width=innerWidth*grid;overlay.height=innerHeight*grid;
+    grid=Math.ceil(root.devicePixelRatio||1);
     const hud=$('#hud');document.documentElement.style.setProperty('--hud-height',hud.getBoundingClientRect().height+'px');bounds();
   }
-  function clear() {for(const r of drawn)ctx.clearRect(r.left*grid,r.top*grid,(r.right-r.left)*grid,(r.bottom-r.top)*grid);drawn=[];}
+  function clear() {drawn=[];slot=0;}
+  function flush() {for(let i=slot;i<slots.length;i++)slots[i].hidden=true;}
+  function image(im,x,y) {
+    if(slot>=128)return;
+    let c=slots[slot++];if(!c){c=document.createElement('canvas');c.setAttribute('aria-hidden','true');overlay.append(c);slots.push(c);}
+    if(c._source!==im||c._grid!==grid){c.width=im.width*grid;c.height=im.height*grid;c.style.width=im.width+'px';c.style.height=im.height+'px';
+      const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.drawImage(im,0,0,c.width,c.height);c._source=im;c._grid=grid;}
+    c.style.left=x+'px';c.style.top=y+'px';c.hidden=false;
+    drawn.push({left:x,top:y,right:x+im.width,bottom:y+im.height});
+  }
   function fits(x,y,w,h) {const overlaps=r=>x<r.right&&x+w>r.left&&y<r.bottom&&y+h>r.top;
     return x>=0&&y>=0&&x+w<=innerWidth&&y+h<=innerHeight&&!reserved.some(overlaps)&&!drawn.some(overlaps);}
   function screenIcon(id,x,y,state='normal') {
     const im=iconImage(id,state);x=Math.round(x-im.width/2);y=Math.round(y-im.height/2);
-    if(fits(x,y,im.width,im.height)){ctx.imageSmoothingEnabled=false;ctx.drawImage(im,x*grid,y*grid,im.width*grid,im.height*grid);drawn.push({left:x,top:y,right:x+im.width,bottom:y+im.height});}
+    if(fits(x,y,im.width,im.height))image(im,x,y);
   }
   function screenNumber(text,x,y,color) {
     const im=numericImage(text,color);x=Math.round(x-im.width/2);y=Math.round(y-im.height);
     for(let lane=0;lane<3;lane++){const top=y-lane*18;
-      if(fits(x,top,im.width,im.height)){ctx.imageSmoothingEnabled=false;ctx.drawImage(im,x*grid,top*grid,im.width*grid,im.height*grid);drawn.push({left:x,top,right:x+im.width,bottom:top+im.height});break;}}
+      if(fits(x,top,im.width,im.height)){image(im,x,top);break;}}
   }
   // Strip only formatting created by the game; never parse payload as HTML.
   function plain(value) {
@@ -80,7 +89,7 @@
   }
   function privacy() {
     epoch++;T.clearCache();numbers.clear();feedKey='';campKey='';close();$('#quest').replaceChildren();
-    $('#feed').replaceChildren();$('#camps').replaceChildren();clear();
+    $('#feed').replaceChildren();$('#camps').replaceChildren();clear();flush();
   }
   function drawer(which) {
     const el=$('#'+which), open=el.hidden;$('#camp').hidden=true;$('#chron').hidden=true;el.hidden=!open;bounds();return open;
@@ -130,6 +139,6 @@
     document.addEventListener('keydown',e=>{if(e.key==='Escape'){close();$('#camp').hidden=true;$('#chron').hidden=true;bounds();}});
     addEventListener('resize',resize);resize();
   }
-  root.UIPanels={init,resize,bounds,clear,screenIcon,screenNumber,control,number,resources,status,detail,close,privacy,drawer,feed,camps,plain,
+  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,control,number,resources,status,detail,close,privacy,drawer,feed,camps,plain,
     diagnostics:()=>({grid,epoch,reserved,drawn})};
 })(window);
