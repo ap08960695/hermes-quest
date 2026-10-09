@@ -1,0 +1,627 @@
+{
+  "version": 1,
+  "license": "MIT",
+  "font": {
+    "file": "font-5x7.png",
+    "width": 96,
+    "height": 24,
+    "cell": {
+      "width": 6,
+      "height": 8
+    },
+    "advance": 6,
+    "map": {
+      "0": {
+        "x": 0,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "1": {
+        "x": 6,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "2": {
+        "x": 12,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "3": {
+        "x": 18,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "4": {
+        "x": 24,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "5": {
+        "x": 30,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "6": {
+        "x": 36,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "7": {
+        "x": 42,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "8": {
+        "x": 48,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "9": {
+        "x": 54,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "A": {
+        "x": 60,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "B": {
+        "x": 66,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "C": {
+        "x": 72,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "D": {
+        "x": 78,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "E": {
+        "x": 84,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "F": {
+        "x": 90,
+        "y": 0,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "G": {
+        "x": 0,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "H": {
+        "x": 6,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "I": {
+        "x": 12,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "J": {
+        "x": 18,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "K": {
+        "x": 24,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "L": {
+        "x": 30,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "M": {
+        "x": 36,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "N": {
+        "x": 42,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "O": {
+        "x": 48,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "P": {
+        "x": 54,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "Q": {
+        "x": 60,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "R": {
+        "x": 66,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "S": {
+        "x": 72,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "T": {
+        "x": 78,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "U": {
+        "x": 84,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "V": {
+        "x": 90,
+        "y": 8,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "W": {
+        "x": 0,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "X": {
+        "x": 6,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "Y": {
+        "x": 12,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "Z": {
+        "x": 18,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "+": {
+        "x": 24,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "-": {
+        "x": 30,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "/": {
+        "x": 36,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      ":": {
+        "x": 42,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "%": {
+        "x": 48,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      " ": {
+        "x": 54,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      ".": {
+        "x": 60,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "?": {
+        "x": 66,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      },
+      "!": {
+        "x": 72,
+        "y": 16,
+        "width": 5,
+        "height": 7,
+        "advance": 6
+      }
+    },
+    "sha256": "4f162c8b6fb4b99e0b8566cfa01a7b4e14473e049110abc1726def49df509a73"
+  },
+  "icons": {
+    "file": "icons-16.png",
+    "width": 128,
+    "height": 96,
+    "cell": {
+      "width": 16,
+      "height": 16
+    },
+    "palette": [
+      "#0d1526",
+      "#3a4a6b",
+      "#99783b",
+      "#d9b25c",
+      "#e8dfc6"
+    ],
+    "map": {
+      "play": {
+        "x": 0,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "pause": {
+        "x": 16,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "live-follow": {
+        "x": 32,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "speed": {
+        "x": 48,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "clock": {
+        "x": 64,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "scrub-start": {
+        "x": 80,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "scrub-end": {
+        "x": 96,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "world": {
+        "x": 112,
+        "y": 0,
+        "width": 16,
+        "height": 16
+      },
+      "calm": {
+        "x": 0,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "quests": {
+        "x": 16,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "log": {
+        "x": 32,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "close": {
+        "x": 48,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "info": {
+        "x": 64,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "demo": {
+        "x": 80,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "connected": {
+        "x": 96,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "offline": {
+        "x": 112,
+        "y": 16,
+        "width": 16,
+        "height": 16
+      },
+      "snapshot": {
+        "x": 0,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "loading": {
+        "x": 16,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "mana-claude": {
+        "x": 32,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "mana-codex": {
+        "x": 48,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "mana-gemini": {
+        "x": 64,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "heart": {
+        "x": 80,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "mana": {
+        "x": 96,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "level": {
+        "x": 112,
+        "y": 32,
+        "width": 16,
+        "height": 16
+      },
+      "coin": {
+        "x": 0,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "plan": {
+        "x": 16,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "build": {
+        "x": 32,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "test": {
+        "x": 48,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "review": {
+        "x": 64,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "deploy": {
+        "x": 80,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "verify": {
+        "x": 96,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "sword": {
+        "x": 112,
+        "y": 48,
+        "width": 16,
+        "height": 16
+      },
+      "chain": {
+        "x": 0,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "read": {
+        "x": 16,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "search": {
+        "x": 32,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "vision": {
+        "x": 48,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "write": {
+        "x": 64,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "memory": {
+        "x": 80,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "message": {
+        "x": 96,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "delegate": {
+        "x": 112,
+        "y": 64,
+        "width": 16,
+        "height": 16
+      },
+      "compress": {
+        "x": 0,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      },
+      "commit": {
+        "x": 16,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      },
+      "push": {
+        "x": 32,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      },
+      "merge": {
+        "x": 48,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      },
+      "sleep": {
+        "x": 64,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      },
+      "crit": {
+        "x": 80,
+        "y": 80,
+        "width": 16,
+        "height": 16
+      }
+    },
+    "sha256": "c46a6b5d7a5fd24a1b396a1892689bd130e019b6c9ed303d94d252139490f683"
+  }
+}
