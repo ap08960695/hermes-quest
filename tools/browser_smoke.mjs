@@ -471,7 +471,8 @@ async function runSceneTruth(browser,base) {
   const ctx=await browser.newContext({viewport:{width:1280,height:800},deviceScaleFactor:1});
   const errors=[],views=[],selections=[];
   await ctx.addInitScript(()=>{let seed=7;Math.random=()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);
-    window.__clock=0;Object.defineProperty(performance,'now',{value:()=>window.__clock});window.requestAnimationFrame=()=>0;});
+    window.__clock=0;Object.defineProperty(performance,'now',{value:()=>window.__clock});
+    window.__nativeRaf=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=()=>0;});
   const page=await ctx.newPage();page.on('pageerror',e=>errors.push(e.message));
   page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
   page.on('response',r=>{if(r.status()>=400)errors.push(r.status()+' '+new URL(r.url()).pathname);});
@@ -494,6 +495,9 @@ async function runSceneTruth(browser,base) {
       window.__labels=[];const real=UI.screenLabel;UI.screenLabel=(...args)=>{const before=UI.diagnostics().drawn.length;real(...args);window.__labels.push({text:args[0],drawn:UI.diagnostics().drawn.length>before});};});
     for(const width of [1280,375,320]){
       await page.setViewportSize({width,height:width===1280?800:667});
+      // Native frame boundary drains the pending resize event. The fixture's
+      // stubbed game rAF must not let that event erase our later capture.
+      await page.evaluate(()=>new Promise(resolve=>window.__nativeRaf(()=>window.__nativeRaf(resolve))));
       for(const region of ['forge','port','castle'])for(const zoom of [1,3]){
         const metric=await page.evaluate(({region,zoom})=>{
           resize();const [x,y]=W.regions[region].plaza.center;Object.assign(cam,{x,tx:x,y:y-40,ty:y-40,zi:zoom});S.trauma=0;window.__labels=[];draw();hud(1);
@@ -521,7 +525,9 @@ async function runSceneTruth(browser,base) {
         check(metric.labelPairs===0,'overlapping scene overlays');check(!metric.scroll,'scene horizontal overflow');check(metric.marching===0,'monsters did not settle');
         check(metric.labels.some(l=>l.drawn&&l.text===({forge:'FORGE CITY',port:'STEAM PORT',castle:'ROYAL CASTLE'})[region]),'region name missing: '+region+' '+width+' z'+zoom);
         check(metric.labels.every(l=>!/t_[a-f\d]+|[a-f\d]{8,}/i.test(l.text)),'opaque scene name');
+        check(await page.evaluate(canvasColours)>20,'scene canvas blank before capture');
         await page.screenshot({path:path.join(outDir,`${browserName}-scene-${width}-${region}-z${zoom}.png`)});
+        check(await page.evaluate(canvasColours)>20,'resize erased the scene capture');
       }
     }
     for(const width of [1280,375,320])for(const zoom of [1,3]){
@@ -530,6 +536,9 @@ async function runSceneTruth(browser,base) {
     // whose world sprites are outside a narrow viewport; open each real dialog.
     for(const width of [1280,375,320]){
       await page.setViewportSize({width,height:width===1280?800:667});
+      // Native frame boundary drains the pending resize event. The fixture's
+      // stubbed game rAF must not let that event erase our later capture.
+      await page.evaluate(()=>new Promise(resolve=>window.__nativeRaf(()=>window.__nativeRaf(resolve))));
       await page.evaluate(()=>{loadReplay({meta:{from_:0,to:100,show_titles:false},bots:[],events:[],tasks:Array.from({length:18},(_,i)=>({id:'synthetic-crowd-'+i,stage:'BUILD'}))});reset(0);
         for(const row of D.tasks)spawnMonster(task(row.id),'forge');reset(0);const [x,y]=W.regions.forge.plaza.center;Object.assign(cam,{x,tx:x,y:y-40,ty:y-40,zi:1});draw();hud(1);});
       // reset replays the eventless payload; spawn once more, then settle with dt.
