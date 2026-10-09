@@ -8,7 +8,7 @@
 3. Paint each native pixel from its class tile (tiled), mix grass variants by noise, add 1px curbs
    on road/plaza edges and a foam line on the shore. Writes assets/px/ground.png.
 """
-import json
+import json, sys
 
 import numpy as np
 from PIL import Image
@@ -112,5 +112,49 @@ def main():
     print('ground ok', sorted(set(cls.ravel())))
 
 
+def rest_ground():
+    """Paint only the new inn/road using processed terrain, never reroll the map."""
+    from pathlib import Path
+    w = json.load(open('data/world.json'))
+    ground = Image.open('assets/px/ground.png').convert('RGB')
+    out = np.array(ground)
+    yy, xx = np.mgrid[0:ground.height, 0:ground.width]
+    pts = w['graph']['pts']
+    def distance(a, b):
+        ax, ay = pts[a]; bx, by = pts[b]; dx, dy = bx - ax, by - ay
+        t = np.clip(((xx - ax) * dx + (yy - ay) * dy) / max(1, dx * dx + dy * dy), 0, 1)
+        return np.hypot(xx - ax - t * dx, yy - ay - t * dy)
+    x, y = w['regions']['rest_inn']['spot']
+    road = distance('vill_e', 'rest_inn')
+    plaza = ((xx - x) / 120) ** 2 + ((yy - y) / 72) ** 2 < 1
+    # Preserve ALL old paved roads/plazas, including the junction at vill_e.
+    protected = np.zeros(xx.shape, bool)
+    for a, b in w['graph']['edges'] + w['graph'].get('wild', []):
+        if 'rest_inn' not in (a, b): protected |= distance(a, b) < 15
+    for key, r in w['regions'].items():
+        if key != 'rest_inn':
+            rx, ry = r['spot']; protected |= ((xx - rx) / 125) ** 2 + ((yy - ry) / 77) ** 2 < 1
+    outdir = Path('assets/px/regions'); outdir.mkdir(exist_ok=True)
+    # Sample untouched native tiles once; retain them for repeatable additive builds.
+    for name, box in [('rest_cobble', (668, 1018, 732, 1026)),
+                      ('rest_flagstone', (944, 631, 1008, 695))]:
+        p = outdir / f'{name}.png'
+        if not p.exists(): ground.crop(box).save(p)
+    mask = ((road < 13) | plaza) & ~protected
+    # Dirt curb uses the existing brown road-edge palette; no new AI/raw dependency.
+    out[mask] = ground.getpixel((700, 1033))
+    for name, m in [('rest_cobble', (road < 9) & ~plaza), ('rest_flagstone', plaza)]:
+        tile = np.array(Image.open(outdir / f'{name}.png').convert('RGB'))
+        m = m & mask
+        out[m] = tile[yy[m] % tile.shape[0], xx[m] % tile.shape[1]]
+    edge = plaza & ~(np.roll(plaza, 1, 0) & np.roll(plaza, -1, 0) & np.roll(plaza, 1, 1) & np.roll(plaza, -1, 1))
+    out[edge & mask] = (out[edge & mask] * .72).astype('uint8')
+    Image.fromarray(out).save('assets/px/ground.png')
+    print('rest_inn terrain; additive mask pixels', int(mask.sum()))
+
+
 if __name__ == '__main__':
-    main()
+    if sys.argv[1:] == ['--rest-inn']:
+        rest_ground()
+    else:
+        main()

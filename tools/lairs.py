@@ -2,13 +2,19 @@
 """Add monster lairs + war camp to the world: wild nodes, dirt trails to the nearest road node (graph 'wild'
 edges, used by monsters only), and lair props. Heroes never route over 'wild' edges.
 Run before tools/terrain.py (trails are painted) and tools/place.py (keeps trees off trails)."""
-import json, math
+import json, math, sys
 
 import numpy as np
 from PIL import Image
 
 w = json.load(open('data/world.json'))
 G = w['graph']; P = G['pts']
+if sys.argv[1:] == ['--preserve']:
+    # Additive region work must not relocate existing lairs or change wild routing.
+    for key, lair in w['lairs'].items():
+        if P[key] != lair['spot'] or [key, lair['road']] not in G['wild']:
+            raise SystemExit(f'inconsistent existing lair: {key}')
+    print('existing lairs and wild trails preserved'); sys.exit(0)
 g = np.array(Image.open('assets/raw/ground.png').convert('RGB').resize(tuple(w['size']))).astype(int)
 
 

@@ -3,7 +3,59 @@
 signposts at junctions, forests/rocks in open land, boats at sea. Writes world.json 'props'.
 Rules keep roads and the battle area of each plaza clear, so walking and fighting never collide
 with scenery. Props are y-sorted with characters in game.js (depth, nothing floats)."""
-import json, math, os, random
+import json, math, os, random, sys
+
+
+def rest_inn():
+    """Add the pause inn without rerolling existing scenery or the old inn/camp."""
+    from pathlib import Path
+    from PIL import Image
+    w = json.load(open('data/world.json'))
+    if 'rest_inn' in w['regions']:
+        print('rest_inn already placed'); return
+    x, y = 720, 840
+    w['regions']['rest_inn'] = dict(
+        spot=[x, y], label='REST INN · ค่ายพัก', node='rest_inn',
+        rest_spots=[[660, 864], [700, 864], [740, 864], [780, 864],
+                    [680, 884], [720, 884], [760, 884]],
+        portal=dict(spot=[795, 858], img='rest_portal', role='failover'))
+    w['graph']['pts']['rest_inn'] = [x, y]
+    w['graph']['edges'].append(['vill_e', 'rest_inn'])
+    # Clear only scenery intersecting the new plaza, building or road spur.
+    # Keep every region/lair prop and everything outside this local footprint.
+    a = w['graph']['pts']['vill_e']; dx, dy = x - a[0], y - a[1]
+    def obstructs(p):
+        if p.get('region') or p.get('lair'): return False
+        path = Path(f"assets/px/{p.get('src', 'buildings')}/{p['img']}.png")
+        with Image.open(path) as im: pw, ph = im.size
+        left, right = p['x'] - pw / 2, p['x'] + pw / 2
+        top, bottom = p['y'] - ph, p['y'] + 6
+        if left < x + 140 and right > x - 140 and top < y + 80 and bottom > y - 225:
+            return True
+        t = max(0, min(1, ((p['x'] - a[0]) * dx + (p['y'] - a[1]) * dy) / (dx * dx + dy * dy)))
+        qx, qy = a[0] + t * dx, a[1] + t * dy
+        return left - 16 < qx < right + 16 and top - 16 < qy < bottom + 16
+    w['props'] = [p for p in w['props'] if not obstructs(p)]
+    out = Path('assets/px/regions'); out.mkdir(exist_ok=True)
+    # Existing processed sprites already share the world's hard-alpha palette.
+    with Image.open('assets/px/buildings/inn.png') as im: im.save(out / 'rest_lodge.png')
+    with Image.open('assets/px/lairs/ruins.png') as im:
+        im.resize((64, 47), Image.Resampling.NEAREST).save(out / 'rest_portal.png')
+    for img, src, px, py, pw, ph, extra in [
+        ('rest_lodge', 'regions', x, y - 40, 212, 176, dict(region='rest_inn')),
+        ('rest_portal', 'regions', x + 90, y - 2, 64, 47, dict(role='failover')),
+        ('tent', 'props', x - 155, y + 30, 94, 67, {}),
+        ('campfire', 'props', x - 110, y + 40, 36, 30, {}),
+        ('flowers', 'props', x - 96, y - 32, 32, 28, {}),
+        ('bush', 'props', x + 96, y - 32, 40, 30, {}),
+    ]:
+        w['props'].append(dict(img=img, src=src, x=px, y=py, w=pw, h=ph, **extra))
+    json.dump(w, open('data/world.json', 'w'), ensure_ascii=False)
+    print('rest_inn placed; 7 rest spots, failover portal, vill_e road spur')
+
+
+if sys.argv[1:] == ['--rest-inn']:
+    rest_inn(); sys.exit(0)
 
 random.seed(3)
 w = json.load(open('data/world.json'))
