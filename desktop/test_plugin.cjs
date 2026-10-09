@@ -2,6 +2,8 @@
 // Tests for desktop/plugin.js and desktop/guest-bridge.js.
 //
 //   node desktop/test_plugin.cjs                      unit tests only (no browser, no server)
+//   QUEST_SDK_SRC=<hermes-agent>/apps/desktop/src node desktop/test_plugin.cjs
+//                                                     + owner/lifecycle routing regression on the actual SDK sources
 //   QUEST_TRANSPORT=http://127.0.0.1:PORT/api/plugins/hermes-quest QUEST_BROWSERS=chromium,firefox \
 //     node desktop/test_plugin.cjs                    + browser run against a REAL backend transport
 //
@@ -23,8 +25,10 @@ const ROOT = path.join(__dirname, '..');
 const SDK_STUB = `
 import { createElement as h, useState } from 'react'
 export const ROUTES_AREA = 'routes', SIDEBAR_NAV_AREA = 'sidebar.nav', PALETTE_AREA = 'palette'
-const atom = v => ({ get: () => v, listen: () => () => {}, subscribe: cb => { cb(v); return () => {} } })
-export const host = { state: { profile: atom('default'), connectionId: atom('local') }, navigate: p => { globalThis.__navigated = p } }
+const atom = v => { const ls = new Set(); return { get: () => v, set: n => { v = n; for (const f of [...ls]) f(v) }, listen: f => { ls.add(f); return () => ls.delete(f) }, subscribe: cb => { cb(v); return () => {} } } }
+const profile = atom('default'), connectionId = atom('local')
+globalThis.__owner = { connection: 'local', profile }
+export const host = { state: { profile, connectionId }, activeConnectionId: () => globalThis.__owner.connection, navigate: p => { globalThis.__navigated = p } }
 export const useValue = a => a.get()
 export const useTheme = () => ({ theme: { name: 'test' }, renderedMode: 'dark' })
 export const usePluginI18n = () => k => k
@@ -49,7 +53,7 @@ function bundle(format, platform, entry = path.join(__dirname, 'plugin.js')) {
 let passed = 0;
 async function test(name, fn) {
   try { await fn(); passed += 1; console.log(`ok   ${name}`); }
-  catch (error) { console.error(`FAIL ${name}\n${error.stack || error}`); process.exitCode = 1; throw error; }
+  catch (error) { console.error(`FAIL ${name}\n${error.stack || error}`); process.exitCode = 1; error.__reported = true; throw error; }
 }
 
 const cjsFile = path.join(tmp, 'plugin.cjs');
@@ -177,6 +181,95 @@ async function unit() {
     ch.dispose();
   });
 
+  // ---- route guard: owner/lifecycle binding (fake host; the real SDK routing is exercised in sdkRouting()) ----
+  const tick = (ms = 20) => new Promise(r => setTimeout(r, ms));
+  function fakeHost(initial = { connectionId: 'A', profile: 'default' }) {
+    const owner = { ...initial }; const profileL = new Set(); const registryL = new Set(); let applied = null;
+    const watchers = {
+      pushes: { changed: true, applied: true },
+      subscribe: api => { const pl = () => api.check(), rl = p => api.registry(p), al = () => api.registry(null); profileL.add(pl); registryL.add(rl); applied = al; return () => { profileL.delete(pl); registryL.delete(rl); applied = null; }; },
+    };
+    return {
+      owner, watchers, read: () => ({ ...owner }),
+      setOwner: (o, notify = true) => { Object.assign(owner, o); if (notify) for (const f of [...profileL]) f(); },
+      push: p => { for (const f of [...registryL]) f(p); }, apply: () => applied && applied(),
+      listeners: () => profileL.size + registryL.size + (applied ? 1 : 0),
+    };
+  }
+  function guarded(hostApi, restImpl) {
+    const lostWhy = []; const guard = plugin.createRouteGuard({ read: hostApi.read, watchers: hostApi.watchers, onLost: why => lostWhy.push(why) });
+    const listeners = new Set(); const sent = []; const frame = { postMessage: (m, t, p) => sent.push(p) };
+    const calls = [];
+    const rest = (p, o) => { calls.push(p); return restImpl(p, o); };
+    const ch = plugin.createGuestChannel({ getWindow: () => frame, nonce: NONCE, rest: guard.rest(rest), isCurrent: () => guard.valid(),
+      listen: (t, f) => listeners.add(f), unlisten: (t, f) => listeners.delete(f) });
+    guard.retireWith(ch.dispose);
+    for (const f of [...listeners]) f({ source: frame, origin: 'null', data: { kind: 'quest-ready', nonce: NONCE } });
+    const port = sent[0][0]; const got = []; port.onmessage = e => got.push(e.data); port.start?.();
+    return { guard, ch, port, got, calls, lostWhy };
+  }
+
+  await test('route guard: owner switch without any descriptor change retires BEFORE the next ctx.rest; late old result is dropped', async () => {
+    const hostApi = fakeHost(); const pend = [];
+    const t = guarded(hostApi, (p) => new Promise(res => pend.push({ p, res, owner: hostApi.owner.connectionId })));
+    t.port.postMessage({ id: 1, method: 'GET', path: '/events?since=a' }); await tick();
+    assert.strictEqual(t.calls.length, 1);
+    hostApi.setOwner({ connectionId: 'B' }, false);            // authority moved; no atom fired (descriptor still pending)
+    t.port.postMessage({ id: 2, method: 'GET', path: '/replay' }); await tick();
+    assert.strictEqual(t.calls.length, 1, 'no ctx.rest call was made for the new owner on the old channel');
+    assert.strictEqual(t.ch.stats.disposed, true); assert.deepStrictEqual(t.lostWhy, ['owner']);
+    pend[0].res({ owner: 'A', late: true }); await tick();
+    assert.deepStrictEqual(t.got, [], 'the old channel received nothing: no B result, no late A result');
+  });
+
+  await test('route guard: profile change retires synchronously (no further requests, no replies)', async () => {
+    const hostApi = fakeHost(); const pend = [];
+    const t = guarded(hostApi, () => new Promise(res => pend.push(res)));
+    t.port.postMessage({ id: 1, method: 'GET', path: '/replay' }); await tick();
+    hostApi.setOwner({ profile: 'work' });
+    assert.strictEqual(t.ch.stats.disposed, true, 'retired inside the same tick as the profile change');
+    pend[0]({ ok: 1 }); t.port.postMessage({ id: 2, method: 'GET', path: '/replay' }); await tick();
+    assert.strictEqual(t.calls.length, 1); assert.deepStrictEqual(t.got, []); assert.strictEqual(hostApi.listeners(), 0, 'watchers unsubscribed');
+  });
+
+  await test('route guard: same-ID endpoint edit / removal / soft apply / malformed push retire; other ids do not', async () => {
+    for (const [name, fire, expectLost] of [
+      ['updated', h => h.push({ connectionId: 'A', reason: 'updated' }), true],
+      ['removed', h => h.push({ connectionId: 'A', reason: 'removed' }), true],
+      ['saved', h => h.push({ connectionId: 'A', reason: 'saved' }), true],
+      ['soft apply', h => h.apply(), true],
+      ['malformed', h => h.push({ reason: 'updated' }), true],
+      ['null', h => h.push(null), true],
+      ['other id', h => h.push({ connectionId: 'Z', reason: 'updated' }), false],
+    ]) {
+      const hostApi = fakeHost(); const pend = [];
+      const t = guarded(hostApi, () => new Promise(res => pend.push(res)));
+      t.port.postMessage({ id: 1, method: 'GET', path: '/events?since=a' }); await tick();
+      fire(hostApi);
+      assert.strictEqual(t.ch.stats.disposed, expectLost, name);
+      pend[0]({ late: name }); await tick();
+      assert.strictEqual(t.got.length, expectLost ? 0 : 1, name + ': old channel result delivery');
+      t.guard.dispose();
+    }
+  });
+
+  await test('route guard: result for the right owner is delivered; dispose is silent; unsupported host fails closed', async () => {
+    const hostApi = fakeHost(); const pend = [];
+    const t = guarded(hostApi, () => new Promise(res => pend.push(res)));
+    t.port.postMessage({ id: 1, method: 'GET', path: '/replay' }); await tick(); pend[0]({ v: 1 }); await tick();
+    assert.deepStrictEqual(t.got, [{ id: 1, value: { v: 1 } }]);
+    t.port.postMessage({ id: 2, method: 'GET', path: '/replay' }); await tick();
+    t.guard.dispose(); assert.strictEqual(t.ch.stats.disposed, true); pend[1]({ v: 2 }); await tick(); assert.strictEqual(t.got.length, 1);
+    assert.strictEqual(hostApi.listeners(), 0);
+    const bad = (read, pushes) => () => plugin.createRouteGuard({ read, watchers: { pushes, subscribe: () => () => {} } });
+    assert.throws(bad(() => ({ connectionId: 'A', profile: 'p' }), { changed: false, applied: true }), /lifecycle unavailable/);
+    assert.throws(bad(() => ({ connectionId: null, profile: 'p' }), { changed: true, applied: false }), /lifecycle unavailable/);
+    assert.throws(bad(() => { throw new Error('x'); }, { changed: true, applied: true }));
+    assert.doesNotThrow(bad(() => ({ connectionId: 'local', profile: 'default' }), {}));
+    assert.throws(() => plugin.readOwner({}), /lifecycle unavailable/);
+    assert.strictEqual(plugin.classifyError(new Error('Desktop route lifecycle unavailable')), 'lifecycle');
+  });
+
   await test('guest bridge source is inline-safe and has no network/storage use', () => {
     assert.ok(!/<\/script/i.test(bridgeSource) && !bridgeSource.includes('<!--'), 'backend refuses these sequences');
     assert.ok(/meta\[name="quest-nonce"\]/.test(bridgeSource), 'reads the nonce meta the backend writes');
@@ -237,6 +330,12 @@ function startServer(transport) {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve({ server, stats, url: `http://127.0.0.1:${server.address().port}/` })));
 }
 
+async function waitUntil(fn, timeoutMs, what) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) { if (fn()) return; await new Promise(r => setTimeout(r, 100)); }
+  throw new Error(`timed out waiting for ${what} after ${timeoutMs} ms`);
+}
+
 async function browserRun(name, transport) {
   const pw = req('playwright-core');
   const browser = await pw[name].launch({ headless: true });
@@ -256,7 +355,14 @@ async function browserRun(name, transport) {
     await frame.waitForFunction(() => window.__questBridge && window.__questBridge.connected(), null, { timeout: 20000 });
     await frame.waitForFunction(() => document.querySelector('#stage') && document.querySelector('#stage').width > 0, null, { timeout: 20000 });
     await frame.waitForFunction(() => document.querySelector('#hud button') != null, null, { timeout: 20000 });
-    await new Promise(r => setTimeout(r, 11500)); // the game's serial poll fires every ~10 s
+    // The HUD markup exists before the game boots, so it proves nothing about boot. Wait (bounded) for the
+    // actual boot evidence instead of a fixed sleep: the replay was fetched, the bridge delivered PNG
+    // envelopes, and the game's serial ~10 s poll made its FIRST /events request through the bridge.
+    const bootStart = Date.now();
+    await waitUntil(() => (stats.byPath['/replay'] || 0) >= 1 && (stats.byPath['/desktop-asset'] || 0) >= 5, 30000, 'game boot (replay + assets)');
+    const bootMs = Date.now() - bootStart;
+    await waitUntil(() => (stats.byPath['/events'] || 0) >= 1, 30000, 'first live /events poll through the bridge');
+    console.log(`     boot ${bootMs} ms after the HUD; first events poll ${Date.now() - bootStart} ms`);
 
     const probe = await frame.evaluate(async () => {
       const out = {};
@@ -311,8 +417,190 @@ async function browserRun(name, transport) {
   } finally { await browser.close(); server.close(); }
 }
 
+
+// ---------------------------------------------------------------------------------------------
+// SDK routing regression: the candidate React UI on the ACTUAL Hermes Desktop SDK sources
+// (api/client.ts request scope, api/plugins.ts pluginRest, sandboxed-frame, connectionId projection,
+// real MessageChannel is replaced by a recorder). Needs QUEST_SDK_SRC = <hermes-agent>/apps/desktop/src
+// and jsdom + nanostores + @nanostores/react + react-dom in QUEST_NODE_MODULES. Desktop IPC and the
+// registry transitions are simulated from the SDK source trace; this is NOT a test inside Desktop.
+// ---------------------------------------------------------------------------------------------
+async function sdkRouting(sdkRoot) {
+  const { JSDOM } = req('jsdom');
+  const slash = p => p.split(path.sep).join('/');
+  const index = fs.readFileSync(path.join(sdkRoot, 'sdk/index.ts'), 'utf8');
+  const a = index.indexOf('const $activeConnectionId = computed($connection');
+  const b = index.indexOf('/** Ordinary session opens fail fast');
+  assert.ok(a > 0 && b > a, 'SDK connectionId projection found in source');
+  const projection = index.slice(a, b);
+  const facade = `
+import {createElement as h} from 'react';
+import {atom, computed} from 'nanostores';
+import {useStore as useValue} from '@nanostores/react';
+import {setApiRequestProfile,setApiRequestConnection,$apiRequestScope} from '${slash(sdkRoot)}/api/client.ts';
+import {pluginRest} from '${slash(sdkRoot)}/api/plugins.ts';
+export {SandboxedFrame} from '${slash(sdkRoot)}/components/ui/sandboxed-frame.tsx';
+export {useValue};
+const $connection = atom({connectionId:'A',mode:'remote',baseUrl:'https://synthetic-A.invalid'});
+const $activeGatewayProfile = atom('default');
+${projection}
+$activeGatewayProfile.subscribe(v => setApiRequestProfile(v));
+setApiRequestConnection('A');
+// host.activeConnectionId() is activeGatewayConnectionId(); store/gateway applyActive publishes it into
+// the request scope in the same synchronous step, so the request scope models it here.
+export const host = {state:{profile:$activeGatewayProfile,connectionId:$activeConnectionId},activeConnectionId:()=>$apiRequestScope.get().connectionId,navigate:()=>{}};
+export const ROUTES_AREA='routes',SIDEBAR_NAV_AREA='sidebar.nav',PALETTE_AREA='palette';
+export const usePluginI18n=()=>k=>k;
+export const useTheme=()=>({theme:{name:'test'},renderedMode:'dark'});
+export const Button=p=>h('button',p,p.children);
+export const GlyphSpinner=()=>h('span');
+export const probe={ $connection,$activeGatewayProfile,$apiRequestScope,setApiRequestConnection,
+  rest:(p,o)=>pluginRest('hermes-quest',p,o) };
+`;
+  const entry = `import plugin from '__plugin__'; import {probe} from '@hermes/plugin-sdk'; import {createRoot} from 'react-dom/client'; import {act} from 'react'; export {plugin,probe,createRoot,act};`;
+  const built = await esbuild.build({
+    stdin: { contents: entry, resolveDir: sdkRoot, sourcefile: 'quest-sdk-entry.js' }, bundle: true, write: false, format: 'cjs', platform: 'node',
+    nodePaths: [NM], jsx: 'automatic', define: { 'process.env.NODE_ENV': '"development"' },
+    plugins: [{ name: 'quest-sdk-facade', setup(build) {
+      build.onResolve({ filter: /^@hermes\/plugin-sdk$/ }, () => ({ path: 'sdk-facade', namespace: 'qf' }));
+      build.onLoad({ filter: /.*/, namespace: 'qf' }, () => ({ contents: facade, resolveDir: sdkRoot, loader: 'js' }));
+      build.onResolve({ filter: /^__plugin__$/ }, () => ({ path: path.join(__dirname, 'plugin.js') }));
+      build.onResolve({ filter: /^@hermes\/shared$/ }, () => ({ path: 'shared', namespace: 'qs' }));
+      build.onLoad({ filter: /.*/, namespace: 'qs' }, () => ({ contents: 'export class JsonRpcGatewayClient {}; export const reconnectBackoffDelayMs=()=>1;' }));
+      build.onResolve({ filter: /^@\/lib\/utils$/ }, () => ({ path: 'utils', namespace: 'qu' }));
+      build.onLoad({ filter: /.*/, namespace: 'qu' }, () => ({ contents: 'export const cn=(...x)=>x.join(" ");' }));
+      build.onResolve({ filter: /^@\// }, args => ({ path: path.join(sdkRoot, args.path.slice(2) + '.ts') }));
+    } }],
+  });
+  const dom = new JSDOM('<div id="root"></div>', { url: 'https://synthetic-host.invalid' });
+  global.window = dom.window; global.document = dom.window.document;
+  Object.defineProperty(global, 'navigator', { value: dom.window.navigator, configurable: true });
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  global.requestAnimationFrame = () => 1; global.cancelAnimationFrame = () => {};
+  const ports = [];
+  class RecMessageChannel {
+    constructor() {
+      const rec = { onmessage: null, closed: false, replies: [], start() {}, close() { this.closed = true; }, postMessage(m) { this.replies.push(m); } };
+      this.port1 = rec; this.port2 = { postMessage: m => setImmediate(() => rec.onmessage && rec.onmessage({ data: m })) }; ports.push(rec);
+    }
+  }
+  global.MessageChannel = RecMessageChannel;
+  const requests = []; const pendingEvents = []; let serial = 0;
+  const regL = new Set(); const appliedL = new Set();
+  window.hermesDesktop = {
+    connections: { onChanged: f => { regL.add(f); return () => regL.delete(f); } },
+    onConnectionApplied: f => { appliedL.add(f); return () => appliedL.delete(f); },
+    api: async request => {
+      requests.push({ ...request });
+      if (request.path.endsWith('/desktop-bootstrap')) {
+        const nonce = 'SyntheticNonce000000' + (++serial);
+        return { version: 1, nonce, html: `<meta http-equiv="Content-Security-Policy" content="connect-src 'none'"><meta name="quest-nonce" content="${nonce}"><script>/* quest-ready */</script>` };
+      }
+      if (request.path.includes('/events')) return new Promise(resolve => pendingEvents.push({ request, resolve }));
+      return { syntheticOwner: request.connectionId, profile: request.profile };
+    },
+  };
+  const bundleFile = path.join(tmp, 'sdk-routing-bundle.cjs');
+  fs.writeFileSync(bundleFile, built.outputFiles[0].text);
+  const { plugin: sdkPlugin, probe, createRoot, act } = require(bundleFile);
+  const wait = (ms = 5) => new Promise(r => setTimeout(r, ms));
+  let root;
+  async function mount() {
+    const items = []; sdkPlugin.register({ i18n: { register() {}, t: k => k }, registerMany: x => items.push(...x), rest: probe.rest });
+    root = createRoot(document.getElementById('root'));
+    await act(async () => { root.render(items.find(i => i.id === 'page').render()); await wait(); }); await act(wait);
+  }
+  function connect() {
+    const frame = document.querySelector('iframe');
+    const html = decodeURIComponent(frame.src.slice('data:text/html,'.length).replace(/\?live=1$/, ''));
+    const nonce = html.match(/quest-nonce" content="([^"]+)/)[1];
+    frame.contentWindow.postMessage = () => {};
+    window.dispatchEvent(new window.MessageEvent('message', { source: frame.contentWindow, origin: 'null', data: { kind: 'quest-ready', nonce } }));
+    return { frame, port: ports[ports.length - 1], nonce };
+  }
+  const bootstraps = () => requests.filter(x => x.path.endsWith('/desktop-bootstrap'));
+  const reset = async () => { if (root) await act(() => root.unmount()); requests.length = 0; pendingEvents.length = 0; ports.length = 0; serial = 0; probe.$connection.set({ connectionId: 'A', mode: 'remote', baseUrl: 'https://synthetic-A.invalid' }); probe.setApiRequestConnection('A'); probe.$activeGatewayProfile.set('default'); };
+  const guestSend = (c, m) => c.port.onmessage({ data: m });
+  const ownerOf = c => c.port.replies.filter(r => r && r.value).map(r => r.value.syntheticOwner);
+
+  await test('SDK routing: connection fallback while the descriptor is pending (A -> B, profile unchanged)', async () => {
+    await reset(); await mount(); const first = connect();
+    guestSend(first, { id: 1, method: 'GET', path: '/events?since=synthetic-A-cursor' });
+    await act(async () => { probe.setApiRequestConnection('B'); await wait(); }); // authority moved, descriptor/atoms still say A
+    assert.strictEqual(probe.$connection.get().connectionId, 'A', 'descriptor projection lags (the F1 trigger)');
+    guestSend(first, { id: 2, method: 'GET', path: '/replay' }); await act(wait);
+    assert.strictEqual(requests.filter(r => r.path.endsWith('/replay')).length, 0, 'no replay request was issued by the old channel');
+    assert.strictEqual(first.port.closed, true, 'old port retired');
+    pendingEvents[0].resolve({ syntheticOwner: 'A', late: true }); await act(wait);
+    assert.deepStrictEqual(first.port.replies, [], 'old channel got neither the B replay nor the late A result');
+    // the page re-bootstraps for the NEW owner (not the old one) and shows a fresh frame
+    await act(wait);
+    const boots = bootstraps(); assert.strictEqual(boots.length, 2); assert.strictEqual(boots[1].connectionId, 'B');
+    const second = connect(); assert.notStrictEqual(second.frame, first.frame); assert.notStrictEqual(second.nonce, first.nonce);
+    guestSend(second, { id: 1, method: 'GET', path: '/replay' }); await act(wait);
+    assert.deepStrictEqual(ownerOf(second), ['B']); assert.deepStrictEqual(ownerOf(first), []);
+    await act(async () => { probe.$connection.set({ connectionId: 'B', mode: 'remote', baseUrl: 'https://synthetic-B.invalid' }); await wait(); }); await act(wait);
+    assert.strictEqual(second.port.closed, false, 'the descriptor catching up to the pinned owner B does not retire the already-rebound generation');
+    guestSend(second, { id: 2, method: 'GET', path: '/replay' }); await act(wait);
+    assert.deepStrictEqual(ownerOf(second), ['B', 'B']);
+  });
+
+  await test('SDK routing: same-ID endpoint edit retires the frame/port (registry push) and late A result is dropped', async () => {
+    await reset(); await mount(); const first = connect();
+    guestSend(first, { id: 1, method: 'GET', path: '/events?since=synthetic-A-cursor' }); await act(wait);
+    await act(async () => { probe.$connection.set({ connectionId: 'A', mode: 'remote', baseUrl: 'https://synthetic-C.invalid' }); for (const f of [...regL]) f({ connectionId: 'A', reason: 'updated' }); await wait(); });
+    assert.strictEqual(first.port.closed, true, 'port closed synchronously by the lifecycle push');
+    pendingEvents[0].resolve({ syntheticOwner: 'A-old-endpoint', late: true }); await act(wait);
+    assert.deepStrictEqual(first.port.replies, []);
+    await act(wait); assert.strictEqual(bootstraps().length, 2, 'bootstrap repeated for the edited connection');
+    assert.notStrictEqual(document.querySelector('iframe'), first.frame);
+  });
+
+  await test('SDK routing: actual profile change retires; removal of another connection does not', async () => {
+    await reset(); await mount(); const first = connect();
+    await act(async () => { for (const f of [...regL]) f({ connectionId: 'Z', reason: 'removed' }); await wait(); });
+    assert.strictEqual(first.port.closed, false, 'unrelated registry change keeps the channel');
+    guestSend(first, { id: 1, method: 'GET', path: '/replay' }); await act(wait);
+    assert.deepStrictEqual(ownerOf(first), ['A']);
+    guestSend(first, { id: 2, method: 'GET', path: '/events?since=a' }); await act(wait);
+    await act(async () => { probe.$activeGatewayProfile.set('work'); await wait(); });
+    assert.strictEqual(first.port.closed, true, 'profile switch retired the old port in the same step');
+    pendingEvents[0].resolve({ syntheticOwner: 'A', profile: 'default', late: true }); await act(wait);
+    assert.strictEqual(first.port.replies.filter(r => r.id === 2).length, 0, 'late response after the profile switch is not delivered');
+    await act(wait); const boots = bootstraps(); assert.strictEqual(boots[boots.length - 1].profile, 'work');
+  });
+
+  await test('SDK routing: idle channel is retired by the watchdog when the authority moves silently', async () => {
+    await reset(); await mount(); const first = connect();
+    await act(async () => { probe.setApiRequestConnection('B'); await wait(700); });
+    assert.strictEqual(first.port.closed, true, 'retired without any guest traffic');
+  });
+
+  await test('SDK routing: unmount/disable closes the port, drops late results, unsubscribes watchers', async () => {
+    await reset(); await mount(); const first = connect();
+    guestSend(first, { id: 1, method: 'GET', path: '/events?since=a' }); await act(wait);
+    await act(() => root.unmount()); root = null;
+    assert.strictEqual(first.port.closed, true);
+    pendingEvents[0].resolve({ syntheticOwner: 'A', late: true }); await act(wait);
+    assert.deepStrictEqual(first.port.replies, []);
+    assert.strictEqual(regL.size, 0); assert.strictEqual(appliedL.size, 0);
+    const before = requests.length; await wait(700); assert.strictEqual(requests.length, before, 'no traffic after unmount');
+  });
+
+  await test('SDK routing: Desktop without lifecycle pushes fails closed (no bootstrap, no frame)', async () => {
+    await reset(); const saved = window.hermesDesktop.connections; window.hermesDesktop.connections = undefined;
+    try { await mount(); assert.strictEqual(document.querySelector('iframe'), null); assert.strictEqual(bootstraps().length, 0);
+      assert.ok(document.querySelector('[data-quest-state="lifecycleTitle"]')); }
+    finally { window.hermesDesktop.connections = saved; }
+    await reset();
+  });
+  if (root) await act(() => root.unmount());
+}
+
 (async () => {
   await unit();
+  if (process.env.QUEST_SDK_SRC) await sdkRouting(process.env.QUEST_SDK_SRC);
+  else console.log('skip SDK routing regression (set QUEST_SDK_SRC to the Hermes apps/desktop/src directory)');
   const transport = process.env.QUEST_TRANSPORT;
   if (transport) {
     for (const name of (process.env.QUEST_BROWSERS || 'chromium').split(',')) {
@@ -321,4 +609,5 @@ async function browserRun(name, transport) {
   } else console.log('skip browser run (set QUEST_TRANSPORT to run against a real backend)');
   console.log(`PASS ${passed} tests`);
   fs.rmSync(tmp, { recursive: true, force: true });
-})().catch(() => { process.exitCode = 1; });
+  process.exit(process.exitCode || 0);
+})().catch(error => { if (!error || !error.__reported) console.error(error && error.stack || error); process.exitCode = 1; });
