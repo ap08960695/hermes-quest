@@ -124,6 +124,9 @@ function showInspection(id) {
   if (UI) UI.close();
   if (UI) UI.menu(false);
   inspect.revision = D.meta.config_revision ?? null;
+  // Every successful hero inspection entry (canvas tap, chooser, overflow list, child link)
+  // shares one selected identity, so the marker and the card name the same character.
+  selectedScene = id;
   inspect.bot = id; inspect.session = null; inspect.choices = null; inspect.follow = true; inspect.key = '';
   renderInspection(); followCharacter(1); $('#character-close').focus();
 }
@@ -146,17 +149,22 @@ function layoutInspection(bodyWidth, bodyHeight) {
   resetInspectionLayout();
   const card=$('#character-card'), bar=$('#focus-bar');
   const frame=inspectionFrame(bodyWidth,bodyHeight);
-  const room=innerHeight-frame.top-bodyHeight-24;
+  // While the card is open the overflow badges collapse to one 44 px control stacked above it.
+  const dock=UI?.placeOverflow&&$('#scene-overflow')&&!$('#scene-overflow').hidden?52:0;
+  const room=innerHeight-frame.top-bodyHeight-24-dock;
   // If a bottom sheet cannot fit, reserve a side column for BOTH warning and
   // card. Keep the complete sprite at the chosen scale whenever it can fit.
   const sideWidth=Math.min(280,innerWidth-bodyWidth-36);
   if (room<62 && sideWidth>=96 && bodyHeight<=innerHeight-20) {
     card.style.width=bar.style.width=sideWidth+'px';bar.classList.add('inspection-side');
-    card.style.maxHeight=Math.max(62,Math.min(innerWidth<=760?160:240,innerHeight-bar.getBoundingClientRect().bottom-16))+'px';
+    card.style.maxHeight=Math.max(62,Math.min(innerWidth<=760?160:240,innerHeight-bar.getBoundingClientRect().bottom-16-dock))+'px';
+    UI?.placeOverflow?.();
     return {left:sideWidth+24,right:innerWidth-10,top:10,bottom:innerHeight-10};
   }
   card.style.maxHeight=Math.max(62,Math.min(innerWidth<=760?160:240,innerHeight*.28,room))+'px';
-  return {...frame,bottom:card.getBoundingClientRect().top-10};
+  UI?.placeOverflow?.();
+  const dockEl=$('#scene-overflow'),top=dockEl&&!dockEl.hidden?dockEl.getBoundingClientRect().top:card.getBoundingClientRect().top;
+  return {...frame,bottom:Math.min(top,card.getBoundingClientRect().top)-10};
 }
 function renderInspection() {
   const card = $('#character-card'); if (!card) return;
@@ -201,7 +209,7 @@ function renderInspection() {
   if(!inspect.choices&&children.length){const p=document.createElement('div');p.textContent=children.length+' child sessions'+(children.length>3?' · +'+(children.length-3)+' beyond three links':'');content.append(p);
     children.forEach((child,i)=>cardButton(content,'Child '+(i+1)+' · '+characterName(child.bot),()=>{
       if(S.heroes[child.bot]){showInspection(child.bot);inspect.session=child.session_ref;inspect.key='';renderInspection();}
-      else {inspect.bot=child.bot;inspect.session=child.session_ref;inspect.follow=false;inspect.key='';renderInspection();}
+      else {selectedScene=child.bot;inspect.bot=child.bot;inspect.session=child.session_ref;inspect.follow=false;inspect.key='';renderInspection();}
     }));}
   if (owns) $('#character-close').focus();
   layoutInspection(width*cam.zi,height*cam.zi);
@@ -1784,7 +1792,17 @@ function ui() {
 function click(e) {
   if(privacyPending)return;
   const picks=inspect.picks.filter(p=>e.clientX>=p.hit.left&&e.clientX<=p.hit.right&&e.clientY>=p.hit.top&&e.clientY<=p.hit.bottom).sort((a,b)=>b.order-a.order);
-  if(!picks.length)return clearInspection(true);
+  if(!picks.length){
+    // An empty tap first closes an open inspection. With none open it keeps main's
+    // region navigation: zoom to the nearest district and show Region details.
+    if(inspect.bot||inspect.choices)return clearInspection(true);
+    const v=view(), wx=(e.clientX*DPR-v.ox)/v.z, wy=(e.clientY*DPR-v.oy)/v.z;
+    const r=Object.entries(W.regions).sort((a,b)=>Math.hypot(a[1].spot[0]-wx,a[1].spot[1]-wy)-Math.hypot(b[1].spot[0]-wx,b[1].spot[1]-wy))[0];
+    if(!r)return;
+    Object.assign(cam,{tx:r[1].spot[0],ty:r[1].spot[1]-20,zi:2});
+    if(UI)UI.detail([r[1].label,'Quests: '+Object.values(S.tasks).filter(t=>t.region===r[0]).length],'Region');
+    return;
+  }
   if(picks.length===1){if(picks[0].type==='hero')showInspection(picks[0].id);else{clearInspection();quest(S.tasks[picks[0].id]);}return;}
   chooseCharacters(picks);
 }

@@ -87,11 +87,29 @@
       el.style.cssText='position:fixed;left:8px;bottom:8px;max-width:calc(100vw - 16px);display:flex;flex-wrap:wrap;gap:4px;z-index:5';
       el.setAttribute('aria-label','Characters outside the standing slots');document.body.append(el);}
     el.hidden=!groups.length;
-    const key=JSON.stringify(groups.map(g=>[g.region,g.label,g.count,g.blocked]));
-    if(key===overflowKey)return;overflowKey=key;el.replaceChildren();
-    for(const group of groups)button(el,group.label+' +'+group.count+(group.blocked?' · '+group.blocked+' blocked':''),()=>
-      listDialog(group.label+' overflow',()=>overflowGroups.find(g=>g.region===group.region)?.rows()||[],'No characters outside the standing slots'));
-    bounds();
+    placeOverflow();bounds();
+  }
+  // The fixed overflow badges and the character card both live bottom-left. While the card is open
+  // the per-region badges are replaced by one compact 44 px control stacked above it (same total
+  // count, list of every overflow entry), so no card text is covered. Only the buttons for the
+  // current mode exist in the DOM.
+  function placeOverflow() {
+    const el=$('#scene-overflow');if(!el)return;
+    const groups=overflowGroups,card=$('#character-card'),docked=visible(card)&&groups.length>0;
+    const key=JSON.stringify([docked,groups.map(g=>[g.region,g.label,g.count,g.blocked])]);
+    if(key!==overflowKey){overflowKey=key;el.replaceChildren();
+      const empty='No characters outside the standing slots';
+      if(docked){
+        const total=groups.reduce((n,g)=>n+g.count,0),blocked=groups.reduce((n,g)=>n+g.blocked,0);
+        const b=button(el,'+'+total+' outside'+(blocked?' · '+blocked+' blocked':''),()=>
+          listDialog('Overflow',()=>overflowGroups.flatMap(g=>g.rows().map(r=>({...r,summary:g.label+' · '+r.summary}))),empty));
+        b.setAttribute('aria-label',total+' characters outside the standing slots'+(blocked?', '+blocked+' blocked':'')+'. Open list');
+      } else for(const group of groups)button(el,group.label+' +'+group.count+(group.blocked?' · '+group.blocked+' blocked':''),()=>
+        listDialog(group.label+' overflow',()=>overflowGroups.find(g=>g.region===group.region)?.rows()||[],empty));
+    }
+    if(docked){const r=card.getBoundingClientRect();
+      el.style.left=r.left+'px';el.style.maxWidth=r.width+'px';el.style.bottom=Math.max(8,innerHeight-r.top+8)+'px';}
+    else{el.style.left='8px';el.style.maxWidth='calc(100vw - 16px)';el.style.bottom='8px';}
   }
   // Game symbols survive plain() so renderFeed does not erase their meaning.
   // Visible symbols come only from our atlas; no emoji reaches the detail font.
@@ -411,6 +429,6 @@
     });
     addEventListener('resize',resize);resize();
   }
-  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,selected,sceneOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
+  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,selected,sceneOverflow,placeOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
     diagnostics:()=>({grid,epoch,reserved,drawn})};
 })(window);
