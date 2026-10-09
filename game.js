@@ -5,6 +5,8 @@
 //  - integer screen positions + nearest-neighbour sprites (no shimmer), preloaded atlases (no flicker)
 //  - attacks are anticipation -> swing -> impact (hit-stop + shake + flash) -> recover
 'use strict';
+// D2 facade: construction owns all game state; registration does not boot.
+function createGame({autoBoot = true} = {}) {
 const $ = s => document.querySelector(s);
 const cv = $('#stage'), cx = cv.getContext('2d');
 const DPR = Math.min(2, window.devicePixelRatio || 1);
@@ -1855,5 +1857,59 @@ function heroDetails(h) {
     'Historical usage may differ until reload (backend limitations)',
     ...Object.keys(S.diagnostics).filter(key=>key.startsWith('Rest ')),h.bubble?.text||'-'];
 }
-if(UI){UI.init();UI.status('Loading activity…','loading');}
-boot();
+// Keep live payloads off DOM/storage. These references are for isolated tests;
+// the browser only publishes them when its harness explicitly opts in.
+const facade = {
+  $, ACTIONS, DPR, S, STRIDE, UI, WALK_V, cam, cv, cx, eventKeys, inspect,
+  captainId, cloneState,
+  get D(){return D}, set D(v){D=v},
+  get W(){return W}, set W(v){W=v},
+  get FRIENDS(){return FRIENDS}, set FRIENDS(v){FRIENDS=v},
+  get HMETA(){return HMETA}, set HMETA(v){HMETA=v},
+  get MMETA2(){return MMETA2}, set MMETA2(v){MMETA2=v},
+  get MON2(){return MON2}, set MON2(v){MON2=v},
+  get SPR(){return SPR}, set SPR(v){SPR=v},
+  get SPRV(){return SPRV}, set SPRV(v){SPRV=v},
+  get calm(){return calm}, set calm(v){calm=v},
+  get checkpoint(){return checkpoint}, set checkpoint(v){checkpoint=v},
+  get cursor(){return cursor}, set cursor(v){cursor=v},
+  get following(){return following}, set following(v){following=v},
+  get hudT(){return hudT}, set hudT(v){hudT=v},
+  get lastPollOk(){return lastPollOk}, set lastPollOk(v){lastPollOk=v},
+  get liveFeed(){return liveFeed}, set liveFeed(v){liveFeed=v},
+  get pollBusy(){return pollBusy}, set pollBusy(v){pollBusy=v},
+  get pollFailures(){return pollFailures}, set pollFailures(v){pollFailures=v},
+  get pollStale(){return pollStale}, set pollStale(v){pollStale=v},
+  get pollTimer(){return pollTimer}, set pollTimer(v){pollTimer=v},
+  get privacyPending(){return privacyPending}, set privacyPending(v){privacyPending=v},
+  get raf(){return raf}, set raf(v){raf=v},
+  get selectedScene(){return selectedScene}, set selectedScene(v){selectedScene=v},
+  get apply(){return apply}, set apply(v){apply=v},
+  get connection(){return connection}, set connection(v){connection=v},
+  get reset(){return reset}, set reset(v){reset=v},
+  get ui(){return ui}, set ui(v){ui=v},
+  boot, characterName, chooseCharacters, clearInspection, click, connectedStatus,
+  draw, engage, eventKey, finishRestMotion, followCharacter, formation, friends,
+  goHome, goLive, hero, heroDialog, heroStatus, hud, inspectionLinks, json, later,
+  laterHero, loadReplay, loop, mergeDelta, monster, monsterPose, mstyle, mtier, mtype,
+  normalizeData, order, overflowed, parentLabel, plazaOf, pollEvents, pollFailed,
+  portal, px, quest, regionOf, renderFeed, renderInspection, resize, restLocked,
+  say, selectedSession, showInspection, spawnMonster, spotOf, startHangout,
+  stepHero, strike, task, update, view, wake, walkTo
+};
+if (autoBoot) {
+  if(UI){UI.init();UI.status('Loading activity…','loading');}
+  boot();
+}
+return facade;
+}
+(globalThis.HQModules ||= {}).createGame = createGame;
+if (globalThis.__questAutoBoot !== false) {
+  const game = createGame();
+  if (window.__questTestGlobals === true) {
+    window.__questTest = game;
+    for (const name of Object.keys(game)) Object.defineProperty(window, name, {
+      configurable: true, get: () => game[name], set: value => {game[name] = value;}
+    });
+  }
+}

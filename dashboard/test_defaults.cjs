@@ -10,7 +10,7 @@ const shippedCombos = Object.keys(heroMeta.source_checks);
 assert.strictEqual(shippedCombos.length, 21, 'all reviewed M1 sheets must be listed');
 assert.deepStrictEqual([...shippedCombos].sort(), fs.readdirSync(path.join(root, 'assets/px/heroes'))
   .filter(f => f.endsWith('.png')).map(f => f.slice(0, -4)).sort(), 'manifest must match shipped sheets');
-const source = fs.readFileSync(path.join(root, 'game.js'), 'utf8').replace(/\nboot\(\);\s*$/, '\n');
+const {createClient} = require('../tools/parity/loader.cjs');
 const copy = value => JSON.parse(JSON.stringify(value));
 function client(search = '', pathname = '/index.html', replay = demo, manifest = heroMeta) {
   const elements = new Map(), calls = [], images = [], noop = () => {};
@@ -29,8 +29,7 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
     }};
   vm.createContext(sandbox);
   const connected = require('./ui_test_support.cjs')(sandbox, el);
-  vm.runInContext(source, sandbox);
-  const run = code => vm.runInContext(code, sandbox);
+  const {run} = createClient({root, sandbox});
   // Asset drawing/UI are browser-tested separately; keep the actual boot,
   // source selection, snapshot validation, timeline and polling code here.
   run('ui=()=>{};');
@@ -102,7 +101,7 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
   // replay must be ignored, not silently substituted or overwritten by mock.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'quest-default-'));
   try {
-    for (const f of ['game.js','quest/c-ui.js','npcs.js','assets/px/npcs/meta.json','data/world.json','tools/backtest.js','tools/mock.py','tools/extract.py']) {
+    for (const f of ['index.html','game.js','quest/c-ui.js','npcs.js','assets/px/npcs/meta.json','data/world.json','tools/backtest.js','tools/parity/loader.cjs','tools/mock.py','tools/extract.py']) {
       const dest=path.join(dir,f); fs.mkdirSync(path.dirname(dest),{recursive:true}); fs.copyFileSync(path.join(root,f),dest);
     }
     const exec = (command,args,expected=0) => {

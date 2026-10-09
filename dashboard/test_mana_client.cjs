@@ -7,9 +7,7 @@ const sandbox={console,URLSearchParams,Date,Math,Set,Map,Number,Object,JSON,Prom
   document:{querySelector:el,querySelectorAll:()=>[],body:el('body')},window:{devicePixelRatio:1},
   innerWidth:1440,innerHeight:900,requestAnimationFrame:noop,addEventListener:noop,setTimeout:noop,clearTimeout:noop,performance:{now:()=>0}};
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(__dirname,'../quest/c-ui.js'),'utf8'),sandbox);
-vm.runInContext(fs.readFileSync(path.join(__dirname,'../game.js'),'utf8').replace(/\nboot\(\);\s*$/,'\n'),sandbox);
-const run=code=>vm.runInContext(code,sandbox);
+const {run}=require('../tools/parity/loader.cjs').createClient({sandbox});
 sandbox.world=JSON.parse(fs.readFileSync(path.join(__dirname,'../data/world.json')));
 run(`W=world; loadReplay({meta:{from_:0,to:100,config_revision:'ledger'},bots:[{id:'worker',region:'forge',wallet:'codex'}],tasks:[{id:'q',stage:'BUILD'}],events:[{id:'estimate',t:1,task:'q',bot:'worker',kind:'mana',tokens:1000,estimated:true,basis:'chars'}],cursor:'c1'});`);
 const refund={events:[{id:'refund',t:2,task:'q',bot:'worker',kind:'mana',tokens:-800,estimated:true,basis:'usage',correction:true}],tasks:[],bots:[],meta:{config_revision:'ledger'},cursor:'c2'};

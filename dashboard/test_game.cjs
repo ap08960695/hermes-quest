@@ -8,9 +8,7 @@ const sandbox={console,URLSearchParams,Date,Math,Set,Map,Number,Object,JSON,Prom
   innerWidth:1440,innerHeight:900,requestAnimationFrame:noop,addEventListener:noop,setTimeout:noop,clearTimeout:noop,performance:{now:()=>0}};
 vm.createContext(sandbox);
 const connected=require('./ui_test_support.cjs')(sandbox,el);
-const src=fs.readFileSync(path.join(__dirname,'../game.js'),'utf8').replace(/\nboot\(\);\s*$/,'\n');
-vm.runInContext(src,sandbox);
-const run=code=>vm.runInContext(code,sandbox);
+const {run}=require('../tools/parity/loader.cjs').createClient({sandbox});
 sandbox.world=JSON.parse(fs.readFileSync(path.join(__dirname,'../data/world.json')));
 run(`W=world; D={meta:{from_:0,to:100,captain:'chief',classes:{builder:'ranger'},regions:{ranger:'forest'},stage_regions:{PLAN:'forge'},show_titles:false},bots:[{id:'builder-one',name:'Builder',cls:'warrior',region:'forge',wallet:'codex'}],tasks:[{id:'q',title:'must hide',campaign:'synthetic',stage:'BUILD'}],events:[]}; normalizeData(); reset(0);`);
 assert.strictEqual(run('captainId()'),'chief');

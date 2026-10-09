@@ -33,18 +33,10 @@ function load(events = [], extra = {}, w = world) {
     setTimeout: f => { timers.set(++timerId, f); return timerId; }, clearTimeout: id => timers.delete(id),
     requestAnimationFrame: () => ++timerId, cancelAnimationFrame: noop,
     fetch: async url => { requests.push(url); const r = responses.shift(); if (!r) throw Error('Unexpected fetch: ' + url); return {ok: true, json: async () => copy(r)}; }});
-  vm.runInContext(fs.readFileSync(path.join(root, 'quest/c-ui.js'), 'utf8'), box, {filename: 'quest/c-ui.js'});
-  const source = fs.readFileSync(path.join(root, 'game.js'), 'utf8');
-  assert.match(source, /\bboot\(\);\s*$/);
-  vm.runInContext(source.replace(/\bboot\(\);\s*$/, '') + `\n globalThis.game = {
-    S, hero, task, apply, reset, mergeDelta, loadReplay, pollEvents, goLive, update, stepHero,
-    restLocked, laterHero, startHangout, engage, order, goHome, finishRestMotion,
-    get D(){return D}, get checkpoint(){return checkpoint}, get cursor(){return cursor},
-    flags(live,follow,play){liveFeed=live;following=follow;S.play=play},
-    setup(w,d){W=w;loadReplay(d);reset(0);S.play=false},
-    bounds(){return Object.values(S.mana).every(v=>v>=0&&v<=100)}
-  };`, box, {filename: 'game.js'});
-  const g = box.game;
+  const {G: g} = require('./parity/loader.cjs').createClient({root, sandbox: box});
+  g.flags = (live,follow,play) => {g.liveFeed=live;g.following=follow;g.S.play=play;};
+  g.setup = (w,d) => {g.W=w;g.loadReplay(d);g.reset(0);g.S.play=false;};
+  g.bounds = () => Object.values(g.S.mana).every(v=>v>=0&&v<=100);
   g.setup(copy(w), replay(events, extra));
   g.responses = responses; g.requests = requests; g.timers = timers;
   g.now = value => { now = value; };
