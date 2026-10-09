@@ -49,14 +49,31 @@ fixed phrase, never as response bodies or paths.
 - Plugin is opt-in (`defaultEnabled: false`). Route `/hermes-quest`, sidebar item, command palette entry.
 - States: loading, unavailable (404/503), sign-in needed (401/403), offline, invalid bootstrap
   (fail closed: no frame is mounted unless CSP, nonce meta and bridge marker are present), each with Retry.
-- A connection or profile change refetches the bootstrap and replaces the frame (`key = nonce`);
-  late results from a retired generation are dropped. Unmount closes the port and stops all traffic.
+- Owner/lifecycle binding (route guard in `plugin.js`). `ctx.rest` is not pinned to an owner: every call
+  is routed by the host's current request scope (registry connection + profile), and the SDK atom
+  `host.state.connectionId` is a lagging descriptor projection. The plugin therefore pins the owner from
+  `host.activeConnectionId()` + `host.state.profile` per bootstrap generation, re-checks it in the same
+  synchronous tick as every `ctx.rest` call and again before any result is delivered, and on mismatch
+  closes the port with no reply (nothing from the old owner is delivered, nothing is re-routed to the
+  new one). It also retires on profile/descriptor changes, on the registry pushes
+  (`connections.onChanged` for the pinned id or a malformed payload, `onConnectionApplied`) and on a
+  500 ms watchdog while idle, then re-bootstraps for the new owner ("Quest reconnecting").
+- Fail closed: if this Desktop build lacks `activeConnectionId()` or the lifecycle push needed for the
+  pinned owner (`connections.onChanged` for a registry id, `onConnectionApplied` for an unpinned owner),
+  Quest shows "Desktop update needed" and mounts nothing. The local owner needs no push.
+- Residual window: a transition that is neither visible through the SDK nor announced by a push within the
+  watchdog interval is not detectable by a plugin. Backend responses are read-only and per-owner, and
+  results are re-verified before delivery, so the exposure is one in-flight request issued in that window.
+- Unmount closes the port, unsubscribes the watchers and stops all traffic.
 - The host accent (`--ui-accent`) is resolved to `#rrggbb` in the parent and pushed to the guest as `--ui-accent` and `--gold`.
 
 ## Tests
 
     # unit only
     QUEST_NODE_MODULES=<node_modules with esbuild, react, react-dom, playwright-core> node desktop/test_plugin.cjs
+    # + owner/lifecycle routing regression on the actual Hermes Desktop SDK sources (api/client, api/plugins,
+    #   connectionId projection, SandboxedFrame; needs jsdom + nanostores + @nanostores/react too)
+    QUEST_SDK_SRC=<hermes-agent>/apps/desktop/src QUEST_NODE_MODULES=... node desktop/test_plugin.cjs
     # + real browsers against a running backend transport (needs the transport branch, FastAPI)
     QUEST_TRANSPORT=http://127.0.0.1:PORT/api/plugins/hermes-quest QUEST_BROWSERS=chromium,firefox node desktop/test_plugin.cjs
 
