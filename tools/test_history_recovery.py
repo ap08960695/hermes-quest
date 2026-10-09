@@ -130,6 +130,193 @@ m.sample_once(m.resolve_settings({'hermes_home':sys.argv[2]},env={}),2000000000)
         self.assertTrue(all(r['prev'] == 'limited' for r in self.records()))
         self.assertEqual(self.sample()['written'], 0)
 
+    def test_astral_status_batch_crash_preserves_every_resume(self):
+        self.settings.update(history_max_bytes=4096, history_keep=0)
+        bots = dict.fromkeys(('\U00010400' * 59 + f'{i:05}' for i in range(500)), 'active')
+        self.status(bots)
+        self.assertLess(self.source.stat().st_size, bh.MAX_STATUS_BYTES)
+        self.sample()
+        self.status(dict.fromkeys(bots, 'limited'))
+        with patch.object(bh, '_save_state', side_effect=OSError('checkpoint failed')):
+            with self.assertRaises(OSError):
+                self.sample()
+        self.assertEqual(len((self.directory / bh.FILE).read_bytes().splitlines()), 500)
+        recovered_count = len(self.records())
+        self.status(bots)
+        self.assertEqual(self.sample()['written'], 500)
+        self.assertEqual(recovered_count, 500)
+        records = self.records()
+        self.assertEqual({r['profile'] for r in records}, set(bots))
+        self.assertTrue(all(r['status'] == 'active' and r['prev'] == 'limited' for r in records))
+        self.assertEqual(self.sample()['written'], 0)
+
+    def test_mixed_astral_batch_crash_preserves_failovers_and_statuses(self):
+        self.settings.update(history_max_bytes=4096, history_keep=0)
+        db = self.database()
+        names = ['\U00010400' * 59 + f'{i:05}' for i in range(300)]
+        self.status(dict.fromkeys(names, 'active'))
+        self.sample()
+        for cid in range(1, 201):
+            db.execute('INSERT INTO task_comments VALUES(?,?,?)',
+                       (cid, self.now, f'[failover] {names[0]} limited -> {names[1]}'))
+        db.commit()
+        self.status(dict.fromkeys(names, 'limited'))
+        with patch.object(bh, '_save_state', side_effect=OSError('checkpoint failed')):
+            with self.assertRaises(OSError):
+                self.sample()
+        self.assertEqual(len(self.records()), 500)
+        self.status(dict.fromkeys(names, 'active'))
+        self.assertEqual(self.sample()['written'], 300)
+        state = json.loads((self.directory / bh.STATE).read_text())
+        self.assertEqual(state['comment'], 200)
+        self.assertTrue(all(r['prev'] == 'limited' for r in self.records()))
+        self.assertEqual(self.sample()['written'], 0)
+
+    def test_failed_history_sync_retry_never_checkpoints_without_resync(self):
+        self.status({'dev': 'active'})
+        self.sample()
+        checkpoint = (self.directory / bh.STATE).read_bytes()
+        self.status({'dev': 'limited'})
+        real_sync = os.fsync
+        path = self.directory / bh.FILE
+
+        def fail_history(fd):
+            if os.path.samestat(os.fstat(fd), path.stat()):
+                raise OSError('synthetic history fsync failure')
+            return real_sync(fd)
+
+        with patch.object(bh.os, 'fsync', side_effect=fail_history):
+            with self.assertRaises(OSError):
+                self.sample()
+            self.assertEqual((self.directory / bh.STATE).read_bytes(), checkpoint)
+            # Complete lines are visible but still have not been confirmed durable.
+            with self.assertRaises(OSError):
+                self.sample()
+            self.assertEqual((self.directory / bh.STATE).read_bytes(), checkpoint)
+        self.assertEqual(self.sample()['written'], 0)
+        self.assertEqual(json.loads((self.directory / bh.STATE).read_text())['last']['dev'], 'limited')
+        self.status({'dev': 'active'})
+        self.assertEqual(self.sample()['written'], 1)
+        self.assertEqual([r['status'] for r in self.records()], ['limited', 'active'])
+
+    def test_recovery_directory_sync_failure_blocks_checkpoint_and_rotation(self):
+        for rotate in (False, True):
+            with self.subTest(rotate=rotate):
+                self.settings.update(history_max_bytes=4096 if rotate else 262144, history_keep=0)
+                self.status({'dev': 'active'})
+                self.sample()
+                checkpoint = (self.directory / bh.STATE).read_bytes()
+                self.status({'dev': 'limited'})
+                with patch.object(bh, '_save_state', side_effect=OSError('checkpoint failed')):
+                    with self.assertRaises(OSError):
+                        self.sample()
+                path = self.directory / bh.FILE
+                if rotate:
+                    with path.open('ab') as f:
+                        f.write(b'\n' * 4096)
+                    self.status({'dev': 'active'})
+                history = path.read_bytes()
+                real_sync = os.fsync
+
+                def fail_directory(fd):
+                    if os.path.samestat(os.fstat(fd), self.directory.stat()):
+                        raise OSError('synthetic directory fsync failure')
+                    return real_sync(fd)
+
+                with patch.object(bh.os, 'fsync', side_effect=fail_directory):
+                    with self.assertRaises(OSError):
+                        self.sample()
+                self.assertEqual((self.directory / bh.STATE).read_bytes(), checkpoint)
+                self.assertEqual(path.read_bytes(), history)
+                self.assertEqual(self.sample()['written'], int(rotate))
+                self.assertEqual(self.sample()['written'], 0)
+                path.unlink()
+
+    def test_history_sync_failure_prevents_rotation_of_recovered_batch(self):
+        self.settings.update(history_max_bytes=4096, history_keep=1)
+        self.status({'dev': 'active'})
+        self.sample()
+        checkpoint = (self.directory / bh.STATE).read_bytes()
+        self.status({'dev': 'limited'})
+        with patch.object(bh, '_save_state', side_effect=OSError('checkpoint failed')):
+            with self.assertRaises(OSError):
+                self.sample()
+        path = self.directory / bh.FILE
+        with path.open('ab') as f:
+            f.write(b'\n' * 4096)
+        history = path.read_bytes()
+        self.status({'dev': 'active'})
+        real_sync = os.fsync
+
+        def fail_history(fd):
+            if os.path.samestat(os.fstat(fd), path.stat()):
+                raise OSError('synthetic history fsync failure')
+            return real_sync(fd)
+
+        with patch.object(bh.os, 'fsync', side_effect=fail_history):
+            with self.assertRaises(OSError):
+                self.sample()
+        self.assertEqual((self.directory / bh.STATE).read_bytes(), checkpoint)
+        self.assertEqual(path.read_bytes(), history)
+        self.assertFalse(path.with_name(bh.FILE + '.1').exists())
+        self.assertEqual(self.sample()['written'], 1)
+        self.assertEqual([r['status'] for r in self.records()], ['limited', 'active'])
+
+    def test_failed_rotation_directory_sync_retries_retained_history_before_checkpoint(self):
+        self.settings.update(history_max_bytes=4096, history_keep=1)
+        self.status({'dev': 'limited'})
+        self.sample()
+        path = self.directory / bh.FILE
+        rotated = path.with_name(bh.FILE + '.1')
+        with path.open('ab') as f:
+            f.write(b'\n' * 4096)
+        self.status({'dev': 'active'})
+        checkpoint = (self.directory / bh.STATE).read_bytes()
+        real_sync = os.fsync
+
+        def fail_after_rotation(fd):
+            if os.path.samestat(os.fstat(fd), self.directory.stat()) and rotated.exists() and not path.exists():
+                raise OSError('synthetic rotation directory fsync failure')
+            return real_sync(fd)
+
+        with patch.object(bh.os, 'fsync', side_effect=fail_after_rotation):
+            with self.assertRaises(OSError):
+                self.sample()
+        self.assertFalse(path.exists())
+        self.assertTrue(rotated.exists())
+        self.assertEqual((self.directory / bh.STATE).read_bytes(), checkpoint)
+
+        def fail_retained(fd):
+            if os.path.samestat(os.fstat(fd), rotated.stat()):
+                raise OSError('synthetic retained history fsync failure')
+            return real_sync(fd)
+
+        with patch.object(bh.os, 'fsync', side_effect=fail_retained):
+            with self.assertRaises(OSError):
+                self.sample()
+        self.assertEqual((self.directory / bh.STATE).read_bytes(), checkpoint)
+        self.assertEqual(self.sample()['written'], 0)
+        self.assertEqual([r['status'] for r in self.records()], ['limited', 'active'])
+        self.assertEqual(self.sample()['written'], 0)
+
+    def test_oversized_recovery_refuses_to_checkpoint_a_truncated_prefix(self):
+        self.settings.update(history_max_bytes=4096, history_keep=0)
+        self.status({'dev': 'active'})
+        self.sample()
+        checkpoint = (self.directory / bh.STATE).read_bytes()
+        path = self.directory / bh.FILE
+        rec = dict(v=1, seq=2000000000000, ts=self.now, type='status',
+                   profile='dev', status='limited', prev='active')
+        # Beyond the supported writer's batch bound: simulate external growth.
+        cap = 4096 * 2 + 500 * 2048 + 65536
+        path.write_bytes(b'\n' * (cap + 1) + json.dumps(rec).encode() + b'\n')
+        before = (path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+        self.assertEqual([r['status'] for r in self.records()], ['limited'])
+        with self.assertRaises(ValueError):
+            self.sample()
+        self.assertEqual((self.directory / bh.STATE).read_bytes(), checkpoint)
+        self.assertEqual((path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest()), before)
+
     def test_torn_tail_is_not_a_commit_and_is_discarded_before_append(self):
         self.status({'dev': 'limited'})
         self.sample()

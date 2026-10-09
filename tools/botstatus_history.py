@@ -48,6 +48,10 @@ STATE = 'state.json'
 LOCK = '.lock'
 MAX_STATUS_BYTES = 1024 * 1024
 MAX_BATCH = 500
+# JSON ensure_ascii uses 12 bytes per astral codepoint. A failover has two
+# 64-codepoint IDs (1536 bytes), plus keys/enums/bounded numbers and a newline.
+# Enforce this budget at append time so recovery's whole-file bound is sound.
+MAX_RECORD_BYTES = 2048
 MAX_CONFIG_BYTES = MAX_STATUS_BYTES
 MAX_STATE_BYTES = MAX_STATUS_BYTES
 REASSIGN_RE = re.compile(r'^\[reassign-done\]\s+([\w-]{1,64})\s+->\s+([\w-]{1,64})\b')
@@ -176,14 +180,19 @@ def _record(raw, known=None):
     return None
 
 
-def _read_records_unlocked(settings):
+def _read_records_unlocked(settings, recovery=False):
     """Caller owns the lock; only newline-terminated records are committed."""
-    cap = settings['history_max_bytes'] * 2 + MAX_BATCH * 512 + 65536
+    cap = settings['history_max_bytes'] * 2 + MAX_BATCH * MAX_RECORD_BYTES + 65536
     seen = {}
     for path in _files(settings):
         try:
-            data, skipped = _read_regular(path, cap, tail=True)
+            data, skipped = _read_regular(path, cap, tail=not recovery)
+        except FileNotFoundError:
+            continue
         except (OSError, ValueError):
+            if recovery:
+                # Never acknowledge a suffix after silently losing its prefix.
+                raise
             continue
         lines = data.split(b'\n')[:-1]
         if skipped:
@@ -244,7 +253,7 @@ def _load_state(settings):
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
         pass
     checkpoint = state['seq']
-    for rec in _read_records_unlocked(settings):
+    for rec in _read_records_unlocked(settings, recovery=True):
         state['seq'] = max(state['seq'], rec['seq'])
         if rec['seq'] > checkpoint and rec['type'] == 'status':
             state['last'][rec['profile']] = rec['status']
@@ -255,6 +264,21 @@ def _load_state(settings):
 
 def _save_state(settings, state):
     directory = Path(settings['history_dir'])
+    # Recovered complete lines may only be page-cache-visible after a failed
+    # append fsync. Confirm all retained files and their names before either
+    # checkpoint path can advance or rotation can discard recovered records.
+    for path in _files(settings):
+        try:
+            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        except FileNotFoundError:
+            continue
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError('not a regular history file')
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    _sync_directory(directory)
     tmp = directory / (STATE + '.tmp')
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as f:
@@ -342,6 +366,7 @@ def _rotate(settings):
     keep = settings['history_keep']
     if keep <= 0:
         base.unlink()
+        _sync_directory(base.parent)
         return
     oldest = base.with_name(f'{FILE}.{keep}')
     if oldest.exists():
@@ -351,6 +376,7 @@ def _rotate(settings):
         if src.exists():
             os.replace(src, base.with_name(f'{FILE}.{i + 1}'))
     os.replace(base, base.with_name(f'{FILE}.1'))
+    _sync_directory(base.parent)
 
 
 def sample_once(settings, now=None):
@@ -392,7 +418,10 @@ def sample_once(settings, now=None):
         lines = []
         for rec in pending:
             state['seq'] = max(state['seq'] + 1, int(now * 1000))
-            lines.append(json.dumps(dict(rec, seq=state['seq']), separators=(',', ':')))
+            line = json.dumps(dict(rec, seq=state['seq']), separators=(',', ':'))
+            if len(line.encode('utf-8')) + 1 > MAX_RECORD_BYTES:
+                raise ValueError('history record exceeds byte budget')
+            lines.append(line)
         if lines:
             _repair_tail(settings)
             base = directory / FILE
