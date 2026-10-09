@@ -13,7 +13,7 @@ const root=path.resolve(__dirname,'..');
   await new Promise(r=>server.listen(0,'127.0.0.1',r));
   let browser;
   try{
-    browser=await chromium.launch();const page=await browser.newPage({viewport:{width:800,height:600}});
+    browser=require('./parity/browser_loader.cjs').enable(await chromium.launch());const page=await browser.newPage({viewport:{width:800,height:600}});
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     await page.waitForFunction(()=>typeof S!=='undefined'&&Object.keys(MON2).length>=18&&Object.keys(S.heroes).length);

@@ -31,7 +31,7 @@ const records=[];
   const url='http://127.0.0.1:'+server.address().port;
   try {
     for(const [engine,type] of Object.entries({chromium,firefox})){
-      const browser=await type.launch({headless:true});
+      const browser=require('./parity/browser_loader.cjs').enable(await type.launch({headless:true}));
       try {
         for(const [width,height] of [[1280,800],[390,844],[375,667],[320,568],[667,375],[568,320]]){
           const page=await browser.newPage({viewport:{width,height}}),errors=[];

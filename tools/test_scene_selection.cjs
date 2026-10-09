@@ -14,7 +14,7 @@ const server=http.createServer((req,res)=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const records=[];
   try {
     for(const [engine,type] of Object.entries({chromium,firefox})){
-      const browser=await type.launch({headless:true});
+      const browser=require('./parity/browser_loader.cjs').enable(await type.launch({headless:true}));
       try {
         for(const [width,height] of [[1280,800],[375,667],[320,568]]){
           const page=await browser.newPage({viewport:{width,height}}),errors=[];

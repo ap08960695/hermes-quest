@@ -4,7 +4,7 @@
 const fs = require('fs'), path = require('path'), vm = require('vm'), assert = require('assert');
 const root = path.resolve(__dirname, '..');
 const fixture = JSON.parse(fs.readFileSync(0, 'utf8'));
-const source = fs.readFileSync(path.join(root, 'game.js'), 'utf8').replace(/\nboot\(\);\s*$/, '\n');
+const {createClient} = require('../tools/parity/loader.cjs');
 const world = JSON.parse(fs.readFileSync(path.join(root, 'data/world.json')));
 const copy = v => JSON.parse(JSON.stringify(v));
 const noop = () => {}, elements = new Map();
@@ -18,8 +18,7 @@ const box = {console, URLSearchParams, AbortController, Date, Math, setTimeout: 
   window: {devicePixelRatio: 1}, world, initial: copy(fixture.initial)};
 vm.createContext(box);
 const connected = require('./ui_test_support.cjs')(box, el);
-vm.runInContext(source, box);
-const run = s => vm.runInContext(s, box);
+const {run} = createClient({root, sandbox: box});
 const state = () => run('JSON.stringify({D,checkpoint,cursor,S,keys:[...eventKeys],following,play:S.play,privacyPending})');
 run('W=world; loadReplay(initial); reset(initial.meta.to); liveFeed=true; following=true; S.play=true;');
 assert.strictEqual(run('captainId()'), fixture.initial.meta.captain);

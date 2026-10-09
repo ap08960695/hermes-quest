@@ -21,36 +21,13 @@ function inStandingArea(x,y) {
   });
 }
 
-// Minimal DOM/canvas stubs: game.js runs its update loop unchanged, drawing is a no-op.
-const noop = () => {}, el = () => ({style: {}, classList: {toggle: noop}, set innerHTML(v) {}, set textContent(v) {}, set value(v) {},
-  addEventListener: noop, setPointerCapture: noop, getContext: () => new Proxy({}, {get: () => noop})});
-global.document = {querySelector: el, querySelectorAll: () => [], body: el()};
-global.window = global; global.devicePixelRatio = 1; global.innerWidth = 1440; global.innerHeight = 860;
-global.addEventListener = noop; global.requestAnimationFrame = noop; global.performance = {now: () => 0};
-global.Image = class { set src(v) { setTimeout(() => this.onerror && this.onerror(), 0); } };
-global.fetch = async u => ({ok: true, json: async () => (u.includes('replay') ? D : u.includes('world') ? W : null)});
-const timers = []; global.setTimeout = (f, ms) => timers.push([ms / 1000, f]);
-const src = fs.readFileSync(path.join(root, 'game.js'), 'utf8').replace(/\nboot\(\);\s*$/, '\n');
-global.QuestCUI = require(path.join(root, 'quest/c-ui.js'));
-// M4 villagers: npcs.js is loaded like index.html does (global NPCS); init() replaces the fetch in NPCS.load
-const NPCS = global.NPCS = require(path.join(root, 'npcs.js'));
-const NPC_META = JSON.parse(fs.readFileSync(path.join(root, 'assets/px/npcs/meta.json')));
-const npcOk = NPCS.init(W, D.meta, NPC_META);
-// Own RNG for the headless simulation, including hero/social/FX choices. Do not change
-// the browser's Math or NPCS' independent RNG. BACKTEST_SEED selects another reproducible run.
+// Isolated loader: drawing is a no-op; host globals and RNG remain untouched.
 const seed = process.env.BACKTEST_SEED ?? '1';
 if (!/^\d+$/.test(seed) || !Number.isSafeInteger(Number(seed)) || Number(seed) > 0xffffffff) {
   throw new Error('BACKTEST_SEED must be an unsigned 32-bit integer');
 }
-let rng = Number(seed) >>> 0;
-const replayMath = Object.create(Math);
-replayMath.random = () => {
-  rng = (Math.imul(rng, 1664525) + 1013904223) >>> 0;
-  return rng / 0x100000000;
-};
-// game.js is trusted repository source; no replay/seed text is interpolated into code.
-const G = new Function('Math', src + '\nreturn {S, update, reset, ACTIONS, STRIDE, WALK_V, get D(){return D}, set D(v){D=v}, set W(v){W=v}, get W(){return W}};')(replayMath);
-G.D = D; G.W = W;
+const {G, NPCS, npcOk, timers} = require('./parity/loader.cjs').load({root, data: D, seed});
+const NPC_META = JSON.parse(fs.readFileSync(path.join(root, 'assets/px/npcs/meta.json')));
 
 // Road mask from tools/roads.py (white = road). Off-road check uses the hand-placed path polylines instead
 // (the painted roads are the source of truth for the graph), so we verify heroes stay on those polylines.

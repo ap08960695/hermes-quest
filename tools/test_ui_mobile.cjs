@@ -34,7 +34,7 @@ const server=http.createServer((req,res)=>{
   if(name.includes('..')){res.writeHead(404);res.end();return;}
   try{const data=baseline?cp.execFileSync('git',['show',base+':'+name.slice(1)],{cwd:root,maxBuffer:32*1024*1024,stdio:['ignore','pipe','ignore']}):fs.readFileSync(path.join(root,name));res.setHeader('Content-Type',mime[path.extname(name)]||'application/octet-stream');res.end(data);}catch{res.writeHead(404);res.end();}
 });
-async function ready(page,url){await page.goto(url);await page.waitForFunction(()=>typeof S==='object'&&typeof W==='object'&&W&&typeof loop.last==='number',{},{timeout:30000});}
+async function ready(page,url){await page.addInitScript(require('./parity/browser_loader.cjs').init);await page.goto(url);await page.waitForFunction(()=>typeof S==='object'&&typeof W==='object'&&W&&typeof loop.last==='number',{},{timeout:30000});}
 // Navigation only: relocated controls retain their original behavioral gates.
 async function openGroup(page,id){
   if(await page.locator('#menu').isHidden())await page.click('#menu-toggle');

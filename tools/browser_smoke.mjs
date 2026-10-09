@@ -840,7 +840,7 @@ execFileSync('python3', [path.join('tools', 'mock.py')], {cwd: root, stdio: 'inh
 const server = await serve();
 const base = `http://127.0.0.1:${server.address().port}`;
 console.log(`serving ${root} at ${base} (${browserName})`);
-const browser = await playwright[browserName].launch();
+const browser = createRequire(import.meta.url)('./parity/browser_loader.cjs').enable(await playwright[browserName].launch());
 console.log(`${browserName} ${browser.version()}`);
 let failed = 0;
 for (const vp of args.includes('--inspect-only')||args.includes('--regressions-only')?[]:VIEWPORTS) {

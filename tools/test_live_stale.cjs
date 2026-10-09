@@ -3,7 +3,7 @@
 // fetch and checks the indicator state, reasons, recovery and that no payload/cursor/URL is shown.
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm'), assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '..');
-const source = fs.readFileSync(path.join(root, 'game.js'), 'utf8').replace(/\nboot\(\);\s*$/, '\n');
+const {createClient} = require('./parity/loader.cjs');
 const world = JSON.parse(fs.readFileSync(path.join(root, 'data/world.json')));
 const demo = JSON.parse(fs.readFileSync(path.join(root, 'data/demo.json')));
 const noop = () => {}, elements = new Map();
@@ -17,8 +17,7 @@ const box = {console, URLSearchParams, AbortController, Date, Math, setTimeout: 
   window: {devicePixelRatio: 1}, world, initial: JSON.parse(JSON.stringify(demo))};
 vm.createContext(box);
 require('../dashboard/ui_test_support.cjs')(box, el);
-vm.runInContext(source, box);
-const run = s => vm.runInContext(s, box);
+const {run} = createClient({root, sandbox: box});
 run('W=world; loadReplay(initial); reset(initial.meta.to); liveFeed=true; following=true; S.play=true;');
 
 // Capture what the game hands to the UI instead of re-implementing the UI.
