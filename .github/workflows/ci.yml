@@ -34,10 +34,17 @@ jobs:
         run: |
           python3 -m unittest discover -s tools -p 'test_extract.py' -v
           python3 -m unittest discover -s dashboard -p 'test_live_contract.py' -v
+      - name: Cursor capacity regression (synthetic thousands of sessions)
+        run: python3 tools/test_cursor.py -v
+      - name: Post-deploy gate regression (fake host and rollback)
+        run: python3 tools/test_post_deploy_check.py -v
       - name: Other tools unit tests (synthetic fixtures)
         run: |
           for test in tools/test_*.py; do
-            [ "$test" = tools/test_extract.py ] && continue
+            # These suites already ran in their dedicated steps above.
+            case "$test" in
+              tools/test_extract.py|tools/test_cursor.py|tools/test_post_deploy_check.py) continue ;;
+            esac
             python3 -m unittest discover -s tools -p "${test##*/}" -v
           done
       - name: Other dashboard API unit tests (synthetic databases)
@@ -56,6 +63,67 @@ jobs:
       - name: Live-host checks intentionally skipped
         run: |
           printf '%s\n' 'SKIP: live dashboard authentication, installed Hermes plugin, and network/browser deployment checks require an operator host; all repository unit tests run above using synthetic fixtures.'
+
+  ui-regressions:
+    name: UI inventory and mobile (Chromium + Firefox)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # Mobile smoke compares paired screenshots with the public baseline.
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install pinned Playwright and both browsers
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium firefox
+      - name: UI inventory (both engines, portrait/landscape, zoom 1 and 3)
+        run: node tools/test_ui_inventory.cjs "$RUNNER_TEMP/ui-regressions/inventory"
+      - name: Mobile smoke (Chromium, 8 viewports x 3 zooms)
+        run: node tools/test_ui_mobile.cjs "$RUNNER_TEMP/ui-regressions/mobile-chromium" smoke
+      - name: Mobile smoke (Firefox, same unchanged assertions)
+        env:
+          QUEST_MOBILE_OUT: ${{ runner.temp }}/ui-regressions/mobile-firefox
+        run: |
+          # The test imports chromium directly. Select Firefox at the launcher
+          # boundary only; smoke uses no CDP, and no assertions are replaced.
+          node -e '
+            const pw = require("playwright");
+            pw.chromium = pw.firefox;
+            process.argv = [process.execPath, "tools/test_ui_mobile.cjs", process.env.QUEST_MOBILE_OUT, "smoke"];
+            require("./tools/test_ui_mobile.cjs");
+          '
+      - name: Print actual UI case counts (reject empty reports)
+        env:
+          QUEST_UI_OUT: ${{ runner.temp }}/ui-regressions
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const assert = require('node:assert/strict');
+          const read = file => JSON.parse(fs.readFileSync(path.join(process.env.QUEST_UI_OUT, file)));
+          const inventory = read('inventory/inventory-report.json');
+          for (const engine of ['chromium', 'firefox']) {
+            const cases = inventory.records.filter(record => record.engine === engine);
+            assert(cases.length > 0, `inventory ${engine} must run cases`);
+            console.log(`PASS inventory ${engine}: ${cases.length} cases; browser ${cases[0].browser}`);
+            const mobile = read(`mobile-${engine}/smoke-report.json`);
+            assert(mobile.records.length > 0, `mobile ${engine} must run cases`);
+            console.log(`PASS mobile ${engine}: ${mobile.records.length} cases; browser ${mobile.browser}`);
+          }
+          NODE
+      - name: Upload UI regression evidence (synthetic data only)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-regression-evidence
+          path: ${{ runner.temp }}/ui-regressions
+          if-no-files-found: warn
+          retention-days: 7
 
   browsers:
     name: browser smoke (${{ matrix.browser }})
