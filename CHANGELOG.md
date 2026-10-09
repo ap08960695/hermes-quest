@@ -6,6 +6,19 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- C1 backend: token-based mana accounting with a text-size fallback and signed
+  corrections, plus read-only botstatus history for pause, resume and failover
+  events. Game UI integration is not included yet.
+
+### Known limitations
+
+- Older sessions returning to the 12-hour replay window can have different live
+  and replay mana totals until reload.
+- Usage counters reset to zero are treated as unavailable, so live and replay
+  mana totals can differ until reload.
+
 ## 0.1.0 - 2026-10-09
 
 ### Added
