@@ -253,6 +253,70 @@ async function runLiveMenu(browser,base) {
   } finally {await ctx.close();}
 }
 
+async function runLiveStale(browser,base) {
+  // Synthetic fake server: failing polls must raise the compact warning (also with the Menu closed),
+  // leak nothing internal, leave playback/camera/cursor alone, and one success must restore Live.
+  const check=(v,m)=>{if(!v)throw Error(m);},demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json')));
+  for(const [width,height] of [[1280,800],[375,667],[320,568]]){
+    const ctx=await browser.newContext({viewport:{width,height}}),page=await ctx.newPage(),errors=[];let mode='ok',seq=0;
+    page.on('pageerror',e=>errors.push(e.message));
+    page.on('console',m=>{if(m.type()==='error'&&!/status of [45]\d\d|Failed to load resource|net::ERR|NS_ERROR/.test(m.text()))errors.push(m.text());});
+    await page.route('**/api/plugins/hermes-quest/replay*',route=>{const d=structuredClone(demo),shift=Date.now()/1000-d.meta.to;
+      d.events.forEach(e=>e.t+=shift);d.meta.from_+=shift;d.meta.to+=shift;d.meta.source='synthetic-live';d.meta.show_titles=false;d.cursor='0';return route.fulfill({json:d});});
+    await page.route('**/api/plugins/hermes-quest/events*',route=>{
+      if(mode==='network')return route.abort('connectionrefused');
+      if(typeof mode==='number')return route.fulfill({status:mode,contentType:'application/json',body:'{"detail":"STALE_PAYLOAD_CANARY"}'});
+      seq++;return route.fulfill({json:{state:'online',events:[{id:'stale-smoke-'+seq,t:Date.now()/1000,kind:'heartbeat',task:demo.tasks[0].id,bot:demo.bots[0].id}],tasks:[],bots:[],cursor:'s'+seq}});});
+    try {
+      await page.goto(base+'/index.html?live=1');
+      await page.waitForFunction(()=>typeof loop.last==='number'&&cursor!=='');
+      const poll=async next=>{mode=next;await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});};
+      const view=()=>page.evaluate(()=>{const h=s=>{const e=document.querySelector(s);return e&&!e.hidden?e.textContent:null;},r=document.querySelector('#focus-bar').getBoundingClientRect();
+        return {mode:h('#mode'),issues:h('#issues'),note:h('#live-note'),announce:document.querySelector('#live-announce').textContent,
+          live:document.querySelector('#live-announce').getAttribute('aria-live'),role:document.querySelector('#live-announce').getAttribute('role'),
+          menuClosed:document.querySelector('#menu').hidden,fits:r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,
+          overflow:document.documentElement.scrollWidth>innerWidth+1,state:JSON.stringify([S.speed,S.play,following,cam.tx,cam.ty,cam.zi])};});
+      await poll('ok');const online=await view();
+      check(online.menuClosed&&!online.issues&&!online.note&&/Connected/.test(online.mode),'baseline not a quiet Live');
+      const raf1=await page.evaluate(()=>S.t);
+      // Two transient failures: still the old quiet Offline; third: the warning.
+      await poll(503);await poll(503);let v=await view();
+      check(v.issues==='Offline'&&!v.note,'warning raised before 3 consecutive failures');
+      await poll(503);v=await view();
+      check(v.menuClosed&&v.issues==='Live paused · not updating'&&/^Last update \d\d:\d\d · server error$/.test(v.note),'3rd failure: '+JSON.stringify(v));
+      check(/^Live paused\./.test(v.announce)&&v.live==='polite'&&v.role==='status','warning not announced politely');
+      check(v.fits&&!v.overflow,'warning overflows at '+width);
+      await page.waitForTimeout(600);
+      check(await page.evaluate(t=>S.t>t,raf1),'animation/playhead stopped while stale');
+      if(width===320||width===1280)await page.screenshot({path:path.join(outDir,browserName+'-live-stale-'+width+'.png')});
+      // Recovery on one success; transitions announce once and clear.
+      await poll('ok');v=await view();
+      check(!v.issues&&!v.note&&/Connected/.test(v.mode)&&v.announce==='Live updates resumed.','one success did not restore Live: '+JSON.stringify(v));
+      // A 4xx warns at once with the human reason, and never prints payload/URL/cursor.
+      for(const [code,reason] of [[401,'sign-in needed'],[422,'server rejected']]){
+        const before=await view();await poll(code);v=await view();
+        check(v.issues==='Live paused · not updating'&&v.note.endsWith(' · '+reason),code+' reason: '+JSON.stringify(v));
+        check(v.state===before.state,code+' reset speed/follow/camera');
+        await page.click('#issues');const dialog=await page.locator('#quest').textContent();
+        check(/Reason: /.test(dialog)&&!/CANARY|events\?|\/api\/|cursor|HTTP/i.test(dialog+JSON.stringify(v)),'internal data leaked in '+code+': '+dialog);
+        await page.keyboard.press('Escape');await poll('ok');
+      }
+      await poll('network');await poll('network');await poll('network');v=await view();
+      check(/offline$/.test(v.note||''),'network error reason: '+JSON.stringify(v));
+      // Menu > Overview carries the same detail.
+      await page.click('#menu-toggle');await page.click('#group-overview > summary');
+      check((await page.locator('#live-detail').textContent()).includes('Last successful update'),'Overview lacks stale detail');
+      await page.click('#menu-toggle');await poll('ok');
+      // Hidden-tab behaviour is unchanged: no poll and no scheduling while hidden.
+      const hidden=await page.evaluate(async()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
+        clearTimeout(pollTimer);pollTimer=null;const f=pollFailures;await pollEvents();return {f,after:pollFailures,timer:pollTimer};});
+      check(hidden.after===hidden.f&&hidden.timer===null,'hidden tab polled or rescheduled');
+      check(errors.length===0,errors.join('; '));
+    } finally {await ctx.close();}
+  }
+  console.log('PASS '+browserName+' live-stale warning at 1280/375/320: 3x/4xx trigger, reasons, polite announce, recovery, no leak, playback untouched, hidden tab unchanged');
+}
+
 async function runRetention(browser,base) {
   // An open View all / task / hero dialog must follow retained history (F7). Synthetic data only; the
   // real production mergeDelta evicts the oldest task, hero and events while each dialog stays open.
@@ -400,6 +464,7 @@ for (const vp of VIEWPORTS) {
 }
 try {await runLoadStates(browser,base);} catch(e){failed++;console.log('FAIL load states: '+e.message);}
 try {await runRetention(browser,base);} catch(e){failed++;console.log('FAIL retention dialogs: '+e.message);}
+try {await runLiveStale(browser,base);} catch(e){failed++;console.log('FAIL live stale warning: '+e.message);}
 try {await runLiveMenu(browser,base);} catch(e){failed++;console.log('FAIL synthetic live Menu: '+e.message);}
 await browser.close();
 server.close();

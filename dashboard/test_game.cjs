@@ -242,6 +242,7 @@ process.on('beforeExit',()=>{if(!finished){console.error('FAIL: asynchronous reg
   assert.strictEqual(run('cursor'),retained); assert.strictEqual(run('D.events.length'),count);
   assert(connected('offline')); retryOnly();
   for(const phase of ['headers','body']) {
+    run('pollFailures=0'); // each phase checks the timeout path alone; three failures in a row is covered by tools/test_live_stale.cjs
     let active=0,maxActive=0,calls=0,signal,requested;
     sandbox.fetch=(url,options)=>{
       calls++; active++;maxActive=Math.max(maxActive,active);signal=options.signal;requested=url;

@@ -164,7 +164,7 @@
   }
   const groups=['playback','overview','world','settings'], preferenceKey='quest-menu-v1';
   let overviewKey='', overviewData=null, lastFeed=[], lastCamps=[], allFeed=false, allCamps=false;
-  let connectionState='loading', connectionText='Loading…', sourceMode='Loading';
+  let connectionState='loading', connectionText='Loading…', sourceMode='Loading', staleInfo=null;
   function savePreference() {
     const value={menu:!$('#menu').hidden,groups:Object.fromEntries(groups.map(id=>[id,!!$('#group-'+id).open]))};
     try {root.localStorage.setItem(preferenceKey,JSON.stringify(value));} catch (_) { /* Storage is optional. */ }
@@ -203,12 +203,12 @@
   function overviewView(data) {
     overviewData=data;
     const issueCount=data.blocked+data.errors.length;
-    const badge=$('#issues');badge.hidden=!issueCount&&connectionState!=='offline'&&connectionState!=='snapshot';
+    const badge=$('#issues'),down=connectionState==='offline'||connectionState==='snapshot'||connectionState==='stale';badge.hidden=!issueCount&&!down;
     const label=[data.blocked?data.blocked+' blocked':null,data.errors.length?data.errors.length+' issues':null,
-      connectionState==='offline'?'Offline':connectionState==='snapshot'?'Snapshot':null].filter(Boolean).join(' · ');
+      connectionState==='stale'?'Live paused · not updating':connectionState==='offline'?'Offline':connectionState==='snapshot'?'Snapshot':null].filter(Boolean).join(' · ');
     badge.textContent=label;badge.setAttribute('aria-label',label||'No observed issues');
     badge.onclick=()=>detail([data.blocked+' tasks blocked',...data.errors,
-      ...(connectionState==='offline'||connectionState==='snapshot'?[connectionText]:[]),
+      ...(down?[connectionText,...staleLines()]:[]),
       ...data.tasks.filter(t=>t.blocked).map(t=>t.summary),'Open Overview for permitted task details.'],'Issues');
     $('#overview-summary').textContent=data.summary;
     if($('#menu').hidden||!$('#group-overview').open)return;
@@ -222,7 +222,7 @@
   function playback(text) {$('#playback-summary').textContent=text;}
   function mode(text) {
     sourceMode=text;
-    const connectionLabel={loading:'Loading',online:'Connected',snapshot:'Snapshot',offline:'Offline',file:'Replay'}[connectionState]||'Unknown';
+    const connectionLabel={loading:'Loading',online:'Connected',snapshot:'Snapshot',offline:'Offline',stale:'Paused',file:'Replay'}[connectionState]||'Unknown';
     $('#mode').textContent=text+(text==='DEMO'&&connectionState==='file'?'':' · '+connectionLabel);
     $('#mode').setAttribute('aria-label',text+' data source · '+connectionLabel);
   }
@@ -295,15 +295,30 @@
       paint(box.querySelector('.percentage'),numericImage(n+'%'),label);box.querySelector('b').style.width=n+'%';
     }
   }
-  function status(text,state) {
-    connectionState=state;connectionText=text;mode(sourceMode);
-    control('#connection',({online:'connected',file:'snapshot'})[state]||state,text,state==='offline'?'alert':'normal');
+  function staleLines() {
+    return staleInfo?['Live updates are paused: the latest data could not be loaded.',
+      staleInfo.updated?'Last successful update: '+staleInfo.updated+'.':'No successful update yet.','Reason: '+staleInfo.reason+'.',
+      'The game keeps running on the data it already has and returns to Live by itself after one successful update.']:[];
+  }
+  function status(text,state,extra) {
+    const was=connectionState;
+    connectionState=state;connectionText=text;staleInfo=state==='stale'?(extra||{updated:null,reason:'update failed'}):null;mode(sourceMode);
+    control('#connection',({online:'connected',file:'snapshot',stale:'offline'})[state]||state,text,state==='offline'||state==='stale'?'alert':'normal');
     $('#connection').title=text;
-    $('#connection').onclick=()=>detail([sourceMode+' data source',connectionText,
+    $('#connection').onclick=()=>detail([sourceMode+' data source',connectionText,...staleLines(),
       'Playback and live-follow are separate from connection status.','Live updates poll about every 10 seconds while this browser page is visible.'],'Connection details');
+    const note=$('#live-note'),info=$('#live-detail');
+    if(note){note.hidden=state!=='stale';note.textContent=staleInfo?(staleInfo.updated?'Last update '+staleInfo.updated:'No update yet')+' · '+staleInfo.reason:'';}
+    if(info){info.hidden=state!=='stale';info.textContent=staleInfo?staleLines().slice(0,3).join(' '):'';}
+    // Polite announcement on the transitions only, so repeated failed polls never re-announce.
+    const say=$('#live-announce');
+    if(say&&state==='stale'&&was!=='stale')say.textContent='Live paused. Not updating. '+(staleInfo.updated?'Last update '+staleInfo.updated+'. ':'')+'Reason: '+staleInfo.reason+'.';
+    else if(say&&was==='stale'&&state!=='stale')say.textContent='Live updates resumed.';
+    else if(say&&state!=='stale')say.textContent='';
+    if(was==='stale'||state==='stale')bounds();
     if(overviewData)overview(overviewData);
-    else if(state==='offline'||state==='snapshot'){
-      $('#issues').hidden=false;$('#issues').textContent=state==='offline'?'Offline':'Snapshot';
+    else if(state==='offline'||state==='snapshot'||state==='stale'){
+      $('#issues').hidden=false;$('#issues').textContent=state==='stale'?'Live paused · not updating':state==='offline'?'Offline':'Snapshot';
       $('#issues').setAttribute('aria-label',text);$('#issues').onclick=$('#connection').onclick;
     }
   }

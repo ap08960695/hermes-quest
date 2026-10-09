@@ -47,6 +47,8 @@ const eventKeys = new Set();
 // the existing anonymous-event fallback. Transport payloads are transient.
 const HISTORY_LIMIT = 2000, METADATA_LIMIT = 256, TRANSPORT_MS = 35000;
 let checkpoint = null, pollBusy = false, privacyPending = false;
+// Live health: consecutive failed polls and the last time a fetch fully succeeded (ms). UI-only; never read by the scene.
+let pollFailures = 0, lastPollOk = null;
 const cloneState = v => JSON.parse(JSON.stringify(v));
 class HistoryExpired extends Error {}
 class IdentityChanged extends HistoryExpired {}
@@ -82,7 +84,7 @@ function eventOrder(a, b) {
   const x = String(a.id ?? ''), y = String(b.id ?? '');
   return a.t - b.t || (x < y ? -1 : x > y ? 1 : 0);
 }
-function connection(text, state) { if (UI) UI.status(text, state); }
+function connection(text, state, extra) { if (UI) UI.status(text, state, extra); }
 async function json(url) {
   // One deadline covers both headers and body, allowing backend extraction 30s.
   // Race as well as abort: even a transport that ignores abort cannot stall retry.
@@ -94,7 +96,7 @@ async function json(url) {
   try {
     return await Promise.race([deadline, (async () => {
       const r = await fetch(url, {cache: 'no-store', signal: controller.signal});
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) { const err = new Error(`HTTP ${r.status}`); err.status = r.status; throw err; }
       return await r.json();
     })()]);
   } finally { clearTimeout(timer); }
@@ -241,6 +243,17 @@ function mergeDelta(delta) {
   D.meta.to = delta.events.reduce((to, e) => Math.max(to, e.t), Math.max(D.meta.to, Date.now() / 1000));
   cursor = delta.cursor;
 }
+// Three failed polls in a row (~30 s) or any 4xx means live data is not updating: say so on screen with a
+// short reason and the last good time. Never exposes the response body, URL or cursor; the scene keeps running.
+function pollFailed(e) {
+  pollFailures++;
+  const status = Number.isInteger(e?.status) ? e.status : 0, client = status >= 400 && status < 500;
+  if (pollFailures < 3 && !client) { connection('Offline · retrying in 10s', 'offline'); return; }
+  const reason = status === 401 || status === 403 ? 'sign-in needed' : client ? 'server rejected' : status >= 500 ? 'server error'
+    : e?.name === 'TypeError' || e?.message === 'Transport timeout' ? 'offline' : 'update failed';
+  const updated = lastPollOk === null ? null : new Date(lastPollOk).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
+  connection('Live paused · not updating · ' + (updated ? 'last update ' + updated : 'no update yet') + ' · ' + reason, 'stale', {updated, reason});
+}
 async function pollEvents() {
   if (pollBusy || document.hidden) return;
   pollBusy = true;
@@ -274,8 +287,9 @@ async function pollEvents() {
       else if (animate) loadReplay(replay, {t: playhead, keys: pending});
       else { loadReplay(replay); reset(playhead); }
     }
+    pollFailures = 0; lastPollOk = Date.now();
     connection(delta.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', delta.state === 'legacy-fallback' ? 'snapshot' : 'online');
-  } catch (e) { connection('Offline · retrying in 10s', 'offline'); }
+  } catch (e) { pollFailed(e); }
   finally {
     // Serial requests: no overlap or advancing the cursor on a failed response.
     pollBusy = false; pollTimer = document.hidden ? null : setTimeout(pollEvents, 10000);
@@ -310,7 +324,7 @@ async function boot() {
   if (UI) UI.mode(D.meta.source === 'demo' ? 'DEMO' : liveFeed ? 'LIVE' : 'REPLAY');
   ui();
   if (liveFeed) {
-    goLive();
+    goLive(); pollFailures = 0; lastPollOk = Date.now();
     connection(D.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', D.state === 'legacy-fallback' ? 'snapshot' : 'online');
     if (!document.hidden) pollTimer = setTimeout(pollEvents, 10000);
   } else { reset(D.meta.from_); connection('Replay file', 'file'); }

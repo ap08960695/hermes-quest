@@ -23,7 +23,8 @@ button{color:var(--ink);font:inherit}
 .text-button{width:auto;padding:8px}
 select{min-height:44px;max-width:100%;background:#1b2742;color:var(--ink);border:1px solid var(--line)}
 select:focus-visible{outline:2px solid var(--gold)}
-#focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;gap:4px;max-width:calc(100vw - 16px)}
+#focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px;max-width:calc(100vw - 16px)}
+#live-note{flex:0 0 100%;font-size:11px;padding:2px 6px;background:var(--panel);border:1px solid var(--red);border-radius:4px;color:#ffbba7}
 #menu-toggle{width:64px;background:var(--navy)}
 #tag{position:static;display:flex;align-items:center;gap:2px;padding:0;min-width:0}
 #mode{font-size:11px;padding:0 4px}
@@ -77,6 +78,8 @@ select:focus-visible{outline:2px solid var(--gold)}
   <button id="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menu">Menu</button>
   <div id="tag" class="panel"><span id="mode">Loading</span><button id="connection" aria-label="Loading connection details"></button></div>
   <button id="issues" hidden aria-label="Issues"></button>
+  <div id="live-note" hidden></div>
+  <div id="live-announce" class="sr-only" role="status" aria-live="polite"></div>
 </div>
 <nav id="menu" class="panel" aria-label="Quest menu" hidden>
   <details id="group-playback"><summary>Playback</summary>
@@ -91,6 +94,7 @@ select:focus-visible{outline:2px solid var(--gold)}
   </details>
   <details id="group-overview"><summary>Overview</summary>
     <p id="overview-summary">Loading activity…</p>
+    <p id="live-detail" hidden></p>
     <div class="mana" id="mana"></div>
     <p>Simulated mana, not a real provider quota.</p>
     <h3>Heroes</h3><div id="heroes-list"></div><button id="heroes-all" class="text-button">View all heroes</button>
