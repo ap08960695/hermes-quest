@@ -84,8 +84,17 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
     assert.strictEqual(run('cursor'), step.replay.cursor, step.case);
     assert.strictEqual(run('D.meta.config_revision'), step.replay.meta.config_revision);
     assert.strictEqual(run('captainId()'), step.replay.meta.captain);
-    assert.strictEqual(run('Object.values(S.heroes).filter(h=>h.cls==="commander").length'), 1);
-    assert.strictEqual(run('S.heroes[captainId()].home'), step.replay.meta.regions.commander);
+    const captain = step.replay.bots.find(b => b.id === step.replay.meta.captain);
+    assert(captain, step.case + ' authoritative captain metadata');
+    // Filtering configured profiles may retain the captain only as an actor.
+    // Identity still migrates, but actor metadata must never create a hero.
+    const captainIsProfile = captain.entity_type !== 'actor';
+    assert.strictEqual(run('Object.values(S.heroes).filter(h=>h.cls==="commander").length'),
+      captainIsProfile ? 1 : 0, step.case + ' profile-only commander');
+    if (captainIsProfile) assert.strictEqual(run('S.heroes[captainId()].home'), step.replay.meta.regions.commander);
+    else assert.strictEqual(run('S.heroes[captainId()]'), undefined, step.case + ' actor captain has no hero');
+    for (const actor of step.replay.bots.filter(b => b.entity_type === 'actor'))
+      assert.strictEqual(run(`S.heroes[${JSON.stringify(actor.id)}]`), undefined, step.case + ' actor has no hero');
     assert.strictEqual(run('S.feed.length'), 0); assert.strictEqual(run('S.fx.length'), 0);
     assert.strictEqual(run('following && S.play'), true);
     assert.strictEqual(run('privacyPending'), false);
@@ -104,7 +113,7 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
       assert.strictEqual(run('Object.values(S.tokenNetByWallet).reduce((n,w)=>n+w.net,0)'), expected,
         'identity rebase replaces old mana rather than charging twice');
     }
-    console.log('PASS actual API -> production poll:', step.case, '503/invalid/reset rollback + recovery/one commander/cleared feed+fx');
+    console.log('PASS actual API -> production poll:', step.case, '503/invalid/reset rollback + recovery/profile-only commander/cleared feed+fx');
   }
   // No config churn: real no-op delta does not request a replay or clear feed.
   box.delta = copy(fixture.stable);
