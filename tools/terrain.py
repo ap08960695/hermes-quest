@@ -125,12 +125,15 @@ def rest_ground():
         t = np.clip(((xx - ax) * dx + (yy - ay) * dy) / max(1, dx * dx + dy * dy), 0, 1)
         return np.hypot(xx - ax - t * dx, yy - ay - t * dy)
     x, y = w['regions']['rest_inn']['spot']
-    road = distance('vill_e', 'rest_inn')
-    plaza = ((xx - x) / 120) ** 2 + ((yy - y) / 72) ** 2 < 1
-    # Preserve ALL old paved roads/plazas, including the junction at vill_e.
+    spur = [(a, b) for a, b in w['graph']['edges']
+            if a.startswith('rest_') or b.startswith('rest_')]
+    road = np.minimum.reduce([distance(a, b) for a, b in spur])
+    plaza = ((xx - x) / 90) ** 2 + ((yy - y) / 60) ** 2 < 1
+    # Preserve ALL old paved roads/plazas, including the junction at vault.
     protected = np.zeros(xx.shape, bool)
     for a, b in w['graph']['edges'] + w['graph'].get('wild', []):
-        if 'rest_inn' not in (a, b): protected |= distance(a, b) < 15
+        if not (a.startswith('rest_') or b.startswith('rest_')):
+            protected |= distance(a, b) < 15
     for key, r in w['regions'].items():
         if key != 'rest_inn':
             rx, ry = r['spot']; protected |= ((xx - rx) / 125) ** 2 + ((yy - ry) / 77) ** 2 < 1
@@ -149,6 +152,7 @@ def rest_ground():
         out[m] = tile[yy[m] % tile.shape[0], xx[m] % tile.shape[1]]
     edge = plaza & ~(np.roll(plaza, 1, 0) & np.roll(plaza, -1, 0) & np.roll(plaza, 1, 1) & np.roll(plaza, -1, 1))
     out[edge & mask] = (out[edge & mask] * .72).astype('uint8')
+    assert np.array_equal(out[~mask], np.array(ground)[~mask]), 'ground changed outside rest mask'
     Image.fromarray(out).save('assets/px/ground.png')
     print('rest_inn terrain; additive mask pixels', int(mask.sum()))
 
