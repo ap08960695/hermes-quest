@@ -9,6 +9,7 @@ import argparse
 import base64
 import datetime
 import hashlib
+import hmac
 import ipaddress
 import json
 import math
@@ -16,6 +17,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import time
 import types
 import unicodedata
@@ -360,6 +362,34 @@ def _hash(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
+def _session_key(cfg):
+    """Read only: the API owns provisioning; absent/unsafe keys close identity."""
+    directory = Path(cfg.get('history_dir') or Path(cfg['hermes_home']) / 'hermes-quest').expanduser()
+    fd = directory_fd = None
+    try:
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fd = os.open('session-ref.key', os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                     dir_fd=directory_fd)
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
+                or info.st_uid != os.getuid() or info.st_size != 32):
+            return None
+        key = os.read(fd, 33)
+        return key if len(key) == 32 else None
+    except (OSError, AttributeError):
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
+
+
+def _session_digest(key, profile, sid):
+    return hmac.new(key, b'hermes-quest/session/v2\0' +
+                    json.dumps([profile, sid]).encode(), hashlib.sha256).hexdigest() if key else ''
+
+
 CURSOR_LIMIT = 32768
 CURSOR_GRACE = 3600
 _CURSOR_MAGIC = b'HQ2\0'
@@ -547,11 +577,18 @@ def _bot(prof, cfg, captain, entity_type='profile', availability=None, commenter
 
 def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     previous = previous or {}
-    old = previous.get('marks', {})
     hours = window_hours if window_hours is not None else previous.get('window_hours', 12)
+    session_key = _session_key(cfg)
+    identity = _session_digest(session_key, '', 'identity-epoch')[:20] if session_key else None
+    if previous and (previous.get('identity') != identity or 'identity' not in previous):
+        # One authoritative window reset. The client checks config_revision before
+        # applying any delta, so old and new mana histories are never added together.
+        previous = {}
+        t0 = time.time() - hours * 3600
+    old = previous.get('marks', {})
     cutoff = time.time() - hours * 3600 - CURSOR_GRACE
     state: dict = dict(v=1, marks=dict(old), runs={}, tasks={}, bots={}, pending=[],
-                 window_hours=hours,
+                 window_hours=hours, identity=identity,
                  captain_pending={}, compression_pending=[],
                  mana=dict(previous.get('mana', {})),
                  mana_versions=dict(previous.get('mana_versions', {})))
@@ -598,7 +635,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                        for key in ('classes', 'regions', 'stage_regions')},
                     show_titles=cfg['show_titles'], show_profile_names=cfg.get('show_profile_names', False),
                     as_of=as_of, source='live', mock=False,
-                    config_revision=_hash([cfg, captain, 'truth-identity-v1']))
+                    config_revision=_hash([cfg, captain, 'truth-identity-hmac-v2', identity]))
     if previous and 'mana' not in previous:
         # Legacy cursors cannot reconstruct yesterday's evolving usage totals.
         # The revision change makes the production client rebase before accepting
@@ -712,13 +749,15 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         try:
             json1 = _has_json1(s)
             sessions = {r['id']: dict(r) for r in s.execute('SELECT rowid AS seq,* FROM sessions')}
+            def digest(sid):
+                return _session_digest(session_key, prof, sid)
             def lineage(sid):
                 parent = sessions[sid]['parent_session_id']
-                return dict(session_ref=_hash([prof, sid])[:20],
-                            parent_session_ref=_hash([prof, parent])[:20] if parent in sessions else None)
+                return dict(session_ref=digest(sid)[:20] if session_key else None,
+                            parent_session_ref=digest(parent)[:20] if session_key and parent in sessions else None)
             for sid, r in sessions.items():
-                session_lineage[_hash([prof, sid])] = lineage(sid)
-            nonworker_sessions.update(_hash([prof, sid]) for sid, r in sessions.items()
+                session_lineage[digest(sid)] = lineage(sid)
+            nonworker_sessions.update(digest(sid) for sid, r in sessions.items()
                                       if r['source'] != 'kanban' and not r['parent_session_id'])
             message_source = 'messages-' + _hash(prof)[:20]
             session_source = 'sessions-' + _hash(prof)[:20]
@@ -733,11 +772,12 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     continue
                 first = s.execute("SELECT content,rowid FROM messages WHERE session_id=? AND role='user' ORDER BY rowid LIMIT 1", (sid,)).fetchone()
                 match = re.search(r't_[0-9a-f]{8}', (first[0] if first else '') or '')
-                root_key = _hash([prof, sid])[:20]
+                root_key = digest(sid)[:20] if session_key else None
                 if match and match.group() not in tasks:
                     # Kanban and state.db are separate snapshots. Don't acknowledge
                     # a newly created worker before its task is visible next poll.
-                    state['pending'].append(root_key)
+                    if root_key:
+                        state['pending'].append(root_key)
                 if match and match.group() in tasks:
                     mapping[sid] = match.group()
                     if first[1] > old.get(message_source, 0) or root_key in previous.get('pending', []):
@@ -772,11 +812,13 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 entity = dict(**lineage(sid), bot=prof, task=mapping.get(sid),
                               started_at=r['started_at'], ended_at=r.get('ended_at'),
                               is_subagent=bool(r['parent_session_id']))
-                session_entities[entity['session_ref']] = entity
+                session_entities[(prof, sid)] = entity  # internal only; preserve null-ref rows
             for sid, tid in mapping.items():
+                if not session_key:
+                    continue  # no unkeyed fallback for event IDs, sub or accounting
                 sid_map[(prof, sid)] = tid
                 r = sessions[sid]
-                source = 'session-' + _hash([prof, sid])[:20]
+                source = 'session-' + digest(sid)[:20]
                 last_stamp = message_activity.get(sid) or r['started_at']
                 activity = max(r['started_at'] or 0, r.get('ended_at') or 0,
                                r.get('last_activity_at') or 0, last_stamp or 0)
@@ -785,7 +827,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 if r['parent_session_id'] and (r.get('title') or '').startswith('Subagent'):
                     if r['seq'] > old.get(session_source, 0) or sid in newly_mapped:
                         emit(source, 'summon', dict(t=r['started_at'], task=tid, kind='summon', bot=prof,
-                             **lineage(sid), sub=_hash(sid)[:6], note=note(tid, 'summon', r['title'][9:])))
+                             **lineage(sid), sub=digest(sid)[:6], note=note(tid, 'summon', r['title'][9:])))
                 lower = 0 if sid in newly_mapped else old.get(message_source, 0)
                 messages = s.execute(f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages WHERE session_id=? AND rowid>? AND rowid<=?' +
                                      (' AND timestamp>=?' if t0 is not None else '') + ' ORDER BY rowid',
@@ -800,7 +842,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 charged = 0
                 for m in messages:
                     base = dict(t=m['timestamp'], task=tid, bot=prof, **lineage(sid))
-                    sub = _hash(sid)[:6] if r['parent_session_id'] else None
+                    sub = digest(sid)[:6] if r['parent_session_id'] else None
                     for i, call in enumerate(_json(m['tool_calls'], [])):
                         fn = call.get('function') or {}
                         name = fn.get('name') or 'tool'
@@ -918,7 +960,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                             emit('captain-messages', f'{m["seq"]}:{i}', e)
         finally:
             s.close()
-    compression_mapping = {_hash([prof, sid]): (tid, prof) for (prof, sid), tid in sid_map.items()}
+    compression_mapping = {_session_digest(session_key, prof, sid): (tid, prof) for (prof, sid), tid in sid_map.items()}
     compression_seen = set()
     def compression(event):
         key = (event['source'], event['seq'])
@@ -937,6 +979,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     for event in previous.get('compression_pending', []):
         compression(event)
     for prof in profiles:
+        if not session_key:
+            continue  # do not retain a session-derived compression oracle
         path = home / 'profiles' / prof / 'logs' / 'agent.log'
         if not path.exists():
             continue
@@ -953,7 +997,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 match = re.search(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d).*context compression done.*session=(\S+) messages=(\d+)->(\d+)', line.decode(errors='replace'))
                 if match:
                     stamp = datetime.datetime.strptime(match[1], '%Y-%m-%d %H:%M:%S').timestamp()
-                    compression(dict(source=source, seq=f'{stat.st_ino}:{start}', session=_hash([prof, match[2]]),
+                    compression(dict(source=source, seq=f'{stat.st_ino}:{start}', session=_session_digest(session_key, prof, match[2]),
                                      t=stamp, before=int(match[3]), after=int(match[4])))
             marks[source] = [stat.st_ino, f.tell()]
     history = _history_module()

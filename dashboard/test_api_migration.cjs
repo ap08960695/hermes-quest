@@ -99,6 +99,11 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
     }
     if (step.case === 'privacy-off') assert(!state().includes('Harmless old prose'));
     if (step.case === 'privacy-on') assert(state().includes('Harmless old prose'));
+    if (step.case === 'key-rotation') {
+      const expected = step.replay.events.filter(e => e.kind === 'mana').reduce((n, e) => n + e.tokens, 0);
+      assert.strictEqual(run('Object.values(S.tokenNetByWallet).reduce((n,w)=>n+w.net,0)'), expected,
+        'identity rebase replaces old mana rather than charging twice');
+    }
     console.log('PASS actual API -> production poll:', step.case, '503/invalid/reset rollback + recovery/one commander/cleared feed+fx');
   }
   // No config churn: real no-op delta does not request a replay or clear feed.

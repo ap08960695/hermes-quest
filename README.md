@@ -7,7 +7,8 @@ kanban board into a living game world. Your bots become heroes, your cards becom
 <!-- screenshot: synthetic demo -->
 ![Hermes Quest town overview (synthetic demo)](docs/screenshots/overview.png)
 
-Hermes Quest is read-only. It never writes to your Hermes data and never modifies cards. It runs either as a
+Hermes Quest reads Hermes data without modifying databases or cards. The plugin writes only its own
+private identity key and optional observation history (see [privacy](docs/privacy.md)). It runs either as a
 standalone page with synthetic demo data or as a Hermes dashboard plugin fed by your real board.
 
 ## Features

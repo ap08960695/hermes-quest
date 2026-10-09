@@ -6,6 +6,15 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Security
+
+- Replace guessable session-derived hashes (including mana, subagents and cursor
+  pending/compression state) with private-key HMAC references. The API provisions
+  a 0600 key in plugin state; extraction stays read-only and fails closed to null
+  references when the key is unavailable. Legacy cursor decoding remains supported;
+  identity migration/key changes reset the replay epoch once rather than double
+  counting old mana. See `docs/privacy.md` for backup, rotation and failure handling.
+
 ### Added
 
 - UI2: fixed pixel-text HUD and semantic atlas icons, bitmap Thai details,

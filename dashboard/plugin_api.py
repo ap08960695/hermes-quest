@@ -8,9 +8,14 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import atexit
+try:
+    import fcntl
+except ImportError:  # unsupported platforms keep session identity closed
+    fcntl = None
 import importlib.util
 import json
 import os
+import secrets
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -82,6 +87,7 @@ print(json.dumps(payload, ensure_ascii=False, allow_nan=False))
 
 
 def _extract(mode: str, value: str, show_profile_names: bool = False) -> dict:
+    _ensure_session_key()  # plugin state only, before the read-only subprocess
     try:
         result = subprocess.run(
             [sys.executable, "-c", _EXTRACT, str(ROOT / "tools" / "extract.py"), mode, value,
@@ -106,6 +112,60 @@ def _history_settings(root=None, env=None):
     module.__file__ = str(source)
     exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), module.__dict__)
     return module, module.load_settings(env.get("HERMES_QUEST_CONFIG") or None, env=env)
+
+
+def _ensure_session_key() -> None:
+    """Publish one complete private key; never replace an existing (even bad) key.
+
+    Lock the state directory across processes. O_EXCL staging plus rename prevents
+    readers observing a partial key and concurrent requests rotating the identity.
+    Failure is optional: the extractor emits null refs, not an API error.
+    """
+    directory_fd = fd = None
+    temporary = None
+    if fcntl is None:
+        return
+    try:
+        _, settings = _history_settings()
+        directory = Path(settings['history_dir'])
+        if directory.resolve().is_relative_to(ROOT):
+            return  # private state must never be provisioned inside the checkout
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        fcntl.flock(directory_fd, fcntl.LOCK_EX)
+        try:
+            os.stat('session-ref.key', dir_fd=directory_fd, follow_symlinks=False)
+            return
+        except FileNotFoundError:
+            pass
+        temporary = '.session-ref-' + secrets.token_hex(16)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=directory_fd)
+        os.fchmod(fd, 0o600)
+        data = memoryview(os.urandom(32))
+        while data:
+            written = os.write(fd, data)
+            if written <= 0:
+                raise OSError('key write failed')
+            data = data[written:]
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.replace(temporary, 'session-ref.key', src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+        temporary = None
+        os.fsync(directory_fd)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass  # never log the key or private paths; read-only extractor fails closed
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if temporary is not None and directory_fd is not None:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except OSError:
+                pass
+        if directory_fd is not None:
+            os.close(directory_fd)
 
 
 def _sample_loop(module, settings, stop):

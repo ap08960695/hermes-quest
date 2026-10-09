@@ -353,6 +353,11 @@ class ExtractTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
+        state = self.home / 'hermes-quest'
+        state.mkdir(mode=0o700)
+        key = state / 'session-ref.key'
+        key.write_bytes(os.urandom(32))  # synthetic fixture provisioning, not extraction
+        key.chmod(0o600)
         self.now = time.time()
         # Pin the observation playhead so retry equality also covers additive as_of.
         clock = patch.object(extract.time, 'time', return_value=self.now)
@@ -1022,7 +1027,8 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.assertEqual(sum(e['parent_session_ref'] in refs for e in summons), 29)
         for e in summons:
             self.assertEqual(e['parent_session_ref'], refs[e['session_ref']]['parent_session_ref'])
-        orphan = refs[extract._hash(['developer-demo', 'synthetic-orphan-session'])[:20]]
+        orphan = refs[extract._session_digest(extract._session_key(self.cfg),
+                      'developer-demo', 'synthetic-orphan-session')[:20]]
         self.assertTrue(orphan['is_subagent'])
         self.assertIsNone(orphan['parent_session_ref'])
         self.assertIsNone(orphan['task'])

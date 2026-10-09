@@ -179,7 +179,7 @@ class LiveContractTests(unittest.TestCase):
         last = initial
         migrations = []
         for case in ('explicit-captain', 'auto-config', 'auto-detected-captain', 'return-captain',
-                     'classes', 'regions', 'stage-regions', 'stages', 'privacy-off', 'privacy-on', 'profiles'):
+                     'classes', 'regions', 'stage-regions', 'stages', 'privacy-off', 'privacy-on', 'profiles', 'key-rotation'):
             if case == 'explicit-captain':
                 cfg.update(captain='developer-demo', regions=dict(cfg['regions'], commander='tower'))
             elif case == 'auto-config':
@@ -202,6 +202,8 @@ class LiveContractTests(unittest.TestCase):
                 cfg['show_titles'] = True
             elif case == 'profiles':
                 cfg['profiles'] = ['developer-demo']
+            elif case == 'key-rotation':
+                (f.home / 'hermes-quest' / 'session-ref.key').write_bytes(os.urandom(32))
             cfgpath.write_text(json.dumps(cfg))
             delta = self.get(client, '/events', since=last['cursor'])
             newest = self.get(client, '/replay', hours=12)

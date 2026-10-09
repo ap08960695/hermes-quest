@@ -134,6 +134,7 @@ class CursorRoundtripTests(unittest.TestCase):
         # Migration must bound an already accumulated historical ledger too,
         # not just a fresh replay. Decoder accepts legacy cursors up to 1 MiB.
         accumulated = copy.deepcopy(state)
+        accumulated.pop('identity')  # genuine pre-HMAC ledger, not a v2 identity
         for i in range(299, 9999):
             key = 'session-' + extract._hash(['developer-demo', f'synthetic-history-{i}'])[:20]
             accumulated['mana'][key] = 100 + i
@@ -143,7 +144,11 @@ class CursorRoundtripTests(unittest.TestCase):
             accumulated['delivered'].append(str(i))
         with patch.object(extract.time, 'time', return_value=now):
             migrated = extract.collect_since(self.cfg, legacy_cursor(accumulated))
-            self.assertEqual(migrated['events'], [])
+            # The approved HMAC migration replaces the entire replay epoch once.
+            authoritative = extract.build_replay(self.cfg, 12)
+            self.assertEqual(migrated['events'], authoritative['events'])
+            self.assertEqual(migrated['cursor'], authoritative['cursor'])
+            self.assertEqual(extract.collect_since(self.cfg, migrated['cursor'])['events'], [])
             self.assertLessEqual(len(migrated['cursor']), 16384)
             migrated_state = extract._decode(migrated['cursor'])
             self.assertEqual(len(migrated_state['mana']), 300)
