@@ -81,24 +81,25 @@ async function runViewport(browser, base, vp) {
     steps.push(`${label}: ${n} colours`);
     if (n < 8) problems.push(`canvas looks blank at "${label}" (${n} distinct sampled colours)`);
   };
-  const clock = () => page.locator('#clock').textContent();
+  const clock = () => page.locator('#clock').getAttribute('aria-label');
   try {
     // data/demo.json is the default feed; the boot code reports a load failure only via this banner.
     await page.goto(`${base}/index.html`, {waitUntil: 'load'});
-    await page.waitForFunction(() => document.querySelector('#connection')?.dataset.state, null, {timeout: 30000});
-    const state = await page.locator('#connection').getAttribute('data-state');
-    if (state !== 'file') problems.push(`boot did not reach file/demo mode (connection state "${state}")`);
-    await page.waitForFunction(() => /^\d/.test(document.querySelector('#clock')?.textContent || ''), null, {timeout: 30000});
+    await page.waitForFunction(() => document.querySelector('#connection')?.getAttribute('aria-label'), null, {timeout: 30000});
+    const state = await page.locator('#connection').getAttribute('aria-label');
+    if (state !== 'ไฟล์ย้อนหลัง normal') problems.push(`boot did not reach file/demo mode (connection label "${state}")`);
+    await page.waitForFunction(() => /^เวลา replay: \d/.test(document.querySelector('#clock')?.getAttribute('aria-label') || ''), null, {timeout: 30000});
     // Let the scene draw: clock must advance (loop is running) and a few frames must pass.
     const first = await clock();
-    await page.waitForFunction(t => document.querySelector('#clock').textContent !== t, first, {timeout: 30000});
+    await page.waitForFunction(t => document.querySelector('#clock').getAttribute('aria-label') !== t, first, {timeout: 30000});
     await page.waitForTimeout(1500);
     await colours('drawn');
     await shot('1-drawn');
 
     // Pause
     await page.click('#play');
-    if ((await page.locator('#play').textContent()) !== '▶') problems.push('pause: button did not switch to play icon');
+    if ((await page.locator('#play').getAttribute('aria-label')) !== 'เล่น normal' ||
+        (await page.locator('#play').getAttribute('aria-pressed')) !== 'true') problems.push('pause: button did not switch to accessible play state');
     await page.waitForTimeout(300);
     const frozen = await clock();
     await page.waitForTimeout(1200);
@@ -106,8 +107,9 @@ async function runViewport(browser, base, vp) {
     await shot('2-paused');
     // Play
     await page.click('#play');
-    if ((await page.locator('#play').textContent()) !== '⏸') problems.push('play: button did not switch to pause icon');
-    await page.waitForFunction(t => document.querySelector('#clock').textContent !== t, frozen, {timeout: 15000})
+    if ((await page.locator('#play').getAttribute('aria-label')) !== 'หยุด normal' ||
+        (await page.locator('#play').getAttribute('aria-pressed')) !== 'false') problems.push('play: button did not switch to accessible pause state');
+    await page.waitForFunction(t => document.querySelector('#clock').getAttribute('aria-label') !== t, frozen, {timeout: 15000})
       .catch(() => problems.push('play: clock did not advance after resume'));
     await shot('3-playing');
     // Scrub to 70% (an input event, exactly what dragging the slider fires)

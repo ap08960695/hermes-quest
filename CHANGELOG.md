@@ -8,12 +8,20 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- UI2: fixed pixel-text HUD and semantic atlas icons, bitmap Thai details,
+  mobile-safe panels, cached hurt effects, visibility-aware replay and a
+  landscape dashboard iframe that fits the available height.
 - C1 backend: token-based mana accounting with a text-size fallback and signed
   corrections, plus read-only botstatus history for pause, resume and failover
   events. Game UI integration is not included yet.
 
 ### Known limitations
 
+- B/UI2 was tested with Chromium/Firefox emulation only, not physical phones.
+- Fractional DPR (such as 2.625) and pinch zoom are measured but not release gates.
+- CPU 6x throttling has no acceptance threshold.
+- CPU 4x headroom is low; slower machines may miss the performance gates.
+- The campaign sword-count field stays blank when its source has no count.
 - Older sessions returning to the 12-hour replay window can have different live
   and replay mana totals until reload.
 - Usage counters reset to zero are treated as unavailable, so live and replay
