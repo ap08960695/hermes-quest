@@ -1315,7 +1315,7 @@ function renderOverview() {
   }).sort((a,b)=>Number(b.blocked)-Number(a.blocked));
   const heroes=Object.values(S.heroes).map(h=>({key:h.bot,
     summary:(permitted?h.name:'Hero')+' · '+heroStatus(h),
-    details:()=>{const current=S.heroes[h.bot];if(current)UI.detail(heroDetails(current),'Hero');else UI.detail(['This hero is no longer in retained history'],'Hero details');}}));
+    details:()=>{const current=S.heroes[h.bot];if(current)heroDialog(current);else UI.detail(['This hero is no longer in retained history'],'Hero details');}}));
   UI.overview({tasks,heroes,blocked,errors:[...Object.keys(S.diagnostics||{}),...failures.values(),...states.filter(t=>t.state==='failed').map(()=> 'A task failed')],
     empty:'No tasks in this replay range',summary:D.tasks.length?working+' working · '+waiting+' waiting · '+blocked+' blocked · '+completed+' complete'+(!working&&!blocked?' · No active work':''):'No tasks in this replay range'});
 }
@@ -1368,21 +1368,32 @@ function click(e) {
   const t = Object.values(S.tasks).filter(t => t.alpha > 0).sort((a, b) => Math.hypot(a.x - wx, a.y - 15 - wy) - Math.hypot(b.x - wx, b.y - 15 - wy))[0];
   if (t && Math.hypot(t.x - wx, t.y - 15 - wy) < 22) return quest(t);
   const h=Object.values(S.heroes).find(h=>Math.hypot(h.x-wx,h.y-36-wy)<36);
-  if(h&&UI)return UI.detail(heroDetails(h),'Hero');
+  if(h&&UI)return heroDialog(h);
   const r = Object.entries(W.regions).sort((a, b) => Math.hypot(a[1].spot[0] - wx, a[1].spot[1] - wy) - Math.hypot(b[1].spot[0] - wx, b[1].spot[1] - wy))[0];
   Object.assign(cam, {tx: r[1].spot[0], ty: r[1].spot[1] - 20, zi: 2});
   if(UI)UI.detail([r[1].label,'Quests: '+Object.values(S.tasks).filter(t=>t.region===r[0]).length],'Region');
 }
-function quest(t) {
-  if(privacyPending)return;
+function questLines(t) {
   const h=t.bot&&S.heroes[t.bot], elapsed=t.runStart?Math.round((S.t-t.runStart)/60):0;
-  if(UI)UI.detail(['Task ID: '+t.id,D.meta.show_titles===true?t.title:'Task details hidden',
+  return ['Task ID: '+t.id,D.meta.show_titles===true?t.title:'Task details hidden',
     'Assigned to: '+(h?h.name+' ('+h.bot+')':'Not provided'),
     'Stage: '+(STAGE_TH[t.stage]||'Unknown')+' · Status: '+(TASK_STATES[t.state]||'Not started in selected range'),
     ...(t.runStart?['Run elapsed: '+elapsed+' minutes']:[]),
     ...(Number.isFinite(t.max_rt)?['Run time limit: '+Math.round(t.max_rt/60)+' minutes']:[]),
     'Campaign: '+(t.campaign||'Not provided'),'Latest note: '+(D.meta.show_titles===true?t.note||'Not provided':'Task details hidden'),
-    [t.moa?'MoA':'',t.mock?'Demo':'',t.chained?'Blocked':''].join(' ')],'Quest');
+    [t.moa?'MoA':'',t.mock?'Demo':'',t.chained?'Blocked':''].join(' ')];
+}
+// Open task/hero dialogs follow the identity: refresh while it is retained, close (focus back to the opener) once it is evicted.
+function quest(t) {
+  if(privacyPending)return;
+  const id=t.id;
+  if(UI)UI.detail(questLines(t),'Quest',{refresh:()=>{
+    const current=S.tasks[id]||D.tasks.find(row=>row.id===id);
+    return current?questLines(current):null;}});
+}
+function heroDialog(h) {
+  const id=h.bot;
+  UI.detail(heroDetails(h),'Hero',{refresh:()=>{const current=S.heroes[id];if(current)return heroDetails(current);return D.bots.some(b=>b.id===id)?undefined:null;}});
 }
 function heroStatus(h) {
   return restLocked(h)?(h.rest.phase==='moving'?'Walking to rest':'Resting'):h.task?'Working':h.rest.state==='active-unobserved'?'Status unobserved':'Active';

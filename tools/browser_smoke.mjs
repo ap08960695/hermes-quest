@@ -248,6 +248,103 @@ async function runLiveMenu(browser,base) {
   } finally {await ctx.close();}
 }
 
+async function runRetention(browser,base) {
+  // An open View all / task / hero dialog must follow retained history (F7). Synthetic data only; the
+  // real production mergeDelta evicts the oldest task, hero and events while each dialog stays open.
+  const ctx=await browser.newContext({viewport:{width:320,height:568}}),page=await ctx.newPage(),errors=[];
+  page.on('pageerror',e=>errors.push(e.message));
+  page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
+  const check=(v,m)=>{if(!v)throw Error(m);};
+  try {
+    await page.goto(base+'/index.html',{waitUntil:'load'});
+    await page.waitForFunction(()=>typeof loop.last==='number');
+    // Freeze the scheduler so only the explicit mergeDelta below changes data; hud() keeps running.
+    const setup=()=>page.evaluate(async()=>{
+      S.play=false;cancelAnimationFrame(raf);clearTimeout(pollTimer);
+      const d=structuredClone(D),base=d.meta.from_,old=d.tasks[0],oldBot=d.bots[0];
+      old.id='retention-old';old.title='SYNTHETIC_EVICTED_TITLE';old.parents=[];old.bot=oldBot.id;
+      const hero={...oldBot,id:'retention-hero-old',name:'SYNTHETIC_EVICTED_HERO'};
+      d.meta.show_titles=true;d.bots=[hero,...Array.from({length:257},(_,i)=>({...oldBot,id:'retention-hero-'+i,name:'Synthetic hero '+i}))];
+      d.tasks=[old,...Array.from({length:257},(_,i)=>({...old,id:'retention-'+i,title:'Synthetic task '+i,bot:'retention-hero-0'}))];
+      d.events=[{id:'retention-old-event',t:base+1,task:old.id,bot:hero.id,kind:'created'},
+        {id:'retention-old-hero',t:base+1.5,bot:hero.id,kind:'heartbeat'},{id:'retention-new-event',t:base+2,task:'retention-256',kind:'created'}];
+      d.meta.to=base+3;d.cursor='initial';
+      loadReplay(d,null,base+3);UIPanels.menu(true);document.querySelector('#group-overview').open=true;
+      await new Promise(r=>setTimeout(r,100));hudT=1;hud(0);
+      return {base};
+    });
+    const evict=(base)=>page.evaluate(async base=>{
+      mergeDelta({events:Array.from({length:2100},(_,i)=>({id:'retention-delta-'+i,t:base+10+i,task:'retention-256',bot:'retention-hero-0',kind:'heartbeat'})),tasks:[],bots:[],cursor:'after'});
+      const probe=()=>JSON.stringify([S.t,S.i,S.speed,S.play,following,cursor,cam.tx,cam.ty,cam.zi]);
+      hudT=1;hud(0);await new Promise(r=>setTimeout(r,150));return probe();
+    },base);
+    const snap=()=>page.evaluate(()=>({
+      old:D.tasks.some(t=>t.id==='retention-old')||!!S.tasks['retention-old'],
+      hero:D.bots.some(b=>b.id==='retention-hero-old')||!!S.heroes['retention-hero-old'],
+      tasks:D.tasks.length,
+      dialogOpen:!document.querySelector('#quest').hidden,
+      text:document.querySelector('#quest').textContent,
+      rows:document.querySelectorAll('#quest .item-summary').length,
+      active:document.activeElement?.id||document.activeElement?.className||document.activeElement?.tagName,
+      playback:JSON.stringify([S.speed,following,cam.tx,cam.ty,cam.zi])}));
+    const results={};
+    // 1) View all tasks stays open and drops the evicted row.
+    let {base:b0}=await setup();
+    await page.click('#tasks-all');
+    let before=await snap();
+    check(before.old&&before.dialogOpen&&before.rows===257&&before.text.includes('SYNTHETIC_EVICTED_TITLE'),'retention setup: View all tasks not open with 257 rows');
+    const pre=await page.evaluate(()=>JSON.stringify([S.speed,following,cam.tx,cam.ty,cam.zi]));
+    await evict(b0);let after=await snap();
+    check(!after.old,'retention: task was not evicted by mergeDelta');
+    check(after.dialogOpen,'View all tasks closed itself (it should only drop the row)');
+    check(after.rows===after.tasks&&after.rows===256,'View all rows '+after.rows+' != retained tasks '+after.tasks);
+    check(!after.text.includes('SYNTHETIC_EVICTED_TITLE'),'View all still shows evicted task title');
+    check(await page.locator('#quest .item-summary button').count()===256,'View all keeps a Details action for an evicted task');
+    check(after.playback===pre,'View all refresh changed speed/follow/camera');
+    results.viewAllTasks={before:before.rows,after:after.rows};
+    await page.keyboard.press('Escape');
+    // 2) View all heroes drops the evicted hero.
+    ({base:b0}=await setup());
+    await page.click('#heroes-all');
+    before=await snap();
+    check(before.hero&&before.text.includes('SYNTHETIC_EVICTED_HERO'),'retention setup: View all heroes lacks old hero');
+    await evict(b0);after=await snap();
+    check(!after.hero,'retention: hero was not evicted by mergeDelta');
+    check(after.dialogOpen&&!after.text.includes('SYNTHETIC_EVICTED_HERO'),'View all heroes still shows evicted hero');
+    results.viewAllHeroes={before:before.rows,after:after.rows};
+    await page.keyboard.press('Escape');
+    // 3) Task detail opened from the list closes and returns focus to a live control.
+    ({base:b0}=await setup());
+    await page.locator('#tasks-list .item-summary button').first().focus();
+    const openerKey=await page.evaluate(()=>document.activeElement.closest('.item-summary').dataset.key);
+    await page.click('#tasks-list .item-summary button >> nth=0');
+    check((await snap()).dialogOpen,'task detail did not open');
+    await page.evaluate(id=>{quest(S.tasks[id]||D.tasks.find(t=>t.id===id));},'retention-old');
+    check((await snap()).text.includes('SYNTHETIC_EVICTED_TITLE'),'task detail lacks old task before eviction');
+    await evict(b0);after=await snap();
+    check(!after.dialogOpen&&!after.text.includes('SYNTHETIC_EVICTED_TITLE'),'task detail for evicted task stayed open');
+    check(await page.evaluate(()=>{const a=document.activeElement;return !!a&&a.isConnected&&a!==document.body;}),'focus lost after task detail closed');
+    results.taskDetail={closed:!after.dialogOpen,active:after.active,openerKey};
+    // 4) Hero detail opened from the canvas path closes the same way.
+    ({base:b0}=await setup());
+    await page.locator('#menu-toggle').focus();
+    await page.evaluate(()=>heroDialog(S.heroes['retention-hero-old']));
+    check((await snap()).text.includes('SYNTHETIC_EVICTED_HERO'),'hero detail lacks old hero before eviction');
+    await evict(b0);after=await snap();
+    check(!after.dialogOpen&&!after.text.includes('SYNTHETIC_EVICTED_HERO'),'hero detail for evicted hero stayed open');
+    check(after.active==='menu-toggle','focus did not return to the opener after hero detail closed ('+after.active+')');
+    results.heroDetail={closed:!after.dialogOpen,active:after.active};
+    // 5) A dialog for a still-retained task stays open and refreshes.
+    ({base:b0}=await setup());
+    await page.evaluate(()=>quest(S.tasks['retention-5']||D.tasks.find(t=>t.id==='retention-5')));
+    await evict(b0);after=await snap();
+    check(after.dialogOpen&&after.text.includes('retention-5'),'detail for a retained task closed or lost content');
+    check(errors.length===0,errors.join('; '));
+    fs.writeFileSync(path.join(outDir,browserName+'-retention.json'),JSON.stringify({synthetic:true,results,errors},null,2));
+    console.log('PASS '+browserName+' open View all/task/hero dialogs follow retained history (rows 257 -> 256, evicted task/hero removed, focus returned)');
+  } finally {await ctx.close();}
+}
+
 fs.mkdirSync(outDir, {recursive: true});
 // Regenerate the deterministic synthetic demo exactly as documented (never reads live data).
 execFileSync('python3', [path.join('tools', 'mock.py')], {cwd: root, stdio: 'inherit'});
@@ -267,6 +364,7 @@ for (const vp of VIEWPORTS) {
   } else console.log(`PASS ${browserName} ${r.viewport}`);
 }
 try {await runLoadStates(browser,base);} catch(e){failed++;console.log('FAIL load states: '+e.message);}
+try {await runRetention(browser,base);} catch(e){failed++;console.log('FAIL retention dialogs: '+e.message);}
 try {await runLiveMenu(browser,base);} catch(e){failed++;console.log('FAIL synthetic live Menu: '+e.message);}
 await browser.close();
 server.close();
