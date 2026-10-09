@@ -102,19 +102,65 @@
       c.setAttribute('aria-hidden','true');row.append(c);accessible.textContent=meanings+' — Detail font unavailable';row.setAttribute('role','status');
     }
   }
-  let returnFocus=null;
-  function close() {
-    const wasOpen=!$('#quest').hidden;$('#quest').hidden=true;bounds();
-    if(wasOpen)(visible(returnFocus)?returnFocus:$('#menu-toggle')).focus();
+  // The open dialog is bound to retained identities. returnFocus/returnSpec remember the opener
+  // (and, for list rows, its identity) because list rows are rebuilt while the dialog is open.
+  let returnFocus=null, returnSpec=null, live=null;
+  function remember(el) {
+    returnFocus=el&&el!==document.body&&el!==document.documentElement?el:null;returnSpec=null;
+    const entry=el?.closest?.('.item-summary[data-key]'), parent=entry?.parentElement;
+    if(entry&&parent?.id)returnSpec={key:entry.dataset.key,container:'#'+parent.id,all:'#'+parent.id.replace(/-list$/,'-all')};
   }
-  function detail(lines,label='Details') {
-    if($('#quest').hidden)returnFocus=document.activeElement;
-    const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);
+  function focusTarget() {
+    if(returnFocus?.isConnected&&visible(returnFocus))return returnFocus;
+    if(returnSpec){
+      const row=Array.from(document.querySelectorAll(returnSpec.container+' .item-summary')).find(e=>e.dataset.key===returnSpec.key);
+      const own=row?.querySelector('button'), all=$(returnSpec.all);
+      if(visible(own))return own;if(visible(all))return all;
+    }
+    return $('#menu-toggle');
+  }
+  function close() {
+    const wasOpen=!$('#quest').hidden;$('#quest').hidden=true;$('#quest').replaceChildren();live=null;bounds();
+    if(wasOpen)focusTarget().focus();
+  }
+  // live (optional): {refresh} returns null when the subject left retained history (dialog closes and
+  // focus returns to its opener), undefined to keep the current content, or new lines to show.
+  function detail(lines,label='Details',binding=null) {
+    if($('#quest').hidden)remember(document.activeElement);
+    const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);live=null;
     const button=document.createElement('button');button.className='close';button.setAttribute('aria-label','Close');
     button.append(iconImage('close').cloneNode(true)); // Canvas pixels do not clone; paint explicitly below.
     el.append(button);paint(button,iconImage('close'),'Close');button.onclick=close;
     const content=document.createElement('div');content.className='detail-content';el.append(content);
     for(const text of lines)line(content,text);bounds();button.focus();
+    if(binding)live={kind:'detail',refresh:binding.refresh,key:JSON.stringify(lines),at:performance.now()};
+  }
+  // View all: rows follow the current retained list, so evicted identities and their actions disappear.
+  function listDialog(label,rowsOf,empty) {
+    detail([],label);const content=$('#quest .detail-content');
+    live={kind:'list',rowsOf,empty,key:null,content};renderList();
+  }
+  function renderList() {
+    const rows=live.rowsOf()||[], key=JSON.stringify(rows.map(r=>[r.key,r.summary]));
+    if(key===live.key)return;live.key=key;
+    const active=document.activeElement, focusedKey=live.content.contains(active)?active.closest('.item-summary')?.dataset.key:undefined;
+    itemList(live.content,rows,live.empty,true);
+    if(focusedKey!==undefined&&document.activeElement!==$('#quest .close')&&!live.content.contains(document.activeElement)){
+      const row=Array.from(live.content.querySelectorAll('.item-summary')).find(e=>e.dataset.key===focusedKey);
+      (row?.querySelector('button')||$('#quest .close')).focus();
+    }
+  }
+  function refreshDialog() {
+    if(!live||$('#quest').hidden)return;
+    if(live.kind==='list')return renderList();
+    const lines=live.refresh();
+    if(lines===null){close();return;}
+    if(!Array.isArray(lines))return;
+    const key=JSON.stringify(lines);
+    if(key===live.key||performance.now()-live.at<1000)return;
+    live.key=key;live.at=performance.now();
+    const content=$('#quest .detail-content');content.replaceChildren();
+    for(const text of lines)line(content,text);bounds();
   }
   const groups=['playback','overview','world','settings'], preferenceKey='quest-menu-v1';
   let overviewKey='', overviewData=null, lastFeed=[], lastCamps=[], allFeed=false, allCamps=false;
@@ -133,15 +179,16 @@
   function button(parent,label,action) {
     const b=document.createElement('button');b.className='text-button';b.textContent=label;b.setAttribute('aria-label',label);b.onclick=action;parent.append(b);return b;
   }
-  function itemList(selector,rows,empty,all=false) {
-    const el=$(selector);el.replaceChildren();
+  function itemList(target,rows,empty,all=false) {
+    const el=typeof target==='string'?$(target):target;el.replaceChildren();
     if(!rows.length){const p=document.createElement('p');p.textContent=empty;el.append(p);return;}
     for(const row of rows.slice(0,all?rows.length:3)){
-      const entry=document.createElement('div');entry.className='item-summary';const text=document.createElement('span');
+      const entry=document.createElement('div');entry.className='item-summary';entry.dataset.key=String(row.key??'');const text=document.createElement('span');
       text.textContent=row.summary;entry.append(text);button(entry,'Details',row.details);el.append(entry);
     }
   }
-  function overview(data) {
+  function overview(data) {overviewView(data);refreshDialog();} // Dialog last: list rows exist again for focus return.
+  function overviewView(data) {
     overviewData=data;
     const issueCount=data.blocked+data.errors.length;
     const badge=$('#issues');badge.hidden=!issueCount&&connectionState!=='offline'&&connectionState!=='snapshot';
@@ -156,8 +203,8 @@
     const key=JSON.stringify([data.summary,data.tasks.map(t=>[t.key,t.summary]),data.heroes.map(h=>[h.key,h.summary])]);
     if(key===overviewKey)return;overviewKey=key;
     itemList('#tasks-list',data.tasks,data.empty);itemList('#heroes-list',data.heroes,'No heroes in this replay range');
-    $('#tasks-all').onclick=()=>{detail(['Tasks in the loaded replay range and retained history'],'All tasks');itemList('#quest .detail-content',overviewData.tasks,overviewData.empty,true);};
-    $('#heroes-all').onclick=()=>{detail(['Heroes in the loaded replay range and retained history'],'All heroes');itemList('#quest .detail-content',overviewData.heroes,'No heroes in this replay range',true);};
+    $('#tasks-all').onclick=()=>listDialog('All tasks',()=>overviewData?.tasks,overviewData.empty);
+    $('#heroes-all').onclick=()=>listDialog('All heroes',()=>overviewData?.heroes,'No heroes in this replay range');
   }
   function playback(text) {$('#playback-summary').textContent=text;}
   function mode(text) {
