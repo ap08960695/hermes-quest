@@ -7,33 +7,22 @@
 'use strict';
 // D2 facade: construction owns all game state; registration does not boot.
 function createGame({autoBoot = true} = {}) {
+// Two-phase wiring: publish live root bindings, construct without calling peers, then boot.
+const ctx = {};
+
 const $ = s => document.querySelector(s);
 const cv = $('#stage'), cx = cv.getContext('2d');
 const DPR = Math.min(2, window.devicePixelRatio || 1);
 const UI = window.UIPanels;
 const CUI = window.QuestCUI.create();
-const STAGES = ['PLAN', 'BUILD', 'TEST', 'REVIEW', 'DEPLOY', 'VERIFY'];
-const STAGE_TH = {PLAN: 'Plan', BUILD: 'Build', TEST: 'Test', REVIEW: 'Review', DEPLOY: 'Deploy', VERIFY: 'Verify'};
-const MON = {PLAN: 'ghost', BUILD: 'golem', TEST: 'slime', REVIEW: 'bat', DEPLOY: 'skeleton', VERIFY: 'mimic'};
-const CLS_HUE = {warrior: 0, ranger: 95, paladin: 45, engineer: 25, mage: 220, sage: 140, commander: 250};
-const WALLET = {claude: ['CLAUDE', '#4aa3ff'], codex: ['CODEX', '#58c27a'], agy: ['GEMINI', '#b07cff']};
-const HERO_H = 64, STRIDE = 24, WALK_V = 70;          // design units (2 per native px); walk speed per real second
-const TOOL_ICON = {read_file: '📜', search_files: '🔍', vision_analyze: '👁', write_file: '✒', kanban_comment: '🕊',
-  kanban_heartbeat: '♪', kanban_show: '📋', delegate_task: '🦊', web_search: '🔮'};
-const CAT_ICON = {test: '🏹', build: '🔥', deploy: '🎈', git: 'ᚱ', probe: '🔮', shell: '⚙'};
 let calm = false;
 
 const img = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src; });
-const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
-const lerp = (a, b, t) => a + (b - a) * t;
 const CLOCK_FORMAT = new Intl.DateTimeFormat('en-GB', {hour: '2-digit', minute: '2-digit'});
 const fmt = t => { const d = new Date(t * 1000); return Number.isNaN(d.getTime()) ? 'Invalid Date' : CLOCK_FORMAT.format(d); };
 
 let MON2 = {}, MMETA2 = {}, SPRV = {};
 let D, W, BG, SPR = {}, MONS = null, MONMETA = null, BLD = {}, MIMG = {}, HMETA = {fw: 128, fh: 96, ax: 48, base: 91, walk: [0, 1, 2, 3], atk: [4, 5, 6, 7], idle: []};
-const S = {t: 0, i: 0, speed: 120, play: true, heroes: {}, tasks: {}, fx: [], feed: [], mana: {}, vault: 0,
-  trauma: 0, stop: 0, lastFeed: {}};
-const cam = {x: 1000, y: 700, tx: 1000, ty: 700, zi: 1};
 
 // Page-local presentation only. Never part of a replay checkpoint or live cursor.
 const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null, fit: false, zoom: null, fittedZoom: null};
@@ -57,7 +46,7 @@ function registerCharacter(v, type, id, box) {
     right:r.left+(v.ox+box.right*v.Z)*scale, bottom:r.top+(v.oy+box.bottom*v.Z)*scale};
   if (body.right < r.left || body.left > r.right || body.bottom < r.top || body.top > r.bottom) return;
   const dx = Math.max(0, (44 - (body.right-body.left))/2), dy = Math.max(0, (44 - (body.bottom-body.top))/2);
-  inspect.picks.push({type,id,world:box,body,anchor:type==='hero'?[S.heroes[id].x,S.heroes[id].y]:null,order:inspect.picks.length,
+  inspect.picks.push({type,id,world:box,body,anchor:type==='hero'?[ctx.S.heroes[id].x,ctx.S.heroes[id].y]:null,order:inspect.picks.length,
     hit:{left:body.left-dx,right:body.right+dx,top:body.top-dy,bottom:body.bottom+dy}});
 }
 function registerSprite(v, type, id, im, sx, w, h, nx, ny, flip) {
@@ -78,7 +67,7 @@ function redactCharacterNames() {
 const validSessionRef = ref => typeof ref === 'string' && /^[a-f0-9]{20}$/.test(ref);
 function characterSessions(id) {
   return (D.sessions || []).filter(s => s.bot === id && validSessionRef(s.session_ref) &&
-    (!Number.isFinite(s.started_at) || s.started_at <= S.t));
+    (!Number.isFinite(s.started_at) || s.started_at <= ctx.S.t));
 }
 function syncInspectionSessions(rows = D.sessions) {
   // A supplied inventory is authoritative, including an empty one; absence preserves it.
@@ -95,18 +84,18 @@ function parentLabel(s) {
   if (!s) return 'Parent unknown';
   if (!s.parent_session_ref) return s.is_subagent === false ? 'Not a sub-agent' : 'Parent unknown';
   const parent = (D.sessions || []).find(p => validSessionRef(p.session_ref) && p.session_ref === s.parent_session_ref);
-  return parent ? 'Parent: '+(S.heroes[parent.bot]?characterName(parent.bot):'Character unavailable') : 'Parent unknown';
+  return parent ? 'Parent: '+(ctx.S.heroes[parent.bot]?characterName(parent.bot):'Character unavailable') : 'Parent unknown';
 }
 function observedTasks(id) {
-  return D.tasks.filter(t => S.tasks[t.id] ? S.tasks[t.id].bot === id : S.t >= D.meta.generated && t.bot === id).map(t => {
-    const current = S.tasks[t.id];
+  return D.tasks.filter(t => ctx.S.tasks[t.id] ? ctx.S.tasks[t.id].bot === id : ctx.S.t >= D.meta.generated && t.bot === id).map(t => {
+    const current = ctx.S.tasks[t.id];
     const status = current ? TASK_STATES[current.state] || 'Status unobserved' :
-      S.t >= D.meta.generated ? ({running:'Working',done:'Complete',blocked:'Blocked',todo:'Waiting',ready:'Ready',review:'In review'})[t.status] || 'Status unobserved' : 'Status unobserved';
+      ctx.S.t >= D.meta.generated ? ({running:'Working',done:'Complete',blocked:'Blocked',todo:'Waiting',ready:'Ready',review:'In review'})[t.status] || 'Status unobserved' : 'Status unobserved';
     return (D.meta.show_titles === true ? t.title || 'Untitled task' : 'Task details hidden')+' · '+status;
   });
 }
 function stopInspectionFollow() {
-  if (inspect.zoom !== null && cam.zi === inspect.fittedZoom) cam.zi=inspect.zoom;
+  if (inspect.zoom !== null && ctx.cam.zi === inspect.fittedZoom) ctx.cam.zi=inspect.zoom;
   inspect.follow=inspect.fit=false;inspect.zoom=inspect.fittedZoom=null;
 }
 function clearInspection(restore = false) {
@@ -122,7 +111,7 @@ function cardButton(parent, label, fn) {
   b.textContent = label; b.onclick = fn; parent.append(b); return b;
 }
 function showInspection(id) {
-  if (privacyPending || !S.heroes[id]) return;
+  if (privacyPending || !ctx.S.heroes[id]) return;
   if (UI) UI.close();
   if (UI) UI.menu(false);
   inspect.revision = D.meta.config_revision ?? null;
@@ -183,12 +172,12 @@ function renderInspection() {
   // A sprite wider than the viewport itself cannot be framed by translation.
   // Disclose that camera fit explicitly, rather than silently scaling the actor.
   if (inspect.follow) {
-    if (inspect.zoom===null || cam.zi!==inspect.fittedZoom) inspect.zoom=cam.zi;
-    cam.zi=Math.min(inspect.zoom,(innerWidth-20)/width,(innerHeight-20)/height);
-    inspect.fittedZoom=cam.zi;inspect.fit=cam.zi<inspect.zoom;
+    if (inspect.zoom===null || ctx.cam.zi!==inspect.fittedZoom) inspect.zoom=ctx.cam.zi;
+    ctx.cam.zi=Math.min(inspect.zoom,(innerWidth-20)/width,(innerHeight-20)/height);
+    inspect.fittedZoom=ctx.cam.zi;inspect.fit=ctx.cam.zi<inspect.zoom;
   }
-  layoutInspection(width*cam.zi,height*cam.zi);
-  const h = S.heroes[inspect.bot], s = selectedSession(), rows = characterSessions(inspect.bot), b = D.bots.find(b => b.id === inspect.bot);
+  layoutInspection(width*ctx.cam.zi,height*ctx.cam.zi);
+  const h = ctx.S.heroes[inspect.bot], s = selectedSession(), rows = characterSessions(inspect.bot), b = D.bots.find(b => b.id === inspect.bot);
   if (inspect.bot && !h) stopInspectionFollow();
   const lines = inspect.choices ? [] : !h ? ['Character unavailable','Follow off'] : [
     D.meta.show_profile_names === true ? 'Profile: '+(b?.profile_name || 'Unknown')+' · Pet: '+(b?.pet_name || 'Unknown') : 'Profile and pet names hidden',
@@ -202,37 +191,37 @@ function renderInspection() {
   const content = $('#character-content'), active = document.activeElement, owns = content.contains(active);
   $('#character-heading').textContent = heading; content.replaceChildren();
   for (const line of lines) { const p=document.createElement('div');p.textContent=line;p.style.overflowWrap='anywhere';content.append(p); }
-  if (inspect.choices) for (const pick of inspect.choices) cardButton(content,pick.type === 'hero' ? characterName(pick.id) : 'Monster · '+(STAGE_TH[S.tasks[pick.id]?.stage] || 'Unknown stage'),()=>{
-    if (pick.type === 'hero') showInspection(pick.id); else {clearInspection();if(S.tasks[pick.id])quest(S.tasks[pick.id]);}
+  if (inspect.choices) for (const pick of inspect.choices) cardButton(content,pick.type === 'hero' ? characterName(pick.id) : 'Monster · '+(ctx.STAGE_TH[ctx.S.tasks[pick.id]?.stage] || 'Unknown stage'),()=>{
+    if (pick.type === 'hero') showInspection(pick.id); else {clearInspection();if(ctx.S.tasks[pick.id])quest(ctx.S.tasks[pick.id]);}
   });
   else if (h && rows.length > 1) rows.forEach((row,i)=>cardButton(content,'Session '+(i+1)+' · '+parentLabel(row),()=>{
     inspect.session=row.session_ref;inspect.key='';renderInspection();$('#character-close').focus();
   }));
   if(!inspect.choices&&children.length){const p=document.createElement('div');p.textContent=children.length+' child sessions'+(children.length>3?' · +'+(children.length-3)+' beyond three links':'');content.append(p);
     children.forEach((child,i)=>cardButton(content,'Child '+(i+1)+' · '+characterName(child.bot),()=>{
-      if(S.heroes[child.bot]){showInspection(child.bot);inspect.session=child.session_ref;inspect.key='';renderInspection();}
+      if(ctx.S.heroes[child.bot]){showInspection(child.bot);inspect.session=child.session_ref;inspect.key='';renderInspection();}
       else {selectedScene=child.bot;inspect.bot=child.bot;inspect.session=child.session_ref;inspect.follow=false;inspect.key='';renderInspection();}
     }));}
   if (owns) $('#character-close').focus();
-  layoutInspection(width*cam.zi,height*cam.zi);
+  layoutInspection(width*ctx.cam.zi,height*ctx.cam.zi);
 }
 function followCharacter(dt) {
   if (!inspect.follow || !inspect.bot) return;
-  const h = S.heroes[inspect.bot]; if (!h || privacyPending) {stopInspectionFollow();return;}
+  const h = ctx.S.heroes[inspect.bot]; if (!h || privacyPending) {stopInspectionFollow();return;}
   const pick = inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
   const box = pick?.world ? {...pick.world} : {left:h.x-24,right:h.x+24,top:h.y-70,bottom:h.y};
   if(pick?.anchor){const dx=h.x-pick.anchor[0],dy=h.y-pick.anchor[1];box.left+=dx;box.right+=dx;box.top+=dy;box.bottom+=dy;}
-  const {top,left,right,bottom}=layoutInspection((box.right-box.left)*cam.zi,(box.bottom-box.top)*cam.zi);
+  const {top,left,right,bottom}=layoutInspection((box.right-box.left)*ctx.cam.zi,(box.bottom-box.top)*ctx.cam.zi);
   const targetX = (left+right)/2, targetY = (top+bottom)/2;
-  cam.tx=(box.left+box.right)/2-(targetX-innerWidth/2)/cam.zi;
-  cam.ty=(box.top+box.bottom)/2-(targetY-innerHeight/2)/cam.zi;
-  const k=calm?1:1-Math.exp(-dt/.18);cam.x=lerp(cam.x,cam.tx,k);cam.y=lerp(cam.y,cam.ty,k);
+  ctx.cam.tx=(box.left+box.right)/2-(targetX-innerWidth/2)/ctx.cam.zi;
+  ctx.cam.ty=(box.top+box.bottom)/2-(targetY-innerHeight/2)/ctx.cam.zi;
+  const k=calm?1:1-Math.exp(-dt/.18);ctx.cam.x=ctx.lerp(ctx.cam.x,ctx.cam.tx,k);ctx.cam.y=ctx.lerp(ctx.cam.y,ctx.cam.ty,k);
   // Allow background padding near world edges rather than moving the character.
-  const rect = {left:innerWidth/2+(box.left-cam.x)*cam.zi,right:innerWidth/2+(box.right-cam.x)*cam.zi,
-    top:innerHeight/2+(box.top-cam.y)*cam.zi,bottom:innerHeight/2+(box.bottom-cam.y)*cam.zi};
-  if (rect.left<left)cam.x-=(left-rect.left)/cam.zi;else if(rect.right>right)cam.x+=(rect.right-right)/cam.zi;
-  if (rect.top<top)cam.y-=(top-rect.top)/cam.zi;else if(rect.bottom>bottom)cam.y+=(rect.bottom-bottom)/cam.zi;
-  cam.tx=cam.x;cam.ty=cam.y;
+  const rect = {left:innerWidth/2+(box.left-ctx.cam.x)*ctx.cam.zi,right:innerWidth/2+(box.right-ctx.cam.x)*ctx.cam.zi,
+    top:innerHeight/2+(box.top-ctx.cam.y)*ctx.cam.zi,bottom:innerHeight/2+(box.bottom-ctx.cam.y)*ctx.cam.zi};
+  if (rect.left<left)ctx.cam.x-=(left-rect.left)/ctx.cam.zi;else if(rect.right>right)ctx.cam.x+=(rect.right-right)/ctx.cam.zi;
+  if (rect.top<top)ctx.cam.y-=(top-rect.top)/ctx.cam.zi;else if(rect.bottom>bottom)ctx.cam.y+=(rect.bottom-bottom)/ctx.cam.zi;
+  ctx.cam.tx=ctx.cam.x;ctx.cam.ty=ctx.cam.y;
 }
 function inspectionLinks(v) {
   const s = selectedSession(); if (!s || !inspect.bot) return;
@@ -273,13 +262,11 @@ const cloneState = v => JSON.parse(JSON.stringify(v));
 class HistoryExpired extends Error {}
 class IdentityChanged extends HistoryExpired {}
 const captainId = () => D.meta.captain ?? '';
-function defaultRegion() { return validRegion(D.meta.regions?.commander || 'castle'); }
-function validRegion(region) { return W.regions[region] ? region : (W.regions.castle ? 'castle' : Object.keys(W.regions)[0]); }
 function normalizeBot(b) {
   const classes = D.meta.classes || {};
   const role = b.role || Object.keys(classes).find(r => b.id.startsWith(r));
   const cls = b.id === D.meta.captain ? 'commander' : (classes[role] || b.cls || 'mage');
-  return {...b, cls, region: validRegion(D.meta.regions?.[cls] || b.region || defaultRegion())};
+  return {...b, cls, region: ctx.validRegion(D.meta.regions?.[cls] || b.region || ctx.defaultRegion())};
 }
 function normalizeData() {
   D.meta ||= {};
@@ -335,27 +322,23 @@ async function json(url) {
     })()]);
   } finally { clearTimeout(timer); }
 }
-function emptyState() {
-  return {i: 0, heroes: {}, tasks: {}, fx: [], feed: [], vault: 0, trauma: 0, stop: 0,
-    lastFeed: {}, soc: {}, later: [], rt: 0, mana: {claude: 100, codex: 100, agy: 100}, ...CUI.empty()};
-}
 function restoreCheckpoint() {
-  Object.assign(S, emptyState(), checkpoint ? cloneState(checkpoint.state) : {});
+  Object.assign(ctx.S, ctx.emptyState(), checkpoint ? cloneState(checkpoint.state) : {});
 }
 function retainHistory() {
   let cut = Math.max(0, D.events.length - HISTORY_LIMIT);
   // Never split a timestamp: the checkpoint includes every event at its floor.
   if (cut) while (cut < D.events.length && D.events[cut].t === D.events[cut - 1].t) cut++;
   if (cut) {
-    const current = {...S};
+    const current = {...ctx.S};
     try {
       restoreCheckpoint();
-      syncMetadata(false);
-      for (const e of D.events.slice(0, cut)) { S.t = e.t; apply(e, false); }
+      ctx.syncMetadata(false);
+      for (const e of D.events.slice(0, cut)) { ctx.S.t = e.t; apply(e, false); }
       checkpoint = {t: D.events[cut - 1].t, state: cloneState({
-        heroes: S.heroes, tasks: S.tasks, vault: S.vault, mana: S.mana,
-        tokenNetByBot: S.tokenNetByBot, tokenNetByWallet: S.tokenNetByWallet, diagnostics: S.diagnostics})};
-    } finally { Object.assign(S, current); }
+        heroes: ctx.S.heroes, tasks: ctx.S.tasks, vault: ctx.S.vault, mana: ctx.S.mana,
+        tokenNetByBot: ctx.S.tokenNetByBot, tokenNetByWallet: ctx.S.tokenNetByWallet, diagnostics: ctx.S.diagnostics})};
+    } finally { Object.assign(ctx.S, current); }
     D.events.splice(0, cut); D.meta.from_ = checkpoint.t;
   }
   const tasks = new Set(D.tasks.slice(-METADATA_LIMIT).map(t => t.id));
@@ -377,7 +360,7 @@ function retainHistory() {
       if (h.rest?.savedTask && !tasks.has(h.rest.savedTask)) h.rest.savedTask = null;
     }
   };
-  prune(S); if (checkpoint) prune(checkpoint.state);
+  prune(ctx.S); if (checkpoint) prune(checkpoint.state);
   FRIENDS = null;
   eventKeys.clear(); D.events.forEach(e => eventKeys.add(eventKey(e)));
   return cut;
@@ -387,7 +370,7 @@ function loadReplay(replay, live = null, at = null) {
       replay.events.some(e => !e || !Number.isFinite(e.t)) || [...replay.tasks, ...replay.bots].some(v => !v || !v.id))
     throw new Error('Invalid replay');
   // Rebase is transactional: a failed snapshot must not destroy the old cursor/history.
-  const previous = {D, checkpoint, cursor, state: {...S}, keys: [...eventKeys]};
+  const previous = {D, checkpoint, cursor, state: {...ctx.S}, keys: [...eventKeys]};
   clearInspection();
   if (UI) UI.privacy();
   try {
@@ -398,33 +381,20 @@ function loadReplay(replay, live = null, at = null) {
     D.events.sort(eventOrder);
     D.events = D.events.filter(e => { const key = eventKey(e); const duplicate = eventKeys.has(key); eventKeys.add(key); return !duplicate; });
     const preserve = live && previous.D?.meta.show_titles === D.meta.show_titles;
-    Object.assign(S, emptyState(), preserve ? cloneState({feed: previous.state.feed, lastFeed: previous.state.lastFeed, fx: previous.state.fx}) : {});
+    Object.assign(ctx.S, ctx.emptyState(), preserve ? cloneState({feed: previous.state.feed, lastFeed: previous.state.lastFeed, fx: previous.state.fx}) : {});
     // Rebase before compaction: fresh actions can otherwise disappear into the
     // silent checkpoint, including a batch larger than the retained window.
     if (live) reset(live.t, live.keys);
     const cut = retainHistory();
-    S.i = Math.max(0, S.i - cut);
-    if (live && checkpoint && S.t < checkpoint.t) reset(checkpoint.t);
+    ctx.S.i = Math.max(0, ctx.S.i - cut);
+    if (live && checkpoint && ctx.S.t < checkpoint.t) reset(checkpoint.t);
     if (at !== null) reset(at, new Set()); // Clean, silent migration commits atomically.
     cursor = D.cursor ?? '';
     privacyPending = false;
   } catch (e) {
     D = previous.D; checkpoint = previous.checkpoint; cursor = previous.cursor;
-    Object.assign(S, previous.state); eventKeys.clear(); previous.keys.forEach(k => eventKeys.add(k)); FRIENDS = null;
+    Object.assign(ctx.S, previous.state); eventKeys.clear(); previous.keys.forEach(k => eventKeys.add(k)); FRIENDS = null;
     throw e;
-  }
-}
-function syncMetadata(includeNew = true) {
-  for (const b of D.bots) {
-    if (b.entity_type === 'actor') { delete S.heroes[b.id]; continue; }
-    if (!includeNew && !S.heroes[b.id]) continue;
-    const h = hero(b.id);
-    if (h.home !== b.region) { h.home = b.region; h.homeK = Object.values(S.heroes).filter(other => other !== h && other.home === b.region).length; }
-    Object.assign(h, {name: b.name, cls: b.cls, availability: b.availability, wallet: b.wallet || h.wallet, model: b.model || '', effort: b.effort || 'medium', st: mstyle(b.model), eff: EFF[b.effort] || EFF.medium});
-  }
-  for (const t of D.tasks) if (S.tasks[t.id]) {
-    // Snapshot metadata must not overwrite event-derived historical state.
-    for (const k of ['title', 'campaign', 'max_rt', 'stage', 'parents']) S.tasks[t.id][k] = t[k];
   }
 }
 function mergeDelta(delta) {
@@ -451,8 +421,8 @@ function mergeDelta(delta) {
       delta.tasks.some(t => !D.tasks.some(old => old.id === t.id) && !born.has(t.id)) ||
       delta.bots.some(b => !D.bots.some(old => old.id === b.id))))
     throw new HistoryExpired('Replay rebase required');
-  const playhead = S.t, appliedThrough = D.events[S.i - 1]?.t ?? checkpoint?.t ?? -Infinity;
-  const pending = new Set(D.events.slice(S.i).map(eventKey));
+  const playhead = ctx.S.t, appliedThrough = D.events[ctx.S.i - 1]?.t ?? checkpoint?.t ?? -Infinity;
+  const pending = new Set(D.events.slice(ctx.S.i).map(eventKey));
   for (const field of ['tasks', 'bots']) {
     const byId = new Map(D[field].map(v => [v.id, v]));
     for (const v of delta[field]) { const merged = {...byId.get(v.id), ...v}; byId.delete(v.id); byId.set(v.id, merged); }
@@ -463,7 +433,7 @@ function mergeDelta(delta) {
   if (delta.session_data) D.session_data = {...delta.session_data};
   if (Number.isFinite(delta.meta?.as_of)) D.meta.as_of = delta.meta.as_of;
   if (D.meta.show_titles !== true) delta.events.forEach(e => { delete e.note; delete e.title; });
-  syncMetadata();
+  ctx.syncMetadata();
   let late = false;
   for (const e of delta.events) {
     const key = eventKey(e);
@@ -471,18 +441,18 @@ function mergeDelta(delta) {
     eventKeys.add(key); pending.add(key); D.events.push(e); late ||= e.t <= appliedThrough;
   }
   D.events.sort(eventOrder);
-  const animate = liveFeed && following && S.play;
+  const animate = liveFeed && following && ctx.S.play;
   if (late) reset(playhead, animate ? pending : null);
   // Preserve the current scene during normal compaction. Apply due live actions
   // first so even an oversized delta gets effects once before prefix eviction.
   if (animate && D.events.length > HISTORY_LIMIT)
-    while (S.i < D.events.length && D.events[S.i].t <= playhead) apply(D.events[S.i++], true);
-  const applied = S.i, cut = retainHistory();
-  S.i = Math.max(0, applied - cut);
+    while (ctx.S.i < D.events.length && D.events[ctx.S.i].t <= playhead) apply(D.events[ctx.S.i++], true);
+  const applied = ctx.S.i, cut = retainHistory();
+  ctx.S.i = Math.max(0, applied - cut);
   // Paused/non-following polls can evict events the scene has never applied,
   // even with the playhead beyond the new floor. Install that checkpoint and
   // silently reconstruct the due tail; normal live compaction keeps its effects.
-  if (cut > applied || (checkpoint && S.t < checkpoint.t)) reset(playhead);
+  if (cut > applied || (checkpoint && ctx.S.t < checkpoint.t)) reset(playhead);
   D.meta.to = delta.events.reduce((to, e) => Math.max(to, e.t), Math.max(D.meta.to, Date.now() / 1000));
   cursor = delta.cursor;
 }
@@ -513,7 +483,7 @@ async function pollEvents() {
         D.meta.show_profile_names = false;
         redactCharacterNames();
         redactText(); checkpoint = null;
-        Object.assign(S, emptyState());
+        Object.assign(ctx.S, ctx.emptyState());
         if (UI) UI.privacy();
         cx.clearRect?.(0,0,cv.width,cv.height);
       }
@@ -521,11 +491,11 @@ async function pollEvents() {
       if (replay.cursor === undefined) throw new Error('Missing replay cursor');
       // Playback/controls may advance while the snapshot is in flight. Classify
       // against the applied boundary at commit time, not at request start.
-      const playhead = S.t;
-      const animate = liveFeed && following && S.play;
-      const appliedThrough = D.events[S.i - 1]?.t ?? checkpoint?.t ?? -Infinity;
-      const applied = new Set(D.events.slice(0, S.i).map(eventKey));
-      const pending = new Set(D.events.slice(S.i).map(eventKey));
+      const playhead = ctx.S.t;
+      const animate = liveFeed && following && ctx.S.play;
+      const appliedThrough = D.events[ctx.S.i - 1]?.t ?? checkpoint?.t ?? -Infinity;
+      const applied = new Set(D.events.slice(0, ctx.S.i).map(eventKey));
+      const pending = new Set(D.events.slice(ctx.S.i).map(eventKey));
       // Outside-floor overlap is historical; bounded dedup cannot classify it.
       // Inside the window, genuinely late delta actions still animate.
       for (const event of delta.events) if (!eventKeys.has(eventKey(event)) && event.t > (checkpoint?.t ?? -Infinity)) pending.add(eventKey(event));
@@ -545,7 +515,7 @@ async function pollEvents() {
   }
 }
 function goLive() {
-  following = true; S.play = true; S.speed = 1;
+  following = true; ctx.S.play = true; ctx.S.speed = 1;
   document.querySelectorAll('[data-s]').forEach(b => b.classList.toggle('on', false));
   reset(Date.now() / 1000); if (UI) UI.control('#play','pause','Pause');
 }
@@ -556,14 +526,14 @@ async function boot() {
   [D, W] = await Promise.all([json(params.get('data') || (liveFeed ? `${API}replay?hours=12` : 'data/demo.json')), json('data/world.json')]);
   loadReplay(D);
   BG = await img('assets/px/ground.png');
-  for (const c of Object.keys(CLS_HUE)) SPR[c] = await img(`assets/px/${c}.png`);
+  for (const c of Object.keys(ctx.CLS_HUE)) SPR[c] = await img(`assets/px/${c}.png`);
   HMETA = Object.assign(HMETA, await fetch('assets/px/heroes.json').then(r => r.ok ? r.json() : {}).catch(() => ({})));
   // Only shipped combinations may trigger a request; unknown models/classes
   // keep the class (or warrior) fallback without a speculative sprite 404.
   // M1's audited metadata lists the shipped sheets as source_checks keys.
   // Explicit combos (including an empty/invalid list) still take precedence.
   const combos = new Set('combos' in HMETA ? (Array.isArray(HMETA.combos) ? HMETA.combos : []) : Object.keys(HMETA.source_checks || {}));
-  for (const b of D.bots) { const st = mstyle(b.model), key = `${b.cls}-${st.tag}`; if (st !== NO_STYLE && combos.has(key) && !(key in SPRV)) SPRV[key] = await img(`assets/px/heroes/${key}.png`); }
+  for (const b of D.bots) { const st = ctx.mstyle(b.model), key = `${b.cls}-${st.tag}`; if (st !== ctx.NO_STYLE && combos.has(key) && !(key in SPRV)) SPRV[key] = await img(`assets/px/heroes/${key}.png`); }
   for (const n of ['goblin', 'golem', 'slime', 'ghost', 'bat', 'skeleton', 'dragon', 'mimic']) MIMG[n] = await img(`assets/px/monsters/${n}.png`);
   MMETA2 = await fetch('assets/px/monsters2/meta.json').then(r => r.ok ? r.json() : {}).catch(() => ({}));
   for (const k of Object.keys(MMETA2)) MON2[k] = await img(`assets/px/monsters2/${k}.png`);
@@ -580,61 +550,6 @@ async function boot() {
   if (!document.hidden) raf = requestAnimationFrame(loop);
   } catch (e) { connection('Unable to load data · reload to retry', 'offline'); }
 }
-
-// ---------- world geometry ----------
-// Road graph routing. Every walk starts by stepping onto the nearest road segment from where the figure
-// physically stands, so a new order mid-walk never cuts across terrain.
-function route(from, toNode, wild = false) {
-  const G = W.graph, pts = G.pts, E = wild ? [...G.edges, ...(G.wild || [])] : G.edges;   // wild trails: monsters only
-  let best = null;
-  for (const [a, b] of E) {
-    const A = pts[a], B = pts[b], dx = B[0] - A[0], dy = B[1] - A[1], L = dx * dx + dy * dy || 1;
-    const t = Math.max(0, Math.min(1, ((from[0] - A[0]) * dx + (from[1] - A[1]) * dy) / L));
-    const q = [A[0] + t * dx, A[1] + t * dy], d = Math.hypot(from[0] - q[0], from[1] - q[1]);
-    if (!best || d < best.d) best = {d, q, a, b, ta: t};
-  }
-  const adj = {};
-  for (const [a, b] of E) { const d = Math.hypot(pts[a][0] - pts[b][0], pts[a][1] - pts[b][1]); (adj[a] ||= []).push([b, d]); (adj[b] ||= []).push([a, d]); }
-  const dist = {}, prev = {}, todo = new Set(Object.keys(pts));
-  dist[best.a] = best.ta * Math.hypot(pts[best.b][0] - pts[best.a][0], pts[best.b][1] - pts[best.a][1]);
-  dist[best.b] = (1 - best.ta) * Math.hypot(pts[best.b][0] - pts[best.a][0], pts[best.b][1] - pts[best.a][1]);
-  while (todo.size) {
-    let u = null; for (const n of todo) if (dist[n] !== undefined && (u === null || dist[n] < dist[u])) u = n;
-    if (u === null || u === toNode) break; todo.delete(u);
-    for (const [v, d] of adj[u] || []) if (dist[u] + d < (dist[v] ?? 1e18)) { dist[v] = dist[u] + d; prev[v] = u; }
-  }
-  const out = []; for (let n = toNode; n; n = prev[n]) out.unshift(pts[n]);
-  return [best.q, ...out];
-}
-function spotOf(region) { return (W.regions[region] || W.lairs[region]).spot; }
-function plazaOf(region) {
-  const r = W.regions[region];
-  return {center: r.plaza?.center || r.spot, standing: r.plaza?.standing || [PLAZA_RX, PLAZA_RY], node: r.plaza?.node || r.node || region};
-}
-function formation(region) {
-  const r = W.regions[region]; if (!r?.plaza) return null;
-  const {center: [x,y], standing: [rx,ry]} = plazaOf(region), slots = [];
-  // 102 x 84 idle envelopes, shared by heroes AND monsters. No wrapping or
-  // clamping several slots to the same ellipse edge when capacity is exhausted.
-  for (let dy = -84; dy <= 84; dy += 84) for (let dx = -153; dx <= 153; dx += 102)
-    if ((dx/rx)**2 + (dy/ry)**2 <= 1) slots.push([x+dx,y+dy]);
-  return slots;
-}
-function placeEntity(entity, region) {
-  const slots = formation(region);
-  if (!slots) { entity.placement = null; return null; }
-  if (entity.placement?.region === region) return slots[entity.placement.k] || plazaOf(region).center;
-  const used = new Set([...Object.values(S.heroes), ...Object.values(S.tasks)]
-    .filter(o => o !== entity && o.placement?.region === region && (!o.id || (o.alpha > 0 && !o.dying)))
-    .map(o => o.placement.k));
-  let k = 0; while (used.has(k)) k++;
-  entity.placement = {region, k};
-  return slots[k] || plazaOf(region).center;
-}
-function overflowed(entity) {
-  const p = entity.placement;
-  return !!p && p.k >= formation(p.region).length && !(entity.path?.length > 1 || entity.mpath);
-}
 function sceneName(entity) {
   const hero = !!entity.bot && !entity.id, rows = hero ? D.bots : D.tasks;
   const fallback = (hero ? 'Hero ' : 'Task ') + (rows.findIndex(r => r.id === (hero ? entity.bot : entity.id)) + 1);
@@ -642,7 +557,7 @@ function sceneName(entity) {
   return name && !/(?:t_[a-f\d]+|[a-f\d]{8,}|[a-f\d]{8}-[a-f\d-]+)/i.test(name) ? name.slice(0,14) : fallback;
 }
 function selectedEntity() {
-  return S.heroes[selectedScene] || (S.tasks[selectedScene]?.alpha > 0 ? S.tasks[selectedScene] : null);
+  return ctx.S.heroes[selectedScene] || (ctx.S.tasks[selectedScene]?.alpha > 0 ? ctx.S.tasks[selectedScene] : null);
 }
 function sceneSelection(v) {
   const entity = selectedEntity();
@@ -652,146 +567,66 @@ function sceneSelection(v) {
   // Selected identification precedes regions/effects. The highlighted compact
   // representative remains visible even when no world-label lane fits.
   const x = entity.mx ?? entity.x, y = entity.my ?? entity.y;
-  if (!overflowed(entity) && onScreen(v,x,y,180,180))
+  if (!ctx.overflowed(entity) && onScreen(v,x,y,180,180))
     UI.screenLabel(sceneName(entity),(v.ox+x*v.Z)/DPR,(v.oy+(y-110)*v.Z)/DPR,true);
 }
 function sceneOverflow(v) {
   if (!UI?.sceneOverflow) return;
-  const entities = [...Object.values(S.heroes), ...Object.values(S.tasks).filter(t => t.alpha > 0)];
+  const entities = [...Object.values(ctx.S.heroes), ...Object.values(ctx.S.tasks).filter(t => t.alpha > 0)];
   UI.sceneOverflow(Object.entries(W.regions).flatMap(([region,r]) => {
-    const items = entities.filter(o => overflowed(o) && o !== selectedEntity() && o.placement.region === region);
+    const items = entities.filter(o => ctx.overflowed(o) && o !== selectedEntity() && o.placement.region === region);
     if (!items.length) return [];
-    const [x,y] = plazaOf(region).center;
+    const [x,y] = ctx.plazaOf(region).center;
     if (!onScreen(v,x,y,300,220)) return [];
     return [{region, label:r.label.split(' · ')[0], count:items.length,
       blocked:items.filter(o => o.chained || o.state === 'blocked').length,
-      rows:() => entities.filter(o => o.placement?.region === region).map(o => ({key:o.id||o.bot, summary:sceneName(o)+' · '+(overflowed(o)?'Outside standing slots · ':'')+(o.id ? TASK_STATES[o.state]||'Unknown' : heroStatus(o)), details:()=>o.id?quest(o):heroDialog(o)}))}];
+      rows:() => entities.filter(o => o.placement?.region === region).map(o => ({key:o.id||o.bot, summary:sceneName(o)+' · '+(ctx.overflowed(o)?'Outside standing slots · ':'')+(o.id ? TASK_STATES[o.state]||'Unknown' : heroStatus(o)), details:()=>o.id?quest(o):heroDialog(o)}))}];
   }));
-}
-function slotPos(region, k, kind) {
-  const slots = formation(region); if (slots) return slots[k] || plazaOf(region).center;
-  const [x, y] = spotOf(region);
-  if (region === 'camp') return [x - 90 + (k % 6) * 36 + (Math.floor(k / 6) % 2) * 18, y + 40 + Math.floor(k / 6) * 22];   // war camp yard
-  // plaza split: idle party waits in a band by the building door (top), fights use the bottom half
-  if (kind === 'home') return [x - 72 + (k % 4) * 48 + (Math.floor(k / 4) % 2) * 24, y - 22 + Math.floor(k / 4) * 16];
-  const row = Math.floor(k / 3);
-  return [x + ((k % 3) - 1) * 56 + 50, y + 24 + row * 20];
-}
-function regionOf(bot, stage) { const b = D.bots.find(b => b.id === bot); return b ? validRegion(b.region) : validRegion(D.meta.stage_regions?.[stage] || defaultRegion()); }
-
-// ---------- state ----------
-function hero(bot) {
-  if (D.bots.some(b => b.id === bot && b.entity_type === 'actor')) return null;
-  if (!S.heroes[bot]) {
-    const b = D.bots.find(x => x.id === bot) || {id: bot, name: bot, cls: 'mage', region: defaultRegion(), wallet: ''};
-    const home = b.region, k = Object.values(S.heroes).filter(h => h.home === home).length;
-    const [x, y] = slotPos(home, k, 'home');
-    S.heroes[bot] = {bot, name: b.name, cls: b.cls, wallet: b.wallet, home, homeK: k, x, y, region: home, path: [],
-      st: mstyle(b.model), eff: EFF[b.effort] || EFF.medium, model: b.model || '', effort: b.effort || 'medium', charge: 0,
-      v: 0, dist: 0, face: 1, task: null, q: [], atk: -1, hurt: 0, sleep: false, down: 0, bubble: null, combo: 0, fam: [],
-      idle: 3 + Math.random() * 10, act: null, cheer: 0, talk: 0,
-      rest: {state: 'active-unobserved', why: '', savedTask: null, target: null, generation: 0, slot: null, phase: 'idle'}};
-    const h = S.heroes[bot], spot = placeEntity(h, home);
-    if (spot) [h.x, h.y] = spot;
-  }
-  return S.heroes[bot];
-}
-function task(id) {
-  if (!S.tasks[id]) {
-    const t = D.tasks.find(x => x.id === id) || {id, title: id, stage: 'BUILD', campaign: 'misc', max_rt: 1800};
-    S.tasks[id] = {...t, state: 'quest', hp: 1, flash: 0, x: 0, y: 0, region: null, slot: 0, alpha: 0, bornT: 0,
-      chained: false, note: '', runStart: null};
-  }
-  return S.tasks[id];
-}
-// ---------- monsters: born in a lair, wait at the war camp, march along trails/roads to the town ----------
-const MTYPE = {PLAN: 'ghost', BUILD: 'golem', TEST: 'slime', REVIEW: 'bat', DEPLOY: 'skeleton', VERIFY: 'goblin'};
-const LAIR_OF = {goblin: 'lair_cave', golem: 'lair_cave', slime: 'lair_swamp', ghost: 'lair_ruins', bat: 'lair_ruins', skeleton: 'lair_ruins'};
-function mtype(t) { const k = MTYPE[t.stage] || 'goblin'; return k === 'golem' && (t.max_rt || 1800) <= 1200 ? 'goblin' : k; }
-function mtier(t) { const r = t.max_rt || 1800; return t.chained ? 'l' : r <= 1200 ? 's' : r <= 2400 ? 'm' : 'l'; }   // difficulty = time budget
+}   // difficulty = time budget
 function spawnMonster(t, region) {
   if (t.region === region && t.alpha > 0) return;
-  const used = Object.values(S.tasks).filter(o => o !== t && o.region === region && o.alpha > 0 && !o.dying).map(o => o.slot);
+  const used = Object.values(ctx.S.tasks).filter(o => o !== t && o.region === region && o.alpha > 0 && !o.dying).map(o => o.slot);
   let k = 0; while (used.includes(k)) k++;
   const born = t.alpha <= 0;
-  const from = born ? W.lairs[LAIR_OF[mtype(t)]].spot : [t.mx ?? t.x, t.my ?? t.y];
-  t.region = region; t.slot = k; [t.x, t.y] = placeEntity(t, region) || slotPos(region, k, 'battle');
-  if (W.regions[region]) [t.x, t.y] = inPlaza(region, [t.x, t.y]);      // battle slots stay on the paved square
+  const from = born ? W.lairs[ctx.LAIR_OF[ctx.mtype(t)]].spot : [t.mx ?? t.x, t.my ?? t.y];
+  t.region = region; t.slot = k; [t.x, t.y] = ctx.placeEntity(t, region) || ctx.slotPos(region, k, 'battle');
+  if (W.regions[region]) [t.x, t.y] = ctx.inPlaza(region, [t.x, t.y]);      // battle slots stay on the paved square
   t.mx = from[0]; t.my = from[1] + (born ? 8 : 0); t.mdist = t.mdist || 0;
-  t.mpath = [...route([t.mx, t.my], W.regions[region] ? plazaOf(region).node : region, true), [t.x, t.y]];
-  S.soc.marches = (S.soc.marches || 0) + 1;
-  if (born) { S.soc.spawns = (S.soc.spawns || 0) + 1; t.alpha = .01; t.emerge = .9; S.fx.push({k: 'portal', x: from[0] + 34, y: from[1] + 6, life: 1.2, max: 1.2}); }
+  t.mpath = [...ctx.route([t.mx, t.my], W.regions[region] ? ctx.plazaOf(region).node : region, true), [t.x, t.y]];
+  ctx.S.soc.marches = (ctx.S.soc.marches || 0) + 1;
+  if (born) { ctx.S.soc.spawns = (ctx.S.soc.spawns || 0) + 1; t.alpha = .01; t.emerge = .9; ctx.S.fx.push({k: 'portal', x: from[0] + 34, y: from[1] + 6, life: 1.2, max: 1.2}); }
 }
-const PLAZA_RX = 112, PLAZA_RY = 66;              // paved square per region (tools/terrain.py ellipse minus margin)
-function inPlaza(region, [x, y]) {                // clamp a final standing spot into the region's plaza
-  const {center: [cx_,cy_], standing: [rx,ry]} = plazaOf(region), dx = (x-cx_)/rx, dy = (y-cy_)/ry, r = Math.hypot(dx,dy);
-  return r <= 1 ? [x,y] : [cx_+dx/r*rx*.97,cy_+dy/r*ry*.97];
-}
-function walkTo(h, region, spot) {
-  if (h.placement?.region !== region) h.placement = null;
-  // Leave a standing yard through its own road node. Its outer slots can be
-  // closer to an unrelated road; projecting onto that road cuts across grass.
-  const rest = W.regions[h.rest?.target], center = rest?.spot;
-  const inside = center && Math.hypot((h.x-center[0])/PLAZA_RX,(h.y-center[1])/PLAZA_RY) <= 1;
-  const yard = Object.keys(W.regions).find(key => {
-    const r = W.regions[key]; if (!r.plaza) return false;
-    const {center:[x,y],standing:[rx,ry]} = plazaOf(key);
-    return ((h.x-x)/rx)**2 + ((h.y-y)/ry)**2 <= 1;
-  });
-  const exit = inside ? W.graph.pts[rest.node || h.rest.target] : yard && W.graph.pts[plazaOf(yard).node];
-  const p = [...(exit ? [exit] : []), ...route(exit || [h.x, h.y], plazaOf(region).node)].map(q => q.slice());
-  if (spot) p.push(inPlaza(region, spot));
-  h.path = [[h.x, h.y], ...p]; h.region = region;
-}
-function goHome(h) { if (restLocked(h)) return; walkTo(h, h.home, placeEntity(h, h.home) || slotPos(h.home, h.homeK, 'home')); h.task = null; }
-// Model = element, colour and attack speed; effort = charge time, hit power and crit chance (from each bot's
-// config.yaml: model.default + agent.reasoning_effort, or the effort suffix in the model id).
-const MODEL_STYLE = [
-  ['opus', {tag: 'Opus', el: 'holy', color: '#ffd36b', glow: '#fff6c8', speed: .85}],
-  ['fable', {tag: 'Fable', el: 'holy', color: '#ffb36b', glow: '#ffffff', speed: .85}],
-  ['sonnet', {tag: 'Sonnet', el: 'arcane', color: '#b07cff', glow: '#eadcff', speed: 1}],
-  ['haiku', {tag: 'Haiku', el: 'wind', color: '#9fe8ff', glow: '#ffffff', speed: 1.45}],
-  ['sol', {tag: 'Sol', el: 'fire', color: '#ff8a3a', glow: '#ffe0a0', speed: 1.1}],
-  ['luna', {tag: 'Luna', el: 'frost', color: '#bcd4ff', glow: '#ffffff', speed: 1.25}],
-  ['astra', {tag: 'Astra', el: 'star', color: '#7fe0ff', glow: '#ffffff', speed: .9}],
-  ['gemini', {tag: 'Gemini', el: 'storm', color: '#ffe85a', glow: '#fffbe0', speed: 1.35}]];
-const NO_STYLE = {tag: '?', el: 'none', color: '#cfd8ea', glow: '#ffffff', speed: 1};
-function mstyle(model) { const m = (model || '').toLowerCase(); return (MODEL_STYLE.find(([k]) => m.includes(k)) || [0, NO_STYLE])[1]; }
-const EFF = {low: {charge: .03, mult: .8, crit: .02}, medium: {charge: .1, mult: 1, crit: .06}, high: {charge: .25, mult: 1.3, crit: .14},
-  xhigh: {charge: .4, mult: 1.6, crit: .22}, max: {charge: .55, mult: 1.9, crit: .3}};
-const EL_PARTICLE = {fire: ['#ff8a3a', -1], frost: ['#e6f0ff', 1], storm: ['#ffe85a', 0], holy: ['#fff6c8', -1], arcane: ['#c8a0ff', -1], wind: ['#bff4ff', 0], star: ['#a8ecff', -1]};
-// attack range per class (px between hero and monster): melee classes close in, casters/archers keep distance
-const RANGE = {warrior: 46, paladin: 52, engineer: 96, sage: 132, mage: 150, ranger: 176, commander: 64};
+function goHome(h) { if (restLocked(h)) return; ctx.walkTo(h, h.home, ctx.placeEntity(h, h.home) || ctx.slotPos(h.home, h.homeK, 'home')); h.task = null; }
 function engage(h, t) {
   if (restLocked(h) || t.bot !== h.bot || t.state !== 'fight') return;
-  if (!t.region) spawnMonster(t, regionOf(h.bot, t.stage));
-  h.task = t.id; walkTo(h, t.region, placeEntity(h, t.region) || [t.x - (RANGE[h.cls] || 72), t.y + 2]);
+  if (!t.region) spawnMonster(t, ctx.regionOf(h.bot, t.stage));
+  h.task = t.id; ctx.walkTo(h, t.region, ctx.placeEntity(h, t.region) || [t.x - (ctx.RANGE[h.cls] || 72), t.y + 2]);
 }
 
 function reset(t, liveKeys = null) {
-  const feed = S.feed, lastFeed = S.lastFeed, fx = S.fx;
+  const feed = ctx.S.feed, lastFeed = ctx.S.lastFeed, fx = ctx.S.fx;
   const activeBots = new Set(), activeTasks = new Set();
   restoreCheckpoint();
-  if (liveKeys) Object.assign(S, {feed, lastFeed, fx});
+  if (liveKeys) Object.assign(ctx.S, {feed, lastFeed, fx});
   if (checkpoint) t = Math.max(t, checkpoint.t);
-  syncMetadata();
-  S.t = t;
-  while (S.i < D.events.length && D.events[S.i].t <= t) {
-    const event = D.events[S.i++], animate = !!liveKeys?.has(eventKey(event));
-    const fxCount = S.fx.length;
+  ctx.syncMetadata();
+  ctx.S.t = t;
+  while (ctx.S.i < D.events.length && D.events[ctx.S.i].t <= t) {
+    const event = D.events[ctx.S.i++], animate = !!liveKeys?.has(eventKey(event));
+    const fxCount = ctx.S.fx.length;
     apply(event, animate);
     if (animate) { activeBots.add(event.bot); activeTasks.add(event.task); }
-    else if (liveKeys) S.fx.length = fxCount; // historical portals are not live effects
+    else if (liveKeys) ctx.S.fx.length = fxCount; // historical portals are not live effects
   }
-  for (const h of Object.values(S.heroes)) {         // snap: no walking during a scrub
+  for (const h of Object.values(ctx.S.heroes)) {         // snap: no walking during a scrub
     if (activeBots.has(h.bot)) continue;
     if (h.rest.phase === 'portal') finishPortal(h);
     if (h.path.length) { [h.x, h.y] = h.path[h.path.length - 1]; h.path = []; }
     finishRestMotion(h);
   }
-  for (const k of Object.values(S.tasks)) if (k.alpha > 0 && !activeTasks.has(k.id)) { k.alpha = 1; k.mx = undefined; k.mpath = null; k.emerge = 0; }   // scrub: everyone already in place
+  for (const k of Object.values(ctx.S.tasks)) if (k.alpha > 0 && !activeTasks.has(k.id)) { k.alpha = 1; k.mx = undefined; k.mpath = null; k.emerge = 0; }   // scrub: everyone already in place
   // scrub lands mid-day: about half the idle heroes are already out socialising (snapped, no walk)
-  for (const h of Object.values(S.heroes)) if (!liveKeys && free(h) && !h.act && (h.homeK % 2 || friends(h.bot).length) && Math.random() < .6) {
+  for (const h of Object.values(ctx.S.heroes)) if (!liveKeys && free(h) && !h.act && (h.homeK % 2 || friends(h.bot).length) && Math.random() < .6) {
     startHangout(h, HANGOUTS[Math.floor(Math.random() * HANGOUTS.length)]);
     if (h.path.length) { [h.x, h.y] = h.path[h.path.length - 1]; h.path = []; }
   }
@@ -800,7 +635,7 @@ function reset(t, liveKeys = null) {
 
 // ---------- events -> game actions (the action table; extend here) ----------
 function cancelTaskActions(t) {
-  for (const h of Object.values(S.heroes)) {
+  for (const h of Object.values(ctx.S.heroes)) {
     h.q = h.q.filter(e => e.task !== t.id);
     h.fam = h.fam.filter(f => f.task !== t.id);
     if (h.rest.savedTask === t.id) h.rest.savedTask = null;
@@ -815,7 +650,7 @@ function assignTask(t, bot) {
   t.bot = bot;
 }
 function canStrike(h, t, e) {
-  return !restLocked(h) && S.tasks[t.id] === t && t.state === 'fight' && !t.dying &&
+  return !restLocked(h) && ctx.S.tasks[t.id] === t && t.state === 'fight' && !t.dying &&
     t.bot === h.bot && h.task === t.id && e.task === t.id && e.bot === h.bot;
 }
 const ACTIONS = {
@@ -827,17 +662,17 @@ const ACTIONS = {
   claimed(e, fx, t) { assignTask(t, e.bot); },
   run_start(e, fx, t) {
     cancelTaskActions(t); assignTask(t, e.bot);
-    const h = hero(e.bot); t.state = 'fight'; t.runStart = e.t;
+    const h = ctx.hero(e.bot); t.state = 'fight'; t.runStart = e.t;
     if (!h) return;
     if (h.sleep) wake(h, fx);
-    spawnMonster(t, regionOf(e.bot, t.stage));
+    spawnMonster(t, ctx.regionOf(e.bot, t.stage));
     if (restLocked(h)) return;
     h.act = null;
     if (!fx) { engage(h, t); return; }
     order(h, t, e.t);
   },
   tool(e, fx, t) {
-    const h = hero(e.bot); if (restLocked(h) || t.bot !== h.bot || h.task !== t.id || t.state !== 'fight') return;
+    const h = ctx.hero(e.bot); if (restLocked(h) || t.bot !== h.bot || h.task !== t.id || t.state !== 'fight') return;
     if (!fx) return;
     // only work that changes or tests something is an attack; reading, searching, git status/diff, skills,
     // web and memory lookups are gestures (icon + small effect) so the fight reads like the real session
@@ -848,26 +683,26 @@ const ACTIONS = {
     if (h.q.length < 6) h.q.push(e); else h.combo++;
   },
   compress(e, fx, t) {
-    const h = hero(e.bot); if (!fx || restLocked(h)) return;
-    h.meditate = 1.8; h.q.length = 0; S.soc.compress = (S.soc.compress || 0) + 1;
-    S.fx.push({k: 'swirl', x: h.x, y: h.y - 30, life: 1.6, max: 1.6});
+    const h = ctx.hero(e.bot); if (!fx || restLocked(h)) return;
+    h.meditate = 1.8; h.q.length = 0; ctx.S.soc.compress = (ctx.S.soc.compress || 0) + 1;
+    ctx.S.fx.push({k: 'swirl', x: h.x, y: h.y - 30, life: 1.6, max: 1.6});
     h.bubble = {text: `🧘 Context compressed ${e.before}→${e.after}`, until: 2.2};
     say(`🧘 ${nm(h)} compressed context ${e.before}→${e.after} messages`, e.t, 'cp' + h.bot, 300);
   },
   captain(e, fx, t) {
-    const cap = S.heroes[captainId()]; if (!fx || !cap || restLocked(cap)) return;
-    S.soc.captain = (S.soc.captain || 0) + 1;
+    const cap = ctx.S.heroes[captainId()]; if (!fx || !cap || restLocked(cap)) return;
+    ctx.S.soc.captain = (ctx.S.soc.captain || 0) + 1;
     const LINE = {create: ['📌 New quest!', '#ffd36b'], reassign: ['🔁 Reassigned!', '#9fd3ff'], extend: ['⏳ More time', '#ffd36b'],
       unblock: ['🔨 Unblocked!', '#ff9f5a'], block: ['⛓ On hold', '#ff6b5a'], link: ['🔗 Linked', '#c8b0ff'], unlink: ['✂ Unlinked', '#c8b0ff'], note: ['✒', '#cfd8ea']}[e.act];
     if (e.act !== 'note' || Math.random() < .15) { cap.atk = 0; cap.cur = {tool: 'order'}; cap.bubble = {text: LINE[0], until: 1.6}; }
     if (e.act === 'extend' && t.alpha > 0) num(t.x, t.y - 46, '⏳ +time', '#ffd36b', 1.4);
-    if (e.act === 'unblock' && t.alpha > 0) { burst(t.x, t.y - 20, '#ff9f5a', 14); S.fx.push({k: 'ring', x: t.x, y: t.y - 20, color: '#ffcf6b', r: 26, life: .4, max: .4}); }
-    if (e.act === 'reassign' && e.bot) { const h = S.heroes[e.bot]; if (h) S.fx.push({k: 'raven', x0: cap.x, y0: cap.y - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3}); }
+    if (e.act === 'unblock' && t.alpha > 0) { burst(t.x, t.y - 20, '#ff9f5a', 14); ctx.S.fx.push({k: 'ring', x: t.x, y: t.y - 20, color: '#ffcf6b', r: 26, life: .4, max: .4}); }
+    if (e.act === 'reassign' && e.bot) { const h = ctx.S.heroes[e.bot]; if (h) ctx.S.fx.push({k: 'raven', x0: cap.x, y0: cap.y - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3}); }
     if (e.act !== 'note') say(`👑 Captain ${LINE[0]} ${esc(t.title)}`, e.t, 'cap' + e.act + t.id, 120);
   },
-  tests(e, fx, t) { const h = hero(e.bot); if (fx && canStrike(h,t,e)) { h.q.push({...e, tool: 'tests'}); say(`🏹 ${nm(h)} passed ${e.passed.toLocaleString('en-GB')} tests`, e.t, 'ts' + t.id, 600); } },
-  hurt(e, fx, t) { if (fx) { const h = hero(e.bot); if (t.state === 'fight' && t.alpha > 0 && !t.mpath) { t.atk = 0; S.soc.fightbacks = (S.soc.fightbacks || 0) + 1; monsterHit(t, h); return say(`💥 ${nm(h)} hit by ${mtype(t)} (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } h.hurt = .35; num(h.x, h.y - HERO_H, `exit ${e.code}`, '#ff6b5a'); say(`💥 ${nm(h)} command failed (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } },
-  heartbeat(e, fx, t) { t.note = e.note || t.note; const h = t.bot && S.heroes[t.bot]; if (fx && h && e.note) { h.bubble = {text: e.note, until: 3.5}; say(`💬 ${nm(h)}: ${esc(e.note)}`, e.t, 'hb' + t.id, 900); } },
+  tests(e, fx, t) { const h = ctx.hero(e.bot); if (fx && canStrike(h,t,e)) { h.q.push({...e, tool: 'tests'}); say(`🏹 ${nm(h)} passed ${e.passed.toLocaleString('en-GB')} tests`, e.t, 'ts' + t.id, 600); } },
+  hurt(e, fx, t) { if (fx) { const h = ctx.hero(e.bot); if (t.state === 'fight' && t.alpha > 0 && !t.mpath) { t.atk = 0; ctx.S.soc.fightbacks = (ctx.S.soc.fightbacks || 0) + 1; monsterHit(t, h); return say(`💥 ${nm(h)} hit by ${ctx.mtype(t)} (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } h.hurt = .35; num(h.x, h.y - ctx.HERO_H, `exit ${e.code}`, '#ff6b5a'); say(`💥 ${nm(h)} command failed (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } },
+  heartbeat(e, fx, t) { t.note = e.note || t.note; const h = t.bot && ctx.S.heroes[t.bot]; if (fx && h && e.note) { h.bubble = {text: e.note, until: 3.5}; say(`💬 ${nm(h)}: ${esc(e.note)}`, e.t, 'hb' + t.id, 900); } },
   commented(e, fx, t) {},
   comment(e, fx, t) {
     if (!fx) return;
@@ -876,45 +711,45 @@ const ACTIONS = {
     else if (e.author === captainId()) { raven(t); say(`🐦‍⬛ Captain: ${esc(e.note)}`, e.t, 'cap' + t.id, 600); }
   },
   summon(e, fx, t) {
-    const h = hero(e.bot);
+    const h = ctx.hero(e.bot);
     if (!fx) return;
     h.fam.push({a: Math.random() * 6, life: 8, task: t.id}); burst(h.x + 10, h.y - 6, '#ffb36b', 12);
-    S.fx.push({k: 'ring', x: h.x + 26, y: h.y - 10, color: '#ffb36b', r: 18, flat: true, life: .6, max: .6});
+    ctx.S.fx.push({k: 'ring', x: h.x + 26, y: h.y - 10, color: '#ffb36b', r: 18, flat: true, life: .6, max: .6});
     h.bubble = {text: '🦊 Help requested!', until: 1.6};
     say(`🦊 ${nm(h)} summoned a subagent${e.note ? ': ' + esc(e.note) : ''}`, e.t);
   },
-  moa(e, fx, t) { if (fx) { const h = hero(e.bot); S.fx.push({k: 'council', h, life: 4}); say(`✨ FABLE + ASTRA council advised ${nm(h)}`, e.t); } },
+  moa(e, fx, t) { if (fx) { const h = ctx.hero(e.bot); ctx.S.fx.push({k: 'council', h, life: 4}); say(`✨ FABLE + ASTRA council advised ${nm(h)}`, e.t); } },
   review_requested(e, fx, t) { fx && say(`🛡️ Quest submitted for review: ${esc(t.title)}`, e.t); },
   blocked(e, fx, t) {
     cancelTaskActions(t);
     t.state = 'blocked'; t.chained = true; spawnMonster(t, 'volcano'); t.note = e.note || t.note;
-    const h = t.bot && S.heroes[t.bot]; if (h && h.task === t.id) goHome(h);
-    if (fx) { S.trauma = Math.min(1, S.trauma + .5); say(`⛓️ Quest blocked: <b>${esc(t.title)}</b> ${e.note ? '— ' + esc(e.note) : ''}`, e.t); }
+    const h = t.bot && ctx.S.heroes[t.bot]; if (h && h.task === t.id) goHome(h);
+    if (fx) { ctx.S.trauma = Math.min(1, ctx.S.trauma + .5); say(`⛓️ Quest blocked: <b>${esc(t.title)}</b> ${e.note ? '— ' + esc(e.note) : ''}`, e.t); }
   },
   block_loop_detected(e, fx, t) { ACTIONS.blocked(e, fx, t); },
-  unblocked(e, fx, t) { t.chained = false; t.state = 'quest'; if (t.bot) spawnMonster(t, t.runStart ? regionOf(t.bot) : 'camp'); fx && say(`🔓 Quest unblocked: ${esc(t.title)}`, e.t); },
+  unblocked(e, fx, t) { t.chained = false; t.state = 'quest'; if (t.bot) spawnMonster(t, t.runStart ? ctx.regionOf(t.bot) : 'camp'); fx && say(`🔓 Quest unblocked: ${esc(t.title)}`, e.t); },
   run_end(e, fx, t) {
-    const h = hero(e.bot);
+    const h = ctx.hero(e.bot);
     if (!h) return;
     if (t.bot === e.bot && t.state !== 'done') cancelTaskActions(t);
     if (e.outcome === 'rate_limited') { sleep(h, fx); return; }
     if (['timed_out', 'crashed', 'gave_up', 'interrupted'].includes(e.outcome)) {
-      if (fx) { h.down = 1.2; num(h.x, h.y - HERO_H, '💀 ' + e.outcome, '#ff6b5a'); say(`💀 ${nm(h)} stopped (${e.outcome})`, e.t); }
+      if (fx) { h.down = 1.2; num(h.x, h.y - ctx.HERO_H, '💀 ' + e.outcome, '#ff6b5a'); say(`💀 ${nm(h)} stopped (${e.outcome})`, e.t); }
       goHome(h);
     }
   },
   rate_limited(e, fx, t) {},
-  wake(e, fx, t) { wake(hero(e.bot), fx); },
+  wake(e, fx, t) { wake(ctx.hero(e.bot), fx); },
   completed(e, fx, t) {
-    for (const h of Object.values(S.heroes)) { h.q = h.q.filter(e => e.task !== t.id); if (h.task === t.id) { h.atk = -1; h.cur = null; } }
-    t.state = 'done'; S.vault++;
+    for (const h of Object.values(ctx.S.heroes)) { h.q = h.q.filter(e => e.task !== t.id); if (h.task === t.id) { h.atk = -1; h.cur = null; } }
+    t.state = 'done'; ctx.S.vault++;
     if (fx) {
-      t.flash = 1; t.dying = 1; S.stop = .07; S.trauma = Math.min(1, S.trauma + .35);
+      t.flash = 1; t.dying = 1; ctx.S.stop = .07; ctx.S.trauma = Math.min(1, ctx.S.trauma + .35);
       coins(t.x, t.y - 10); num(t.x, t.y - 46, 'QUEST CLEAR!', '#ffd36b', 1.6);
       say(`🏆 Quest complete: <b>${esc(t.title)}</b>`, e.t);
       cheerAround(t);
     } else t.alpha = 0;
-    const h = t.bot && S.heroes[t.bot]; if (h && h.task === t.id) { if (fx) laterHero(h, .9, () => { if (h.task === t.id) { h.task = null; handOff(t); if (!h.act) goHome(h); } }); else goHome(h); }
+    const h = t.bot && ctx.S.heroes[t.bot]; if (h && h.task === t.id) { if (fx) laterHero(h, .9, () => { if (h.task === t.id) { h.task = null; handOff(t); if (!h.act) goHome(h); } }); else goHome(h); }
   },
   archived(e, fx, t) { cancelTaskActions(t); t.state = 'archived'; t.alpha = 0; t.chained = false; t.placement = null; t.mpath = null; t.dying = 0; },
 };
@@ -923,16 +758,16 @@ function apply(e, fx) {
   if (actor && ['mana','pause','resume','failover','tool','tests','hurt','compress','summon','moa','wake'].includes(e.kind)) return;
   if (applyBotEvent(e, fx)) return;
   if (!e.task) return;
-  if (['tool','tests','hurt','compress','summon','moa'].includes(e.kind) && e.bot && restLocked(hero(e.bot))) return;
-  const t = task(e.task);
+  if (['tool','tests','hurt','compress','summon','moa'].includes(e.kind) && e.bot && restLocked(ctx.hero(e.bot))) return;
+  const t = ctx.task(e.task);
   if (t.state === 'archived') return;
   (ACTIONS[e.kind] || (() => { if (fx && t.alpha > 0) num(t.x, t.y - 30, e.kind, '#8aa0c8', .8); }))(e, fx, t);
 }
 // Bot-level events never fabricate a task or transfer its ownership.
 const REST_REASON = {limited: 'Rate limited', 'waiting-start': 'Waiting to start', unavailable: 'Unavailable'};
 function diagnostic(message, fx = false, key = message) {
-  S.diagnostics[message] = (S.diagnostics[message] || 0) + 1;
-  if (fx) say(message, S.t, 'diagnostic:' + key, 0);
+  ctx.S.diagnostics[message] = (ctx.S.diagnostics[message] || 0) + 1;
+  if (fx) say(message, ctx.S.t, 'diagnostic:' + key, 0);
 }
 function restLocked(h) { return h.rest && (['paused', 'transferred'].includes(h.rest.state) || h.rest.phase === 'portal'); }
 function laterHero(h, sec, callback) {
@@ -957,12 +792,12 @@ function restSpotClear(region, spot, occupied) {
 }
 function allocateRestSlots(geometry) {
   const occupied = [], {region, data} = geometry;
-  const resting = Object.values(S.heroes).filter(h => ['paused', 'transferred'].includes(h.rest.state)).sort((a,b) => a.bot < b.bot ? -1 : a.bot > b.bot ? 1 : 0);
+  const resting = Object.values(ctx.S.heroes).filter(h => ['paused', 'transferred'].includes(h.rest.state)).sort((a,b) => a.bot < b.bot ? -1 : a.bot > b.bot ? 1 : 0);
   // Sorted IDs make slots deterministic independent of event delivery order.
   for (const h of resting) {
     let spot, slot;
     for (let k = 0; k < 256; k++) {
-      const candidate = inPlaza(region, data.rest_spots?.[k] || hangSpot(region, k));
+      const candidate = ctx.inPlaza(region, data.rest_spots?.[k] || hangSpot(region, k));
       if (restSpotClear(region, candidate, occupied)) { spot = candidate; slot = k; break; }
     }
     if (!spot) { diagnostic('Rest camp has no free safe slot'); h.path = []; h.rest.phase = 'resting'; continue; }
@@ -974,19 +809,19 @@ function allocateRestSlots(geometry) {
 }
 function walkRest(h, geometry, spot) {
   const [cx_,cy_] = geometry.data.spot;
-  if (Math.hypot((h.x-cx_)/PLAZA_RX,(h.y-cy_)/PLAZA_RY) <= 1) {
+  if (Math.hypot((h.x-cx_)/ctx.PLAZA_RX,(h.y-cy_)/ctx.PLAZA_RY) <= 1) {
     // Slot reallocation or a repeated pause can start inside the camp.
     // Keep that short walk wholly in the plaza rather than detouring to
     // the nearest (possibly unrelated) road beyond its edge.
-    h.path = [[h.x,h.y], inPlaza(geometry.region, spot)]; h.region = geometry.region; return;
+    h.path = [[h.x,h.y], ctx.inPlaza(geometry.region, spot)]; h.region = geometry.region; return;
   }
   const exit = W.regions[h.region]?.plaza?.center;
-  const points = [...(exit ? [exit] : []), ...route(exit || [h.x,h.y], geometry.node)];
+  const points = [...(exit ? [exit] : []), ...ctx.route(exit || [h.x,h.y], geometry.node)];
   // A disconnected graph must not produce a direct jump across unpaved terrain.
   if (points.length < 3 && Math.hypot(points[0][0] - W.graph.pts[geometry.node][0],points[0][1] - W.graph.pts[geometry.node][1]) > 1) {
     h.path = []; diagnostic('Rest route unavailable; staying in place'); return;
   }
-  h.path = [[h.x,h.y], ...points.map(p => p.slice()), inPlaza(geometry.region, spot)]; h.region = geometry.region;
+  h.path = [[h.x,h.y], ...points.map(p => p.slice()), ctx.inPlaza(geometry.region, spot)]; h.region = geometry.region;
 }
 function pauseHero(h, kind, why, observed = true, fx = false) {
   h.placement = null;
@@ -999,7 +834,7 @@ function pauseHero(h, kind, why, observed = true, fx = false) {
   else { h.path = []; h.v = 0; h.rest.phase = 'resting'; h.rest.target = null; h.rest.slot = null; }
 }
 function resumeHero(h) {
-  const saved = S.tasks[h.rest.savedTask];
+  const saved = ctx.S.tasks[h.rest.savedTask];
   h.rest = CUI.transitionRest(h.rest, 'resume'); h.sleep = false; h.act = null; h.q = []; h.atk = -1;
   if (saved?.state === 'fight' && saved.bot === h.bot) engage(h, saved); else goHome(h);
   h.rest.savedTask = null;
@@ -1017,23 +852,23 @@ function applyBotEvent(e, fx) {
     // Validate before creating even a hero for malformed token payloads.
     if (!Number.isSafeInteger(e.tokens) || (e.tokens < 0 && e.correction !== true)) { diagnostic('Invalid token event ignored', fx, eventKey(e)); return true; }
     if (!e.tokens) return true;
-    const h = hero(e.bot), error = CUI.reduceMana(S, e, h.wallet);
+    const h = ctx.hero(e.bot), error = CUI.reduceMana(ctx.S, e, h.wallet);
     if (error) diagnostic(error, fx, eventKey(e));
     else if (fx) say(`🔮 ${nm(h)} token usage ${e.tokens > 0 ? '+' : ''}${e.tokens}${e.basis === 'chars' ? ' (text estimate)' : e.correction ? ' (usage correction)' : ''}`, e.t, 'mana:' + eventKey(e), 0);
     return true;
   }
   if (e.kind === 'pause' && !REST_REASON[e.why]) { diagnostic('Invalid rest reason ignored', fx, eventKey(e)); return true; }
   if (e.kind === 'failover' && (!e.other || typeof e.other !== 'string' || e.other === e.bot)) { diagnostic('Invalid switch event ignored', fx, eventKey(e)); return true; }
-  const h = hero(e.bot);
+  const h = ctx.hero(e.bot);
   if (e.kind === 'resume') {
     resumeHero(h); if (fx) say(`☀️ ${nm(h)} resumed`, e.t, 'resume:' + eventKey(e), 0);
   } else {
     pauseHero(h, e.kind, e.why || 'unavailable', true, fx);
-    if (fx) say(`😴 ${nm(h)} ${e.kind === 'failover' ? 'switched to ' + nm(hero(e.other)) + ' (signal only; quest ownership unchanged)' : 'is resting: ' + REST_REASON[e.why]}`, e.t, 'rest:' + eventKey(e), 0);
+    if (fx) say(`😴 ${nm(h)} ${e.kind === 'failover' ? 'switched to ' + nm(ctx.hero(e.other)) + ' (signal only; quest ownership unchanged)' : 'is resting: ' + REST_REASON[e.why]}`, e.t, 'rest:' + eventKey(e), 0);
     if (e.kind === 'failover') {
-      const target = hero(e.other), geometry = restGeometry(false);
-      const busy = Object.values(S.tasks).some(t => t.bot === target.bot && t.state === 'fight');
-      if (fx && geometry) { const [x,y] = geometry.data.portal?.spot || geometry.data.spot; S.fx.push({k:'portal',x,y,life:2.2,max:2.2}); }
+      const target = ctx.hero(e.other), geometry = restGeometry(false);
+      const busy = Object.values(ctx.S.tasks).some(t => t.bot === target.bot && t.state === 'fight');
+      if (fx && geometry) { const [x,y] = geometry.data.portal?.spot || geometry.data.spot; ctx.S.fx.push({k:'portal',x,y,life:2.2,max:2.2}); }
       if (geometry && !busy && !restLocked(target)) {
         target.rest = {...target.rest, generation: target.rest.generation + 1, state:'active',phase:'portal',target:geometry.region,slot:null};
         target.act = null; target.q = []; target.atk = -1;
@@ -1044,18 +879,18 @@ function applyBotEvent(e, fx) {
   }
   return true;
 }
-function sleep(h, fx) { if (restLocked(h) && h.rest.observed) return; pauseHero(h, 'pause', 'limited', false, fx); fx && say(`😴 ${nm(h)} is resting: rate limited`, S.t); }
-function wake(h, fx) { if (!h.sleep || h.rest.observed) return; resumeHero(h); fx && say(`☀️ ${nm(h)} resumed`, S.t); }
+function sleep(h, fx) { if (restLocked(h) && h.rest.observed) return; pauseHero(h, 'pause', 'limited', false, fx); fx && say(`😴 ${nm(h)} is resting: rate limited`, ctx.S.t); }
+function wake(h, fx) { if (!h.sleep || h.rest.observed) return; resumeHero(h); fx && say(`☀️ ${nm(h)} resumed`, ctx.S.t); }
 const nm = h => `<span class="who">${esc(h.name)}</span> (${esc(h.bot)})`;
 let selectedScene = null;
 const esc = s => String(s ?? '').replace(/[<>&]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;'}[c]));
 
 // ---------- FX ----------
-function num(x, y, text, color, life = 1.1) { S.fx.push({k: 'num', x, y, text, color, life, max: life}); }
-function burst(x, y, color, n) { if (calm) n = Math.ceil(n / 3); for (let i = 0; i < n; i++) S.fx.push({k: 'p', x, y, vx: (Math.random() - .5) * 90, vy: -Math.random() * 90, color, life: .5 + Math.random() * .4}); }
-function coins(x, y) { const [vx, vy] = W.regions.vault.spot; for (let i = 0; i < 8; i++) S.fx.push({k: 'coin', x, y, x0: x, y0: y, x1: vx + (Math.random() - .5) * 30, y1: vy - 10, life: 1.2 + i * .06, max: 1.2 + i * .06}); }
-function portal(t) { S.fx.push({k: 'portal', x: t.x - 34, y: t.y, life: 2.2, max: 2.2}); }
-function raven(t) { const [x, y] = spotOf(regionOf(captainId())); S.fx.push({k: 'raven', x0: x, y0: y - 40, x1: t.x, y1: t.y - 40, life: 1.6, max: 1.6}); }
+function num(x, y, text, color, life = 1.1) { ctx.S.fx.push({k: 'num', x, y, text, color, life, max: life}); }
+function burst(x, y, color, n) { if (calm) n = Math.ceil(n / 3); for (let i = 0; i < n; i++) ctx.S.fx.push({k: 'p', x, y, vx: (Math.random() - .5) * 90, vy: -Math.random() * 90, color, life: .5 + Math.random() * .4}); }
+function coins(x, y) { const [vx, vy] = W.regions.vault.spot; for (let i = 0; i < 8; i++) ctx.S.fx.push({k: 'coin', x, y, x0: x, y0: y, x1: vx + (Math.random() - .5) * 30, y1: vy - 10, life: 1.2 + i * .06, max: 1.2 + i * .06}); }
+function portal(t) { ctx.S.fx.push({k: 'portal', x: t.x - 34, y: t.y, life: 2.2, max: 2.2}); }
+function raven(t) { const [x, y] = ctx.spotOf(ctx.regionOf(captainId())); ctx.S.fx.push({k: 'raven', x0: x, y0: y - 40, x1: t.x, y1: t.y - 40, life: 1.6, max: 1.6}); }
 // Class-specific attacks. Melee hits land on the impact frame; ranged attacks fire a projectile on the
 // impact frame and the hit (flash, knockback, numbers) lands when it arrives. The tool label rides on the hit.
 const ATTACK = {
@@ -1069,34 +904,34 @@ const ATTACK = {
 function toolLabel(e) {
   const tool = e.tool;
   if (tool === 'patch' || tool === 'write_file') return [`+${e.plus || 1} −${e.minus || 0}`, '#ffe08a'];
-  if (tool === 'terminal') { const c = e.cat || 'shell'; return [CAT_ICON[c] + ' ' + c, '#fff']; }
+  if (tool === 'terminal') { const c = e.cat || 'shell'; return [ctx.CAT_ICON[c] + ' ' + c, '#fff']; }
   if (tool === 'tests') return [`✔ ${e.passed}`, '#7dffa0'];
-  return [TOOL_ICON[tool] || '✦', '#fff'];
+  return [ctx.TOOL_ICON[tool] || '✦', '#fff'];
 }
-function heroAccent(h) { const im = SPRV[`${h.cls}-${(h.st || NO_STYLE).tag}`] || SPR[h.cls]; return im ? accent(im) : {}; }
+function heroAccent(h) { const im = SPRV[`${h.cls}-${(h.st || ctx.NO_STYLE).tag}`] || SPR[h.cls]; return im ? accent(im) : {}; }
 function landHit(h, t, e, a0, ix, iy) {
   if (!canStrike(h,t,e)) return;
-  const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, ef = h.eff || EFF.medium, crit = Math.random() < ef.crit;
+  const st = {...(h.st || ctx.NO_STYLE), ...heroAccent(h)}, ef = h.eff || ctx.EFF.medium, crit = Math.random() < ef.crit;
   const a = {...a0, color: a0.kind === 'proj' ? st.color : a0.color, glow: st.glow};
   t.flash = .09 * ef.mult; t.kick = Math.min(1.6, ef.mult * (crit ? 1.4 : 1));
-  S.trauma = Math.min(1, S.trauma + (a.kind === 'smite' ? .12 : .06) * ef.mult * (crit ? 2 : 1));
-  if (crit) { S.stop = .05; num(ix, iy - 34, 'CRIT!', st.color, 1.2); }
-  if (st.el === 'storm') S.fx.push({k: 'bolt', x: ix, y: iy, color: st.color, life: .2, max: .2});
-  if (st.el === 'frost') S.fx.push({k: 'ring', x: ix, y: iy, color: '#e6f0ff', r: 14, life: .35, max: .35});
+  ctx.S.trauma = Math.min(1, ctx.S.trauma + (a.kind === 'smite' ? .12 : .06) * ef.mult * (crit ? 2 : 1));
+  if (crit) { ctx.S.stop = .05; num(ix, iy - 34, 'CRIT!', st.color, 1.2); }
+  if (st.el === 'storm') ctx.S.fx.push({k: 'bolt', x: ix, y: iy, color: st.color, life: .2, max: .2});
+  if (st.el === 'frost') ctx.S.fx.push({k: 'ring', x: ix, y: iy, color: '#e6f0ff', r: 14, life: .35, max: .35});
   if (st.el === 'fire' || st.el === 'holy' || st.el === 'arcane') burst(ix, iy - 4, st.color, Math.round(4 * ef.mult));
-  if (a.kind === 'slash') S.fx.push({k: 'slash', x: ix, y: iy, dir: h.face, color: a.color, glow: st.color, life: .22, max: .22, big: ef.mult});
-  else if (a.kind === 'smite') S.fx.push({k: 'pillar', x: ix, y: t.y, color: a.color, life: .45, max: .45});
-  else S.fx.push({k: 'ring', x: ix, y: iy, color: a.glow, r: a.proj === 'orb' ? 18 : 11, life: .3, max: .3});
+  if (a.kind === 'slash') ctx.S.fx.push({k: 'slash', x: ix, y: iy, dir: h.face, color: a.color, glow: st.color, life: .22, max: .22, big: ef.mult});
+  else if (a.kind === 'smite') ctx.S.fx.push({k: 'pillar', x: ix, y: t.y, color: a.color, life: .45, max: .45});
+  else ctx.S.fx.push({k: 'ring', x: ix, y: iy, color: a.glow, r: a.proj === 'orb' ? 18 : 11, life: .3, max: .3});
   burst(ix, iy, a.glow, a.kind === 'proj' ? 6 : 9);
   const [txt, col] = toolLabel(e); num(ix, iy - 18, txt, col, e.tool === 'tests' ? 1.4 : 1.1);
-  if (h.combo > 1) { num(h.x, h.y - HERO_H - 14, `COMBO x${h.combo}`, '#7fc8ff', .9); h.combo = 0; }
+  if (h.combo > 1) { num(h.x, h.y - ctx.HERO_H - 14, `COMBO x${h.combo}`, '#7fc8ff', .9); h.combo = 0; }
 }
 function strike(h, t, e) {
   if (!canStrike(h,t,e)) return;
   const a = ATTACK[h.cls] || ATTACK.warrior, ix = t.x - 6, iy = t.y - 22;
   if (a.kind !== 'proj') return landHit(h, t, e, a, ix, iy);
-  const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, sx = h.x + 22 * h.face, sy = h.y - 34, dur = Math.max(.12, Math.hypot(ix - sx, iy - sy) / (a.speed * st.speed));
-  S.fx.push({k: 'proj', proj: a.proj, x0: sx, y0: sy, x1: ix, y1: iy, color: st.color, glow: st.glow, life: dur, max: dur, big: (h.eff || EFF.medium).mult,
+  const st = {...(h.st || ctx.NO_STYLE), ...heroAccent(h)}, sx = h.x + 22 * h.face, sy = h.y - 34, dur = Math.max(.12, Math.hypot(ix - sx, iy - sy) / (a.speed * st.speed));
+  ctx.S.fx.push({k: 'proj', proj: a.proj, x0: sx, y0: sy, x1: ix, y1: iy, color: st.color, glow: st.glow, life: dur, max: dur, big: (h.eff || ctx.EFF.medium).mult,
     arc: a.proj === 'arrow' ? 16 : a.proj === 'gear' ? 24 : 0});
   laterHero(h, dur, () => landHit(h, t, e, a, ix, iy));
 }
@@ -1107,33 +942,33 @@ function gesture(h, e, kind) {
   if (restLocked(h)) return;
   const [icon, col] = GESTURE[kind] || GESTURE.read;
   h.gest = {icon, until: kind === 'read' || kind === 'scout' ? .8 : 1.3};
-  if (kind === 'push') S.fx.push({k: 'balloon', x: h.x, y: h.y - 40, life: 2.2, max: 2.2});
-  else if (kind === 'commit') { h.cheer = .5; S.fx.push({k: 'ring', x: h.x, y: h.y - 30, color: '#ffe08a', r: 16, life: .4, max: .4}); }
+  if (kind === 'push') ctx.S.fx.push({k: 'balloon', x: h.x, y: h.y - 40, life: 2.2, max: 2.2});
+  else if (kind === 'commit') { h.cheer = .5; ctx.S.fx.push({k: 'ring', x: h.x, y: h.y - 30, color: '#ffe08a', r: 16, life: .4, max: .4}); }
   else if (kind === 'merge') { burst(h.x, h.y - 40, '#ffb36b', 10); }
-  else if (kind === 'pigeon') S.fx.push({k: 'raven', x0: h.x, y0: h.y - 40, x1: W.regions.castle.spot[0], y1: W.regions.castle.spot[1] - 60, life: 1.4, max: 1.4, icon: '🕊'});
-  if (kind !== 'read' && kind !== 'scout') num(h.x, h.y - HERO_H - 4, icon, col, 1.1);
+  else if (kind === 'pigeon') ctx.S.fx.push({k: 'raven', x0: h.x, y0: h.y - 40, x1: W.regions.castle.spot[0], y1: W.regions.castle.spot[1] - 60, life: 1.4, max: 1.4, icon: '🕊'});
+  if (kind !== 'read' && kind !== 'scout') num(h.x, h.y - ctx.HERO_H - 4, icon, col, 1.1);
 }
 // Monster counter-attacks: melee monsters lunge (their sheet), golems slam a shockwave, slimes/ghosts spit.
 const M_RANGED = {slime: {proj: 'glob', color: '#7ee05a', speed: 260}, ghost: {proj: 'wisp', color: '#b48cff', speed: 300}};
 function monsterHit(t, h) {
-  const kind = mtype(t), r = M_RANGED[kind], tx = h.x, ty = h.y - 26;
-  const hit = () => { h.hurt = .35; h.knock = 1; S.trauma = Math.min(1, S.trauma + .15); burst(tx, ty, '#ff6b5a', 8);
-    if (kind === 'golem') S.fx.push({k: 'ring', x: t.x - 20, y: t.y, color: '#d8b98a', r: 34, flat: true, life: .4, max: .4}); };
+  const kind = ctx.mtype(t), r = M_RANGED[kind], tx = h.x, ty = h.y - 26;
+  const hit = () => { h.hurt = .35; h.knock = 1; ctx.S.trauma = Math.min(1, ctx.S.trauma + .15); burst(tx, ty, '#ff6b5a', 8);
+    if (kind === 'golem') ctx.S.fx.push({k: 'ring', x: t.x - 20, y: t.y, color: '#d8b98a', r: 34, flat: true, life: .4, max: .4}); };
   if (!r) return laterHero(h, .26, hit);
   const sx = t.x - 20, sy = t.y - 28, dur = Math.max(.15, Math.hypot(tx - sx, ty - sy) / r.speed);
-  laterHero(h, .26, () => S.fx.push({k: 'proj', proj: r.proj, x0: sx, y0: sy, x1: tx, y1: ty, color: r.color, glow: '#fff', life: dur, max: dur, arc: 10}));
+  laterHero(h, .26, () => ctx.S.fx.push({k: 'proj', proj: r.proj, x0: sx, y0: sy, x1: tx, y1: ty, color: r.color, glow: '#fff', life: dur, max: dur, arc: 10}));
   laterHero(h, .26 + dur, hit);
 }
 
 
 // ---------- orders: the Captain sends a raven, the hero acknowledges, then sets out ----------
-function later(sec, f) { S.later.push({at: S.rt + sec, f}); }
+function later(sec, f) { ctx.S.later.push({at: ctx.S.rt + sec, f}); }
 function order(h, t, ts) {
   if (restLocked(h) || t.bot !== h.bot || t.state !== 'fight') return;
-  const cap = S.heroes[captainId()], [cx_, cy_] = cap ? [cap.x, cap.y] : spotOf(regionOf(captainId()));
+  const cap = ctx.S.heroes[captainId()], [cx_, cy_] = cap ? [cap.x, cap.y] : ctx.spotOf(ctx.regionOf(captainId()));
   if (cap && !restLocked(cap)) { cap.bubble = {text: `⚔️ ${h.name}, take on ${t.title.slice(0, 24)}`, until: 2.6}; cap.cheer = .5; }
-  S.fx.push({k: 'raven', x0: cx_, y0: cy_ - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3});
-  S.soc.orders = (S.soc.orders || 0) + 1;
+  ctx.S.fx.push({k: 'raven', x0: cx_, y0: cy_ - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3});
+  ctx.S.soc.orders = (ctx.S.soc.orders || 0) + 1;
   say(`📯 Captain sent ${nm(h)} to <b>${esc(t.title)}</b>`, ts, 'run' + t.id);
   h.act = null; h.task = t.id;                      // reserved: no hangout while the order is in the air
   laterHero(h, 1.3, () => { if (h.task !== t.id || t.state !== 'fight' || t.bot !== h.bot) return; h.bubble = {text: '❗ Acknowledged!', until: 1.4}; h.cheer = .5; });
@@ -1173,17 +1008,17 @@ function hangSpot(region, k) {                       // circle formation inside 
 function startHangout(h, place, withWho = []) {
   if (restLocked(h)) return;
   const party = [h, ...withWho.filter(free)].slice(0, 4);
-  const used = new Set(Object.values(S.heroes).filter(o => o.act && o.act.region === place.region).map(o => o.act.k));
-  S.soc.hangouts = (S.soc.hangouts || 0) + 1; if (party.length > 1) S.soc.group = (S.soc.group || 0) + 1;
+  const used = new Set(Object.values(ctx.S.heroes).filter(o => o.act && o.act.region === place.region).map(o => o.act.k));
+  ctx.S.soc.hangouts = (ctx.S.soc.hangouts || 0) + 1; if (party.length > 1) ctx.S.soc.group = (ctx.S.soc.group || 0) + 1;
   party.forEach(m => {                               // smallest free spot in the circle: nobody stands on anybody
     let k = 0; while (used.has(k)) k++; used.add(k);
     m.act = {...place, until: 18 + Math.random() * 20, k};
-    walkTo(m, place.region, placeEntity(m, place.region) || hangSpot(place.region, k));
+    ctx.walkTo(m, place.region, ctx.placeEntity(m, place.region) || hangSpot(place.region, k));
   });
-  if (party.length > 1) say(`${place.icon} ${party.map(nm).join(', ')} ${place.th}`, S.t, 'hang' + place.region, 900);
+  if (party.length > 1) say(`${place.icon} ${party.map(nm).join(', ')} ${place.th}`, ctx.S.t, 'hang' + place.region, 900);
 }
 function social(dt) {
-  const hs = Object.values(S.heroes);
+  const hs = Object.values(ctx.S.heroes);
   for (const h of hs) {
     h.cheer = Math.max(0, h.cheer - dt); h.talk = Math.max(0, h.talk - dt);
     if (!free(h) || h.path.length > 1) continue;
@@ -1195,53 +1030,53 @@ function social(dt) {
         const cx_ = mates.reduce((s, o) => s + o.x, h.x) / (mates.length + 1); h.face = cx_ >= h.x ? 1 : -1;
         if (h.talk <= 0 && Math.random() < dt * .35) {
           const pool = [...(CHAT[h.cls] || []), ...CHAT.generic, ...recentNotes(h.bot)];
-          h.bubble = {text: pool[Math.floor(Math.random() * pool.length)], until: 2.6}; h.talk = 3 + Math.random() * 3; S.soc.chats = (S.soc.chats || 0) + 1;
+          h.bubble = {text: pool[Math.floor(Math.random() * pool.length)], until: 2.6}; h.talk = 3 + Math.random() * 3; ctx.S.soc.chats = (ctx.S.soc.chats || 0) + 1;
         }
       }
       continue;
     }
     if ((h.idle -= dt) > 0) continue;
     h.idle = 8 + Math.random() * 16;
-    const fr = friends(h.bot).map(b => S.heroes[b]).filter(o => o && free(o) && !o.act);
+    const fr = friends(h.bot).map(b => ctx.S.heroes[b]).filter(o => o && free(o) && !o.act);
     const place = HANGOUTS[Math.floor(Math.random() * HANGOUTS.length)];
     if (fr.length || Math.random() < .35) startHangout(h, place, fr.slice(0, 2));
   }
 }
 function recentNotes(bot) {
-  return Object.values(S.tasks).filter(t => t.bot === bot && t.note).slice(-2).map(t => t.note.slice(0, 40));
+  return Object.values(ctx.S.tasks).filter(t => t.bot === bot && t.note).slice(-2).map(t => t.note.slice(0, 40));
 }
 function handOff(t) {                                // the finisher walks a quest scroll to whoever does the next card
-  const from = t.bot && S.heroes[t.bot]; if (!from || restLocked(from)) return;
+  const from = t.bot && ctx.S.heroes[t.bot]; if (!from || restLocked(from)) return;
   const next = D.tasks.find(c => (c.parents || []).includes(t.id) && c.bot && c.bot !== t.bot);
-  const to = next && S.heroes[next.bot]; if (!to || !free(to) || to.path.length > 1) return;   // only to someone standing still
-  S.soc.handoffs = (S.soc.handoffs || 0) + 1;
+  const to = next && ctx.S.heroes[next.bot]; if (!to || !free(to) || to.path.length > 1) return;   // only to someone standing still
+  ctx.S.soc.handoffs = (ctx.S.soc.handoffs || 0) + 1;
   from.act = {region: to.region, kind: 'handoff', icon: '📜', until: 6, k: 0};
-  walkTo(from, to.region, [to.x - 26, to.y]);
+  ctx.walkTo(from, to.region, [to.x - 26, to.y]);
   from.bubble = {text: `📜 Handoff to ${to.name}`, until: 3};
-  say(`📜 ${nm(from)} handed work to ${nm(to)}`, S.t, 'ho' + t.id);
+  say(`📜 ${nm(from)} handed work to ${nm(to)}`, ctx.S.t, 'ho' + t.id);
 }
 function cheerAround(t) {
-  for (const h of Object.values(S.heroes)) if (free(h) && Math.hypot(h.x - t.x, h.y - t.y) < 260) { h.cheer = .9; S.soc.cheers = (S.soc.cheers || 0) + 1; if (Math.random() < .4) h.bubble = {text: '🎉', until: 1.2}; }
+  for (const h of Object.values(ctx.S.heroes)) if (free(h) && Math.hypot(h.x - t.x, h.y - t.y) < 260) { h.cheer = .9; ctx.S.soc.cheers = (ctx.S.soc.cheers || 0) + 1; if (Math.random() < .4) h.bubble = {text: '🎉', until: 1.2}; }
 }
 
 // ---------- update ----------
 function update(dt) {
-  if (S.stop > 0) { S.stop -= dt; return; }               // hit-stop freezes the world, not the UI
-  if (S.play) {
-    if (liveFeed && following) { S.t = Math.max(S.t, Date.now() / 1000); D.meta.to = Math.max(D.meta.to, S.t); }
-    else S.t += dt * S.speed;
+  if (ctx.S.stop > 0) { ctx.S.stop -= dt; return; }               // hit-stop freezes the world, not the UI
+  if (ctx.S.play) {
+    if (liveFeed && following) { ctx.S.t = Math.max(ctx.S.t, Date.now() / 1000); D.meta.to = Math.max(D.meta.to, ctx.S.t); }
+    else ctx.S.t += dt * ctx.S.speed;
     let n = 0;
-    while (S.i < D.events.length && D.events[S.i].t <= S.t && n++ < 400) apply(D.events[S.i++], true);
-    if (!(liveFeed && following) && S.t > D.meta.to + 60) S.play = false;
+    while (ctx.S.i < D.events.length && D.events[ctx.S.i].t <= ctx.S.t && n++ < 400) apply(D.events[ctx.S.i++], true);
+    if (!(liveFeed && following) && ctx.S.t > D.meta.to + 60) ctx.S.play = false;
 
   }
-  S.rt += dt;
-  for (const l of S.later.filter(l => l.at <= S.rt)) l.f();
-  S.later = S.later.filter(l => l.at > S.rt);
-  if (window.NPCS && S.play) NPCS.update(dt);                       // M4 villagers: own seeded RNG, fixed step
+  ctx.S.rt += dt;
+  for (const l of ctx.S.later.filter(l => l.at <= ctx.S.rt)) l.f();
+  ctx.S.later = ctx.S.later.filter(l => l.at > ctx.S.rt);
+  if (window.NPCS && ctx.S.play) NPCS.update(dt);                       // M4 villagers: own seeded RNG, fixed step
   social(dt);
-  for (const h of Object.values(S.heroes)) stepHero(h, dt);
-  for (const t of Object.values(S.tasks)) {
+  for (const h of Object.values(ctx.S.heroes)) stepHero(h, dt);
+  for (const t of Object.values(ctx.S.tasks)) {
     if (t.dying) { t.dying -= dt * 1.1; if (t.dying <= 0) { t.dying = 0; t.alpha = 0; burst(t.x, t.y - 10, '#6b5a8e', 14); } }
     else if (t.alpha > 0 && t.alpha < 1) t.alpha = Math.min(1, t.alpha + dt * 2);
     t.flash = Math.max(0, t.flash - dt); t.kick = Math.max(0, (t.kick || 0) - dt * 4);
@@ -1254,37 +1089,37 @@ function update(dt) {
     }
     if (t.atk >= 0) { t.atk += dt; if (t.atk >= .5) t.atk = -1; }
     t.roar = Math.max(0, (t.roar || 0) - dt);
-    if (t.state === 'fight' && t.runStart) t.hp = Math.max(.08, 1 - (S.t - t.runStart) / (t.max_rt || 1800));
+    if (t.state === 'fight' && t.runStart) t.hp = Math.max(.08, 1 - (ctx.S.t - t.runStart) / (t.max_rt || 1800));
   }
-  S.fx = S.fx.filter(f => (f.life -= dt) > 0);
-  for (const f of S.fx) if (f.k === 'p') { f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 160 * dt; }
-  S.trauma = Math.max(0, S.trauma - dt * 1.4);
-  cam.x = lerp(cam.x, cam.tx, 1 - Math.exp(-dt * 5)); cam.y = lerp(cam.y, cam.ty, 1 - Math.exp(-dt * 5));
+  ctx.S.fx = ctx.S.fx.filter(f => (f.life -= dt) > 0);
+  for (const f of ctx.S.fx) if (f.k === 'p') { f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 160 * dt; }
+  ctx.S.trauma = Math.max(0, ctx.S.trauma - dt * 1.4);
+  ctx.cam.x = ctx.lerp(ctx.cam.x, ctx.cam.tx, 1 - Math.exp(-dt * 5)); ctx.cam.y = ctx.lerp(ctx.cam.y, ctx.cam.ty, 1 - Math.exp(-dt * 5));
 }
 function stepHero(h, dt) {
   // Render-independent ambience: probabilities are rates calibrated at 60Hz.
   if (UI && !calm) {
-    const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, lv = LEVEL[h.effort] || 0;
-    const fighting = h.task && S.tasks[h.task]?.state === 'fight' && h.path.length <= 1;
-    const ep = EL_PARTICLE[st.el];
+    const st = {...(h.st || ctx.NO_STYLE), ...heroAccent(h)}, lv = ctx.LEVEL[h.effort] || 0;
+    const fighting = h.task && ctx.S.tasks[h.task]?.state === 'fight' && h.path.length <= 1;
+    const ep = ctx.EL_PARTICLE[st.el];
     if ((fighting || h.charge > 0) && ep && Math.random() < 1-Math.pow(.92,dt*60))
-      S.fx.push({k:'p',x:h.x+(Math.random()-.5)*26,y:h.y-Math.random()*40,vx:(Math.random()-.5)*10,vy:ep[1]*30,color:ep[0],life:.6});
+      ctx.S.fx.push({k:'p',x:h.x+(Math.random()-.5)*26,y:h.y-Math.random()*40,vx:(Math.random()-.5)*10,vy:ep[1]*30,color:ep[0],life:.6});
     if (lv >= 1 && Math.random() < 1-Math.pow(.95,dt*60))
-      S.fx.push({k:'p',x:h.x+(Math.random()-.5)*24,y:h.y-20-Math.random()*30,vx:0,vy:-20,color:st.color,life:.5});
+      ctx.S.fx.push({k:'p',x:h.x+(Math.random()-.5)*24,y:h.y-20-Math.random()*30,vx:0,vy:-20,color:st.color,life:.5});
     if (lv >= 3 && Math.random() < 1-Math.pow(.75,dt*60))
-      S.fx.push({k:'p',x:h.x+(Math.random()-.5)*30,y:h.y-Math.random()*20,vx:0,vy:-40,color:st.glow,life:.7});
+      ctx.S.fx.push({k:'p',x:h.x+(Math.random()-.5)*30,y:h.y-Math.random()*20,vx:0,vy:-40,color:st.glow,life:.7});
   }
   h.hurt = Math.max(0, h.hurt - dt); h.down = Math.max(0, h.down - dt); h.knock = Math.max(0, (h.knock || 0) - dt * 3);
   h.meditate = Math.max(0, (h.meditate || 0) - dt); if (h.gest && (h.gest.until -= dt) <= 0) h.gest = null;
-  for (const f of h.fam) if (!restLocked(h) && f.task && S.tasks[f.task] && S.tasks[f.task].state === 'fight' && Math.random() < dt * .6) { const t2 = S.tasks[f.task]; S.fx.push({k: 'proj', proj: 'orb', x0: h.x + Math.cos(f.a) * 34, y0: h.y - 46, x1: t2.x, y1: t2.y - 22, color: '#ffb36b', glow: '#fff', life: .35, max: .35, arc: 6}); laterHero(h, .35, () => { t2.flash = .05; burst(t2.x, t2.y - 22, '#ffb36b', 4); }); }
+  for (const f of h.fam) if (!restLocked(h) && f.task && ctx.S.tasks[f.task] && ctx.S.tasks[f.task].state === 'fight' && Math.random() < dt * .6) { const t2 = ctx.S.tasks[f.task]; ctx.S.fx.push({k: 'proj', proj: 'orb', x0: h.x + Math.cos(f.a) * 34, y0: h.y - 46, x1: t2.x, y1: t2.y - 22, color: '#ffb36b', glow: '#fff', life: .35, max: .35, arc: 6}); laterHero(h, .35, () => { t2.flash = .05; burst(t2.x, t2.y - 22, '#ffb36b', 4); }); }
   if (h.bubble && (h.bubble.until -= dt) <= 0) h.bubble = null;
   h.fam = h.fam.filter(f => (f.life -= dt) > 0); for (const f of h.fam) f.a += dt * 3;
   if (h.down > 0) return;
   if (h.path.length > 1) {                                  // walk with eased speed, frames tied to distance
     const [nx, ny] = h.path[1], dx = nx - h.x, dy = ny - h.y, d = Math.hypot(dx, dy);
     const left = h.path.slice(1).reduce((s, p, i, a) => s + Math.hypot(p[0] - (i ? a[i - 1][0] : h.x), p[1] - (i ? a[i - 1][1] : h.y)), 0);
-    const vmax = WALK_V * (left < 18 ? Math.max(.35, left / 18) : 1);
-    h.v = lerp(h.v, vmax, 1 - Math.exp(-dt * 6));
+    const vmax = ctx.WALK_V * (left < 18 ? Math.max(.35, left / 18) : 1);
+    h.v = ctx.lerp(h.v, vmax, 1 - Math.exp(-dt * 6));
     const step = Math.min(d, h.v * dt);
     if (d < .5) { h.path.shift(); if (h.path.length === 1) h.path = []; return; }
     h.x += dx / d * step; h.y += dy / d * step; h.dist += step;
@@ -1294,7 +1129,7 @@ function stepHero(h, dt) {
   h.v = 0; h.path = [];
   finishRestMotion(h);
   if (restLocked(h)) return;
-  const t = h.task && S.tasks[h.task];
+  const t = h.task && ctx.S.tasks[h.task];
   if (t && t.state === 'fight') h.face = t.x >= h.x ? 1 : -1;
   if (h.atk >= 0) {                                         // anticipation .14 / swing .08 / impact .1 / recover .14
     if (h.charge > 0) { h.charge -= dt; return; }                  // effort: hold the wind-up while power gathers
@@ -1306,7 +1141,7 @@ function stepHero(h, dt) {
 }
 function atkFrame(a) { const f = HMETA.atk; return a < .14 ? f[0] : a < .22 ? f[1] : a < .32 ? f[2] : f[3]; }
 // lunge: pull back on anticipation, dash in on the swing, hold on impact, ease home on recover
-function lunge(a) { return a < .14 ? -4 * ease(a / .14) : a < .22 ? lerp(-4, 12, ease((a - .14) / .08)) : a < .32 ? 12 : lerp(12, 0, ease((a - .32) / .14)); }
+function lunge(a) { return a < .14 ? -4 * ctx.ease(a / .14) : a < .22 ? ctx.lerp(-4, 12, ctx.ease((a - .14) / .08)) : a < .32 ? 12 : ctx.lerp(12, 0, ctx.ease((a - .32) / .14)); }
 
 // ---------- render ----------
 let raf = null;
@@ -1332,10 +1167,10 @@ function visibility() {
 // one design unit = half a native pixel. Every sprite/tile is drawn at its native size times an INTEGER
 // screen scale Z with smoothing off, and every position is snapped to the native grid -> crisp pixels.
 function view() {
-  const Z = cam.zi * DPR;
+  const Z = ctx.cam.zi * DPR;
   let sx = 0, sy = 0;
-  if (S.trauma > 0 && !calm) { const s = S.trauma ** 2, k = performance.now() / 33; sx = Math.round(4 * s * Math.sin(k * 1.7)); sy = Math.round(3 * s * Math.sin(k * 2.3)); }
-  return {Z, z: Z, ox: Math.round(cv.width / 2 - cam.x * Z) + sx * Z, oy: Math.round(cv.height / 2 - cam.y * Z) + sy * Z};
+  if (ctx.S.trauma > 0 && !calm) { const s = ctx.S.trauma ** 2, k = performance.now() / 33; sx = Math.round(4 * s * Math.sin(k * 1.7)); sy = Math.round(3 * s * Math.sin(k * 2.3)); }
+  return {Z, z: Z, ox: Math.round(cv.width / 2 - ctx.cam.x * Z) + sx * Z, oy: Math.round(cv.height / 2 - ctx.cam.y * Z) + sy * Z};
 }
 const N = u => Math.round(u);                                       // design units == native px (1536x1024 grid)
 const P = (v, x, y) => [v.ox + N(x) * v.Z, v.oy + N(y) * v.Z];
@@ -1356,13 +1191,13 @@ function draw() {
   for (const [k,r] of Object.entries(W.regions)) banner(v,k,r);
   inspectionLinks(v); inspect.picks = [];
   const ents = [...(W.layered ? W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
-    ...(Object.values(S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
-    ...Object.values(S.tasks).filter(t => t.alpha > 0).map(t => ({y: t.mx !== undefined ? t.my : t.y, f: () => monster(v, t)})),
-    ...Object.values(S.heroes).map(h => ({y: h.y, f: () => heroDraw(v, h)})),
+    ...(Object.values(ctx.S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
+    ...Object.values(ctx.S.tasks).filter(t => t.alpha > 0).map(t => ({y: t.mx !== undefined ? t.my : t.y, f: () => monster(v, t)})),
+    ...Object.values(ctx.S.heroes).map(h => ({y: h.y, f: () => heroDraw(v, h)})),
     ...(window.NPCS ? NPCS.ents(v, blit, shadowPx) : [])];             // M4 villagers share the y-sort
   ents.sort((a, b) => a.y - b.y).forEach(e => e.f());
   const groups = new Map();
-  for (const f of S.fx) {
+  for (const f of ctx.S.fx) {
     if(f.k !== 'num') { fxDraw(v,f); continue; }
     // Limit visual lanes only; keep every original effect/event in simulation.
     const key=Math.round(f.x/24)+':'+Math.round(f.y/24),group=groups.get(key)||[];
@@ -1401,31 +1236,31 @@ function prop(v, p) {
   blit(v, im, 0, 0, im.width, im.height, bx - Math.floor(im.width / 2), by - im.height + 1);
 }
 function banner(v, key, r) {
-  const [centerX,centerY] = plazaOf(key).center;
+  const [centerX,centerY] = ctx.plazaOf(key).center;
   if (!onScreen(v,centerX,centerY,240,200)) return;
   const pr = W.layered && W.props.find(p => p.region === key), im = pr && BLD[pr.img];
   const [px,py] = r.plaza?.label || [r.spot[0], im ? pr.y-im.height-10 : r.spot[1]-60];
   const x = v.ox + N(px) * v.Z, y = v.oy + N(py) * v.Z;
-  const n = Object.values(S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
+  const n = Object.values(ctx.S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
   if(UI){UI.screenLabel(r.label.split(' · ')[0],x/DPR,y/DPR,true);
-    if(n||key==='vault')UI.screenNumber(compact(key==='vault'?S.vault:n),x/DPR,y/DPR-22,'#ffd36b');}
+    if(n||key==='vault')UI.screenNumber(compact(key==='vault'?ctx.S.vault:n),x/DPR,y/DPR-22,'#ffd36b');}
 }
 function heroDraw(v, h) {
-  if (overflowed(h)) return;
-  const img = SPRV[`${h.cls}-${(h.st || NO_STYLE).tag}`] || SPR[h.cls] || SPR.warrior; if (!img) return;
+  if (ctx.overflowed(h)) return;
+  const img = SPRV[`${h.cls}-${(h.st || ctx.NO_STYLE).tag}`] || SPR[h.cls] || SPR.warrior; if (!img) return;
   if (!onScreen(v,h.x,h.y,180,180)) return;
   const M = HMETA, walking = h.path.length > 1;
   let fr = 0, bob = 0;
   const WK = HMETA.walk, n = WK.length, now = performance.now() / 1000;
-  if (walking) { const i = Math.floor(h.dist / (STRIDE * 2 / n)) % n; fr = WK[i]; const ph = i % (n / 2); bob = ph === 1 ? 2 : ph === n / 4 + 1 ? -1 : 0; }   // dip after contact, rise on passing
+  if (walking) { const i = Math.floor(h.dist / (ctx.STRIDE * 2 / n)) % n; fr = WK[i]; const ph = i % (n / 2); bob = ph === 1 ? 2 : ph === n / 4 + 1 ? -1 : 0; }   // dip after contact, rise on passing
   else if (HMETA.idle.length && h.atk < 0 && !h.sleep) fr = HMETA.idle[Math.floor(now * 5 + h.homeK) % HMETA.idle.length];   // breathing loop
   else if (h.atk < 0 && !h.sleep) bob = Math.floor((now + h.homeK * .37) % 1.6 / .8);                                    // 1px idle bob
   if (h.atk >= 0) fr = atkFrame(h.atk);
-  const knockX = -Math.round(ease(h.knock || 0) * 10) * (h.face || 1);
+  const knockX = -Math.round(ctx.ease(h.knock || 0) * 10) * (h.face || 1);
   const jump = h.cheer > 0 ? -Math.round(Math.sin((1 - h.cheer / .9) * Math.PI * 2) ** 2 * 8) : 0;
   const sink = h.meditate > 0 ? 3 : 0;
   const bx = N(h.x) + knockX + (h.atk >= 0 && h.cls !== 'commander' ? Math.round(lunge(h.atk)) * h.face : 0), by = N(h.y) + bob + jump + sink;
-  const st = {...(h.st || NO_STYLE), ...accent(img)}, fighting = h.task && S.tasks[h.task] && S.tasks[h.task].state === 'fight' && !walking;
+  const st = {...(h.st || ctx.NO_STYLE), ...accent(img)}, fighting = h.task && ctx.S.tasks[h.task] && ctx.S.tasks[h.task].state === 'fight' && !walking;
   if (fighting || h.charge > 0) {                                            // model aura under the feet
     cx.globalAlpha = .28 + Math.sin(performance.now() / 260 + h.homeK) * .08; cx.fillStyle = st.color;
     for (let i = -2; i <= 2; i++) { const half = Math.round((17 + (h.eff ? h.eff.mult * 3 : 3)) * Math.sqrt(1 - (i / 2.6) ** 2)); cx.fillRect(v.ox + (bx - half) * v.Z, v.oy + (N(h.y) + 1 + i) * v.Z, half * 2 * v.Z, v.Z); }
@@ -1450,7 +1285,7 @@ function heroDraw(v, h) {
     const b=spriteBox(img,fr*M.fw,0,M.fw,M.fh);
     if(b)registerCharacter(v,'hero',h.bot,{left:bx+b.top-M.base,right:bx+b.bottom-M.base,top:by+M.ax-b.right,bottom:by+M.ax-b.left});
   } else {
-    const nx = h.face > 0 ? bx - M.ax : bx - (M.fw - M.ax), ny = by - M.base, lv = LEVEL[h.effort] || 0;
+    const nx = h.face > 0 ? bx - M.ax : bx - (M.fw - M.ax), ny = by - M.base, lv = ctx.LEVEL[h.effort] || 0;
     levelBack(v, h, bx, by, st, lv);
     if (lv >= 1 && !(h.hurt > 0)) {                  // effort glow outline, pulsing
       const sil = silhouette(img, st.glow), pulse = .28 + Math.sin(performance.now() / 300 + h.homeK) * .12;   // soft rim light, not neon
@@ -1500,8 +1335,6 @@ function silhouette(im, color) {                     // solid-colour copy of a s
   const g = c.getContext('2d'); g.drawImage(im, 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = color; g.fillRect(0, 0, c.width, c.height);
   SIL.set(key, c); return c;
 }
-// Effort = level. medium: plain. high: glowing 1px outline. xhigh: + halo. max: + wings of light and rising motes.
-const LEVEL = {low: 0, medium: 0, high: 1, xhigh: 2, max: 3};
 const WINGS = new Map(), HALOS = new Map();
 function levelBack(v, h, bx, by, st, lv) {
   if (lv >= 3) {                                     // wings of light: a fan of feathers from each shoulder, slow flap
@@ -1540,10 +1373,10 @@ function monsterPose(t,kind,walking) {
   // Stable phase from an opaque entity key, not the simulation RNG.
   let phase=0;for(const ch of String(t.id))phase=(Math.imul(phase,31)+ch.charCodeAt(0))>>>0;
   const now=performance.now()/1000+phase%1000/100,grounded=!['ghost','bat'].includes(kind);
-  const owner=t.bot&&S.heroes[t.bot],anchor=t.mx??t.x;
+  const owner=t.bot&&ctx.S.heroes[t.bot],anchor=t.mx??t.x;
   const face=walking?(t.mface||-1):owner?(owner.x>=anchor?1:-1):calm?-1:Math.floor(now/5)%2?1:-1;
   return {grounded,face,bob:calm||walking?0:grounded?(Math.sin(now*2*Math.PI/2.8)>0?1:0):Math.round(Math.sin(now*2*Math.PI/2.4)),
-    recoil:calm?0:Math.min(2,Math.round(ease(t.kick||0)*2))};
+    recoil:calm?0:Math.min(2,Math.round(ctx.ease(t.kick||0)*2))};
 }
 function drawGroundedMonster(v,t,base,sheet,M,fr,bx,by,pose) {
   const box=spriteBox(base,0,0,M.fw,M.fh);if(!box)return;
@@ -1558,14 +1391,14 @@ function drawGroundedMonster(v,t,base,sheet,M,fr,bx,by,pose) {
     right:Math.max(nx+box.right,upperX+(upper?(pose.face>0?M.fw-upper.left:upper.right):M.fw)),top:ny+(upper?.top||0)-pose.bob,bottom:ny+box.bottom});
 }
 function monster(v, t) {
-  if (overflowed(t)) return;
+  if (ctx.overflowed(t)) return;
   if (!onScreen(v,t.mx ?? t.x,t.my ?? t.y,200,200)) return;
   if (t.region === 'camp' && t.slot >= 18) return;                          // camp yard shows the first 18 only
-  const kind = mtype(t), key = `${kind}-${mtier(t)}`, im2 = MON2[key], M = MMETA2[key];
+  const kind = ctx.mtype(t), key = `${kind}-${ctx.mtier(t)}`, im2 = MON2[key], M = MMETA2[key];
   const walking = !!(t.mpath && t.emerge <= 0);
   const bx = N(t.mx !== undefined ? t.mx : t.x), by = N(t.mx !== undefined ? t.my : t.y);
   const alpha = t.alpha * (t.emerge > 0 ? 1 - t.emerge / .9 : 1);
-  if (mtier(t) === 'l' && !t.dying) {                                       // elite: smouldering red ground ring
+  if (ctx.mtier(t) === 'l' && !t.dying) {                                       // elite: smouldering red ground ring
     cx.fillStyle = `rgba(220,40,30,${.18 + (calm?0:Math.sin(performance.now() / 300) * .06)})`;
     const r = Math.round((M ? M.fw * .3 : 24));
     for (let i = -3; i <= 3; i++) { const half = Math.round(r * Math.sqrt(1 - (i / 3.5) ** 2)); cx.fillRect(v.ox + (bx - half) * v.Z, v.oy + (by + i) * v.Z, half * 2 * v.Z, v.Z); }
@@ -1595,7 +1428,7 @@ function monster(v, t) {
     cx.globalAlpha = 1; cx.filter = 'none';
     top = by - Math.round(M.fh * .78);
   } else {
-    const fallbackKind=t.chained?'skeleton':(MON[t.stage]||'goblin'),im=MIMG[fallbackKind],pose=monsterPose(t,fallbackKind,walking);
+    const fallbackKind=t.chained?'skeleton':(ctx.MON[t.stage]||'goblin'),im=MIMG[fallbackKind],pose=monsterPose(t,fallbackKind,walking);
     cx.globalAlpha=alpha*(t.dying?t.dying:1);
     if(im){
       const M={fw:im.width,fh:im.height,ax:Math.floor(im.width/2),base:im.height-1};
@@ -1641,10 +1474,10 @@ function px(v, x, y, w, h, c) { cx.fillStyle = c; cx.fillRect(v.ox + Math.round(
 function fxDraw(v, f) {
   const k = f.max ? 1 - f.life / f.max : 0;
   if (f.k === 'bolt') { let x = f.x, y = f.y - 90; cx.globalAlpha = 1 - k; while (y < f.y) { const nx = x + (Math.random() - .5) * 10; px(v, nx, y, 2, 6, Math.random() < .3 ? '#fff' : f.color); x = nx; y += 6; } cx.globalAlpha = 1; return; }
-  if (f.k === 'swirl') { const n = 10, r = 26 * (1 - ease(k)); for (let i = 0; i < n; i++) { const a = i / n * 6.28 + k * 9; px(v, f.x + Math.cos(a) * r, f.y + Math.sin(a) * r * .6, 2, 2, i % 2 ? '#c8b0ff' : '#9fd3ff'); } if (k > .8) emoji('📜', v.ox + N(f.x) * v.Z, v.oy + N(f.y) * v.Z, 12 * v.Z); return; }
-  if (f.k === 'balloon') { const y = f.y - ease(k) * 120, x = f.x + Math.sin(k * 8) * 6; cx.globalAlpha = Math.min(1, f.life * 2); emoji('🎈', v.ox + N(x) * v.Z, v.oy + N(y) * v.Z, 14 * v.Z); cx.globalAlpha = 1; return; }
+  if (f.k === 'swirl') { const n = 10, r = 26 * (1 - ctx.ease(k)); for (let i = 0; i < n; i++) { const a = i / n * 6.28 + k * 9; px(v, f.x + Math.cos(a) * r, f.y + Math.sin(a) * r * .6, 2, 2, i % 2 ? '#c8b0ff' : '#9fd3ff'); } if (k > .8) emoji('📜', v.ox + N(f.x) * v.Z, v.oy + N(f.y) * v.Z, 12 * v.Z); return; }
+  if (f.k === 'balloon') { const y = f.y - ctx.ease(k) * 120, x = f.x + Math.sin(k * 8) * 6; cx.globalAlpha = Math.min(1, f.life * 2); emoji('🎈', v.ox + N(x) * v.Z, v.oy + N(y) * v.Z, 14 * v.Z); cx.globalAlpha = 1; return; }
   if (f.k === 'proj') {
-    const e = f.proj === 'arrow' ? k : ease(k), x = lerp(f.x0, f.x1, e), y = lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * f.arc;
+    const e = f.proj === 'arrow' ? k : ctx.ease(k), x = ctx.lerp(f.x0, f.x1, e), y = ctx.lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * f.arc;
     const dx = f.x1 - f.x0, dy = f.y1 - f.y0 - Math.cos(e * Math.PI) * f.arc * 3, L = Math.hypot(dx, dy) || 1, ux = dx / L, uy = dy / L;
     if (f.proj === 'arrow') { for (let i = 0; i < 12; i++) px(v, x - ux * i, y - uy * i, 1, 1, i < 2 ? '#dfe6ee' : i > 9 ? '#c84a3a' : f.color); }
     else if (f.proj === 'orb' || f.proj === 'wisp' || f.proj === 'glob') {
@@ -1667,30 +1500,30 @@ function fxDraw(v, f) {
     cx.globalAlpha = 1; return;
   }
   if (f.k === 'p') { const [x, y] = P(v, f.x, f.y); cx.fillStyle = f.color; cx.fillRect(x, y, 2 * v.Z, 2 * v.Z); }
-  else if (f.k === 'num') { const [x, y] = P(v, f.x, f.y - 18 * ease(Math.min(1, k * 1.6))); cx.globalAlpha = Math.min(1, f.life * 2); nameplate(x, y, f.text, f.color); cx.globalAlpha = 1; }
-  else if (f.k === 'coin') { const e = ease(k), [x, y] = P(v, lerp(f.x0, f.x1, e), lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 60); emoji('🪙', x, y, 7 * v.z); }
-  else if (f.k === 'arrows') { const e = ease(k); for (let i = 0; i < 3; i++) { const [x, y] = P(v, lerp(f.x0, f.x1, e) - i * 6, lerp(f.y0, f.y1, e) + i * 2); cx.fillStyle = '#e8f0ff'; cx.fillRect(x, y, 6 * v.Z, v.Z); } }
+  else if (f.k === 'num') { const [x, y] = P(v, f.x, f.y - 18 * ctx.ease(Math.min(1, k * 1.6))); cx.globalAlpha = Math.min(1, f.life * 2); nameplate(x, y, f.text, f.color); cx.globalAlpha = 1; }
+  else if (f.k === 'coin') { const e = ctx.ease(k), [x, y] = P(v, ctx.lerp(f.x0, f.x1, e), ctx.lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 60); emoji('🪙', x, y, 7 * v.z); }
+  else if (f.k === 'arrows') { const e = ctx.ease(k); for (let i = 0; i < 3; i++) { const [x, y] = P(v, ctx.lerp(f.x0, f.x1, e) - i * 6, ctx.lerp(f.y0, f.y1, e) + i * 2); cx.fillStyle = '#e8f0ff'; cx.fillRect(x, y, 6 * v.Z, v.Z); } }
   else if (f.k === 'portal') { const [x, y] = P(v, f.x, f.y); const r = (8 + Math.sin(k * 20) * 2) * v.z * Math.min(1, k * 4) * Math.min(1, f.life * 2); cx.strokeStyle = '#7fc8ff'; cx.lineWidth = 3 * DPR; cx.beginPath(); cx.ellipse(x, y - 14 * v.z, r * .6, r * 1.3, 0, 0, 7); cx.stroke(); }
-  else if (f.k === 'raven') { const e = ease(k), [x, y] = P(v, lerp(f.x0, f.x1, e), lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 50); emoji(f.icon || '🐦‍⬛', x, y, 9 * v.z); }
+  else if (f.k === 'raven') { const e = ctx.ease(k), [x, y] = P(v, ctx.lerp(f.x0, f.x1, e), ctx.lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 50); emoji(f.icon || '🐦‍⬛', x, y, 9 * v.z); }
   else if (f.k === 'council') { const [x,y]=P(v,f.h.x,f.h.y);emoji('🧙',x,y-46*v.z,16);nameplate(x,y-68*v.z,'2','#ffd36b'); }
 }
 function vignette() { const g = cx.createRadialGradient(cv.width / 2, cv.height / 2, cv.height * .45, cv.width / 2, cv.height / 2, cv.height * .95); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.28)'); cx.fillStyle = g; cx.fillRect(0, 0, cv.width, cv.height); }
 
 // ---------- HUD / panels ----------
 function say(html, t, key, minGap = 0) {
-  if (key && minGap && S.lastFeed[key] && t - S.lastFeed[key] < minGap) return;
+  if (key && minGap && ctx.S.lastFeed[key] && t - ctx.S.lastFeed[key] < minGap) return;
   if (key) {
-    delete S.lastFeed[key]; S.lastFeed[key] = t;
+    delete ctx.S.lastFeed[key]; ctx.S.lastFeed[key] = t;
     // Live compaction/rebase preserves feed throttles; do not accumulate keys
     // for every evicted task over the lifetime of a continuously running tab.
-    const keys = Object.keys(S.lastFeed);
-    if (keys.length > HISTORY_LIMIT) delete S.lastFeed[keys[0]];
+    const keys = Object.keys(ctx.S.lastFeed);
+    if (keys.length > HISTORY_LIMIT) delete ctx.S.lastFeed[keys[0]];
   }
-  S.feed.unshift({t, html}); S.feed.length = Math.min(S.feed.length, 60); S.feedDirty = true;
+  ctx.S.feed.unshift({t, html}); ctx.S.feed.length = Math.min(ctx.S.feed.length, 60); ctx.S.feedDirty = true;
 }
 function renderFeed() {
   if(!UI||$('#chron').hidden||$('#menu').hidden||!$('#group-overview').open)return;
-  UI.feed(S.feed.map(f=>{
+  UI.feed(ctx.S.feed.map(f=>{
     let detailText=fmt(f.t)+' '+UI.plain(f.html);
     let text=UI.plain(f.html).replace(/ — .*$/u,'');
     if(/^💬|^🐦‍⬛ Captain:/.test(text))text='💬 Message; open Details';
@@ -1703,64 +1536,64 @@ function renderFeed() {
     }
     return {text:fmt(f.t)+' '+text,detailText};
   }));
-  S.feedDirty=false;
+  ctx.S.feedDirty=false;
 }
 function renderCamps() {
   if(!UI)return;
   const by={};for(const t of D.tasks)(by[t.campaign]||=[]).push(t);
   const rows=Object.entries(by).map(([title,ts])=>{
-    const live=ts.map(t=>S.tasks[t.id]).filter(Boolean),done=live.filter(t=>t.state==='done').length;
+    const live=ts.map(t=>ctx.S.tasks[t.id]).filter(Boolean),done=live.filter(t=>t.state==='done').length;
     return {title,count:done+'/'+ts.length+' quests',blocked:live.some(t=>t.state==='blocked')?(D.meta.show_titles===true?live.find(t=>t.state==='blocked').title:'Task details hidden · Blocked'):null,
-      stages:STAGES.map(st=>{const group=live.filter(t=>t.stage===st);return {id:st.toLowerCase(),state:group.some(t=>t.state==='fight')?'selected':group.length&&group.every(t=>t.state==='done')?'normal':'disabled'};})};
+      stages:ctx.STAGES.map(st=>{const group=live.filter(t=>t.stage===st);return {id:st.toLowerCase(),state:group.some(t=>t.state==='fight')?'selected':group.length&&group.every(t=>t.state==='done')?'normal':'disabled'};})};
   });UI.camps(rows);
 }
 const TASK_STATES={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Waiting for dependencies',done:'Complete',failed:'Failed',archived:'Archived'};
 function renderOverview() {
-  const states=Object.values(S.tasks),blocked=states.filter(t=>t.state==='blocked'||t.chained).length;
+  const states=Object.values(ctx.S.tasks),blocked=states.filter(t=>t.state==='blocked'||t.chained).length;
   const working=states.filter(t=>t.state==='fight').length,waiting=states.filter(t=>['quest','caged'].includes(t.state)).length;
   const completed=states.filter(t=>t.state==='done').length;
   const permitted=D.meta.show_titles===true,failures=new Map();
   for(const e of D.events){
-    if(e.t>S.t)break;
+    if(e.t>ctx.S.t)break;
     if(!e.task)continue;
     if(e.kind==='run_start'||e.kind==='completed')failures.delete(e.task);
     else if(e.kind==='run_end'&&['timed_out','crashed','gave_up'].includes(e.outcome))failures.set(e.task,({timed_out:'Run timed out',crashed:'Worker stopped unexpectedly',gave_up:'Worker stopped work'})[e.outcome]);
   }
   const tasks=D.tasks.map(meta=>{
-    const t=S.tasks[meta.id]||meta, state=TASK_STATES[t.state]||'Not started in selected range';
+    const t=ctx.S.tasks[meta.id]||meta, state=TASK_STATES[t.state]||'Not started in selected range';
     return {key:meta.id,blocked:t.state==='blocked'||!!t.chained,
-      summary:(permitted?meta.title||'Untitled task':'Task details hidden')+' · '+state+(t.stage?' · '+(STAGE_TH[t.stage]||'Unknown stage'):'')+(t.bot?' · Assigned to: '+(permitted?D.bots.find(b=>b.id===t.bot)?.name||'Hero':'Hero'):''),
-      details:()=>{const current=D.tasks.find(row=>row.id===meta.id);if(current)quest(S.tasks[meta.id]||current);else UI.detail(['This task is no longer in retained history'],'Task details');}};
+      summary:(permitted?meta.title||'Untitled task':'Task details hidden')+' · '+state+(t.stage?' · '+(ctx.STAGE_TH[t.stage]||'Unknown stage'):'')+(t.bot?' · Assigned to: '+(permitted?D.bots.find(b=>b.id===t.bot)?.name||'Hero':'Hero'):''),
+      details:()=>{const current=D.tasks.find(row=>row.id===meta.id);if(current)quest(ctx.S.tasks[meta.id]||current);else UI.detail(['This task is no longer in retained history'],'Task details');}};
   }).sort((a,b)=>Number(b.blocked)-Number(a.blocked));
-  const heroes=Object.values(S.heroes).map(h=>({key:h.bot,
+  const heroes=Object.values(ctx.S.heroes).map(h=>({key:h.bot,
     summary:(permitted?h.name:'Hero')+' · '+heroStatus(h),
-    details:()=>{const current=S.heroes[h.bot];if(current)heroDialog(current);else UI.detail(['This hero is no longer in retained history'],'Hero details');}}));
-  UI.overview({tasks,heroes,blocked,errors:[...Object.keys(S.diagnostics||{}),...failures.values(),...states.filter(t=>t.state==='failed').map(()=> 'A task failed')],
+    details:()=>{const current=ctx.S.heroes[h.bot];if(current)heroDialog(current);else UI.detail(['This hero is no longer in retained history'],'Hero details');}}));
+  UI.overview({tasks,heroes,blocked,errors:[...Object.keys(ctx.S.diagnostics||{}),...failures.values(),...states.filter(t=>t.state==='failed').map(()=> 'A task failed')],
     empty:'No tasks in this replay range',summary:D.tasks.length?working+' working · '+waiting+' waiting · '+blocked+' blocked · '+completed+' complete'+(!working&&!blocked?' · No active work':''):'No tasks in this replay range'});
 }
 let hudT=0;
 function hud(dt) {
   if(!UI || privacyPending)return;
   if((hudT+=dt)<.1)return;hudT=0;
-  UI.number('#clock',fmt(S.t),'Replay time');UI.number('#speeds',String(S.speed),'Speed');
-  UI.control('#play',S.play?'pause':'play',S.play?'Pause':'Play');
+  UI.number('#clock',fmt(ctx.S.t),'Replay time');UI.number('#speeds',String(ctx.S.speed),'Speed');
+  UI.control('#play',ctx.S.play?'pause':'play',ctx.S.play?'Pause':'Play');
   UI.control('#live','live-follow','Follow live',following?'selected':'normal');
-  $('#play').setAttribute('aria-pressed',String(!S.play));$('#live').setAttribute('aria-pressed',String(following));
-  $('#scrub').value=Math.max(0,Math.min(1000,Math.round((S.t-D.meta.from_)/Math.max(1,D.meta.to-D.meta.from_)*1000)));
-  $('#scrub').setAttribute('aria-valuetext',fmt(S.t));
-  renderFeed();renderCamps();UI.resources(S.mana,S.tokenNetByWallet);renderOverview();
-  UI.playback((S.play?'Playing':'Paused')+' · Live-follow '+(following?'on':'off')+' · '+fmt(S.t)+' · Range '+fmt(D.meta.from_)+' - '+fmt(D.meta.to));
+  $('#play').setAttribute('aria-pressed',String(!ctx.S.play));$('#live').setAttribute('aria-pressed',String(following));
+  $('#scrub').value=Math.max(0,Math.min(1000,Math.round((ctx.S.t-D.meta.from_)/Math.max(1,D.meta.to-D.meta.from_)*1000)));
+  $('#scrub').setAttribute('aria-valuetext',fmt(ctx.S.t));
+  renderFeed();renderCamps();UI.resources(ctx.S.mana,ctx.S.tokenNetByWallet);renderOverview();
+  UI.playback((ctx.S.play?'Playing':'Paused')+' · Live-follow '+(following?'on':'off')+' · '+fmt(ctx.S.t)+' · Range '+fmt(D.meta.from_)+' - '+fmt(D.meta.to));
 }
 function ui() {
   resize();addEventListener('resize',resize);
   document.addEventListener('visibilitychange',visibility);
-  $('#speeds').onclick=()=>{following=false;const speeds=[30,120,600];S.speed=speeds[(speeds.indexOf(S.speed)+1)%speeds.length];hudT=1;hud(0);};
-  $('#play').onclick=()=>{following=false;S.play=!S.play;hudT=1;hud(0);};
+  $('#speeds').onclick=()=>{following=false;const speeds=[30,120,600];ctx.S.speed=speeds[(speeds.indexOf(ctx.S.speed)+1)%speeds.length];hudT=1;hud(0);};
+  $('#play').onclick=()=>{following=false;ctx.S.play=!ctx.S.play;hudT=1;hud(0);};
   $('#scrub').oninput=e=>{following=false;reset(D.meta.from_+(D.meta.to-D.meta.from_)*e.target.value/1000);};
   $('#live').hidden=!liveFeed;$('#live').onclick=goLive;
   $('#calm').onclick=()=>{calm=!calm;$('#calm').setAttribute('aria-pressed',String(calm));if(UI)UI.control('#calm','calm','Reduce effects',calm?'selected':'normal');};
-  $('#world').onclick=()=>{clearInspection();Object.assign(cam,{tx:W.size[0]/2,ty:W.size[1]/2,zi:1});
-    if(UI)UI.detail(Object.entries(W.regions).map(([k,r])=>UI.plain(r.label)+(k==='vault'?' : '+S.vault:'')),'World');};
+  $('#world').onclick=()=>{clearInspection();Object.assign(ctx.cam,{tx:W.size[0]/2,ty:W.size[1]/2,zi:1});
+    if(UI)UI.detail(Object.entries(W.regions).map(([k,r])=>UI.plain(r.label)+(k==='vault'?' : '+ctx.S.vault:'')),'World');};
   $('#tabs').onclick=e=>{const t=e.target.closest('[data-t]')?.dataset.t;if(t&&UI){UI.drawer(t);renderFeed();renderCamps();}};
   hudT=1;hud(0);
   cv.tabIndex=0;cv.setAttribute('aria-label','Hermes Quest world. Press Enter to choose a visible character.');
@@ -1775,21 +1608,21 @@ function ui() {
     if(e.button!==0)return;
     if (!pointers.size) { moved = 0; dragging=false;pinching=false;start={x:e.clientX,y:e.clientY,time:performance.now()}; }
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY}); cv.setPointerCapture(e.pointerId);
-    if (pointers.size === 2) { pinch = {distance: distance(), zoom: inspect.zoom??cam.zi}; pinching=true;moved = 10; }
+    if (pointers.size === 2) { pinch = {distance: distance(), zoom: inspect.zoom??ctx.cam.zi}; pinching=true;moved = 10; }
   };
   cv.onpointermove = e => {
     const prev = pointers.get(e.pointerId); if (!prev) return;
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-    if (pinching) { if (pinch&&pointers.size>1) {cam.zi = Math.max(1, Math.min(4, pinch.zoom * distance() / Math.max(1, pinch.distance)));inspect.fittedZoom=null;} return; }
+    if (pinching) { if (pinch&&pointers.size>1) {ctx.cam.zi = Math.max(1, Math.min(4, pinch.zoom * distance() / Math.max(1, pinch.distance)));inspect.fittedZoom=null;} return; }
     moved=Math.max(moved,Math.hypot(e.clientX-start.x,e.clientY-start.y));
     if(moved<=8&&!dragging)return;
     const v = view(), dx = (e.clientX - (dragging?prev.x:start.x)) * DPR / v.z, dy = (e.clientY - (dragging?prev.y:start.y)) * DPR / v.z;
-    dragging=true;clearInspection();cam.tx -= dx;cam.ty -= dy;cam.x -= dx;cam.y -= dy;
+    dragging=true;clearInspection();ctx.cam.tx -= dx;ctx.cam.ty -= dy;ctx.cam.x -= dx;ctx.cam.y -= dy;
   };
   cv.onpointerup = e => { const was = pointers.delete(e.pointerId); pinch = null;
     if(was&&!pointers.size&&start&&Math.max(moved,Math.hypot(e.clientX-start.x,e.clientY-start.y))<=8&&performance.now()-start.time<=500)click(e); };
   cv.onpointercancel = cv.onlostpointercapture = e => { pointers.delete(e.pointerId); pinch = null; moved = 10; };
-  cv.onwheel = e => { e.preventDefault(); cam.zi = Math.max(1, Math.min(4, (inspect.zoom??cam.zi) + (e.deltaY < 0 ? 1 : -1)));inspect.fittedZoom=null; };
+  cv.onwheel = e => { e.preventDefault(); ctx.cam.zi = Math.max(1, Math.min(4, (inspect.zoom??ctx.cam.zi) + (e.deltaY < 0 ? 1 : -1)));inspect.fittedZoom=null; };
 }
 function click(e) {
   if(privacyPending)return;
@@ -1801,11 +1634,11 @@ function click(e) {
     const v=view(), wx=(e.clientX*DPR-v.ox)/v.z, wy=(e.clientY*DPR-v.oy)/v.z;
     const r=Object.entries(W.regions).sort((a,b)=>Math.hypot(a[1].spot[0]-wx,a[1].spot[1]-wy)-Math.hypot(b[1].spot[0]-wx,b[1].spot[1]-wy))[0];
     if(!r)return;
-    Object.assign(cam,{tx:r[1].spot[0],ty:r[1].spot[1]-20,zi:2});
-    if(UI)UI.detail([r[1].label,'Quests: '+Object.values(S.tasks).filter(t=>t.region===r[0]).length],'Region');
+    Object.assign(ctx.cam,{tx:r[1].spot[0],ty:r[1].spot[1]-20,zi:2});
+    if(UI)UI.detail([r[1].label,'Quests: '+Object.values(ctx.S.tasks).filter(t=>t.region===r[0]).length],'Region');
     return;
   }
-  if(picks.length===1){if(picks[0].type==='hero')showInspection(picks[0].id);else{clearInspection();quest(S.tasks[picks[0].id]);}return;}
+  if(picks.length===1){if(picks[0].type==='hero')showInspection(picks[0].id);else{clearInspection();quest(ctx.S.tasks[picks[0].id]);}return;}
   chooseCharacters(picks);
 }
 function chooseCharacters(picks) {
@@ -1815,10 +1648,10 @@ function chooseCharacters(picks) {
   renderInspection();$('#character-content button')?.focus();
 }
 function questLines(t) {
-  const h=t.bot&&S.heroes[t.bot], elapsed=t.runStart?Math.round((S.t-t.runStart)/60):0;
+  const h=t.bot&&ctx.S.heroes[t.bot], elapsed=t.runStart?Math.round((ctx.S.t-t.runStart)/60):0;
   return [D.meta.show_titles===true?'Task ID: '+t.id:sceneName(t),D.meta.show_titles===true?t.title:'Task details hidden',
     'Assigned to: '+(h?(D.meta.show_titles===true?h.name+' ('+h.bot+')':sceneName(h)):'Not provided'),
-    'Stage: '+(STAGE_TH[t.stage]||'Unknown')+' · Status: '+(TASK_STATES[t.state]||'Not started in selected range'),
+    'Stage: '+(ctx.STAGE_TH[t.stage]||'Unknown')+' · Status: '+(TASK_STATES[t.state]||'Not started in selected range'),
     ...(t.runStart?['Run elapsed: '+elapsed+' minutes']:[]),
     ...(Number.isFinite(t.max_rt)?['Run time limit: '+Math.round(t.max_rt/60)+' minutes']:[]),
     'Campaign: '+(t.campaign||'Not provided'),'Latest note: '+(D.meta.show_titles===true?t.note||'Not provided':'Task details hidden'),
@@ -1830,19 +1663,19 @@ function quest(t) {
   selectedScene = t.id;
   const id=t.id;
   if(UI)UI.detail(questLines(t),'Quest',{refresh:()=>{
-    const current=S.tasks[id]||D.tasks.find(row=>row.id===id);
+    const current=ctx.S.tasks[id]||D.tasks.find(row=>row.id===id);
     return current?questLines(current):null;}});
 }
 function heroDialog(h) {
   selectedScene = h.bot;
   const id=h.bot;
-  UI.detail(heroDetails(h),'Hero',{refresh:()=>{const current=S.heroes[id];if(current)return heroDetails(current);return D.bots.some(b=>b.id===id)?undefined:null;}});
+  UI.detail(heroDetails(h),'Hero',{refresh:()=>{const current=ctx.S.heroes[id];if(current)return heroDetails(current);return D.bots.some(b=>b.id===id)?undefined:null;}});
 }
 function heroStatus(h) {
   return restLocked(h)?(h.rest.phase==='moving'?'Walking to rest':'Resting'):h.task?'Working':h.rest.state==='active-unobserved'?'Status unobserved · Unknown':'Active';
 }
 function heroDetails(h) {
-  const ledger = S.tokenNetByBot[h.bot],source=D.bots.find(b=>b.id===h.bot),current=h.task&&S.tasks[h.task];
+  const ledger = ctx.S.tokenNetByBot[h.bot],source=D.bots.find(b=>b.id===h.bot),current=h.task&&ctx.S.tasks[h.task];
   return [D.meta.show_titles===true?h.name:'Hero details hidden',D.meta.show_titles===true?'Hero ID: '+h.bot:sceneName(h),
     'Game class: '+h.cls,'Model: '+(source?.model||'Not provided'),'Effort: '+(source?.effort||'Not provided'),heroStatus(h),
     'Scene region: '+(W.regions[h.region]?.label||'Unknown'),
@@ -1855,12 +1688,220 @@ function heroDetails(h) {
     ...(ledger?.hasUsageCorrection ? ['Includes signed usage corrections'] : []),
     'Simulated capacity: 100,000 tokens per wallet per replay epoch; not real quota',
     'Historical usage may differ until reload (backend limitations)',
-    ...Object.keys(S.diagnostics).filter(key=>key.startsWith('Rest ')),h.bubble?.text||'-'];
+    ...Object.keys(ctx.S.diagnostics).filter(key=>key.startsWith('Rest ')),h.bubble?.text||'-'];
 }
+
+const bind = api => Object.defineProperties(ctx, Object.getOwnPropertyDescriptors(api));
+bind({
+  get $(){return $},
+  get cv(){return cv},
+  get cx(){return cx},
+  get DPR(){return DPR},
+  get UI(){return UI},
+  get CUI(){return CUI},
+  get calm(){return calm}, set calm(v){calm=v},
+  get img(){return img},
+  get CLOCK_FORMAT(){return CLOCK_FORMAT},
+  get fmt(){return fmt},
+  get MON2(){return MON2}, set MON2(v){MON2=v},
+  get MMETA2(){return MMETA2}, set MMETA2(v){MMETA2=v},
+  get SPRV(){return SPRV}, set SPRV(v){SPRV=v},
+  get D(){return D}, set D(v){D=v},
+  get W(){return W}, set W(v){W=v},
+  get BG(){return BG}, set BG(v){BG=v},
+  get SPR(){return SPR}, set SPR(v){SPR=v},
+  get MONS(){return MONS}, set MONS(v){MONS=v},
+  get MONMETA(){return MONMETA}, set MONMETA(v){MONMETA=v},
+  get BLD(){return BLD}, set BLD(v){BLD=v},
+  get MIMG(){return MIMG}, set MIMG(v){MIMG=v},
+  get HMETA(){return HMETA}, set HMETA(v){HMETA=v},
+  get inspect(){return inspect},
+  get ALPHA_BOXES(){return ALPHA_BOXES},
+  get spriteBox(){return spriteBox}, set spriteBox(v){spriteBox=v},
+  get registerCharacter(){return registerCharacter}, set registerCharacter(v){registerCharacter=v},
+  get registerSprite(){return registerSprite}, set registerSprite(v){registerSprite=v},
+  get characterName(){return characterName}, set characterName(v){characterName=v},
+  get redactCharacterNames(){return redactCharacterNames}, set redactCharacterNames(v){redactCharacterNames=v},
+  get validSessionRef(){return validSessionRef},
+  get characterSessions(){return characterSessions}, set characterSessions(v){characterSessions=v},
+  get syncInspectionSessions(){return syncInspectionSessions}, set syncInspectionSessions(v){syncInspectionSessions=v},
+  get selectedSession(){return selectedSession}, set selectedSession(v){selectedSession=v},
+  get parentLabel(){return parentLabel}, set parentLabel(v){parentLabel=v},
+  get observedTasks(){return observedTasks}, set observedTasks(v){observedTasks=v},
+  get stopInspectionFollow(){return stopInspectionFollow}, set stopInspectionFollow(v){stopInspectionFollow=v},
+  get clearInspection(){return clearInspection}, set clearInspection(v){clearInspection=v},
+  get cardButton(){return cardButton}, set cardButton(v){cardButton=v},
+  get showInspection(){return showInspection}, set showInspection(v){showInspection=v},
+  get resetInspectionLayout(){return resetInspectionLayout}, set resetInspectionLayout(v){resetInspectionLayout=v},
+  get inspectionFrame(){return inspectionFrame}, set inspectionFrame(v){inspectionFrame=v},
+  get layoutInspection(){return layoutInspection}, set layoutInspection(v){layoutInspection=v},
+  get renderInspection(){return renderInspection}, set renderInspection(v){renderInspection=v},
+  get followCharacter(){return followCharacter}, set followCharacter(v){followCharacter=v},
+  get inspectionLinks(){return inspectionLinks}, set inspectionLinks(v){inspectionLinks=v},
+  get API(){return API},
+  get liveFeed(){return liveFeed}, set liveFeed(v){liveFeed=v},
+  get following(){return following}, set following(v){following=v},
+  get cursor(){return cursor}, set cursor(v){cursor=v},
+  get pollTimer(){return pollTimer}, set pollTimer(v){pollTimer=v},
+  get eventKeys(){return eventKeys},
+  get HISTORY_LIMIT(){return HISTORY_LIMIT},
+  get METADATA_LIMIT(){return METADATA_LIMIT},
+  get TRANSPORT_MS(){return TRANSPORT_MS},
+  get checkpoint(){return checkpoint}, set checkpoint(v){checkpoint=v},
+  get pollBusy(){return pollBusy}, set pollBusy(v){pollBusy=v},
+  get privacyPending(){return privacyPending}, set privacyPending(v){privacyPending=v},
+  get pollFailures(){return pollFailures}, set pollFailures(v){pollFailures=v},
+  get lastPollOk(){return lastPollOk}, set lastPollOk(v){lastPollOk=v},
+  get pollStale(){return pollStale}, set pollStale(v){pollStale=v},
+  get cloneState(){return cloneState},
+  get HistoryExpired(){return HistoryExpired}, set HistoryExpired(v){HistoryExpired=v},
+  get IdentityChanged(){return IdentityChanged}, set IdentityChanged(v){IdentityChanged=v},
+  get captainId(){return captainId},
+  get normalizeBot(){return normalizeBot}, set normalizeBot(v){normalizeBot=v},
+  get normalizeData(){return normalizeData}, set normalizeData(v){normalizeData=v},
+  get archiveSnapshots(){return archiveSnapshots}, set archiveSnapshots(v){archiveSnapshots=v},
+  get redactText(){return redactText}, set redactText(v){redactText=v},
+  get eventKey(){return eventKey}, set eventKey(v){eventKey=v},
+  get eventOrder(){return eventOrder}, set eventOrder(v){eventOrder=v},
+  get connection(){return connection}, set connection(v){connection=v},
+  get connectedStatus(){return connectedStatus}, set connectedStatus(v){connectedStatus=v},
+  get json(){return json}, set json(v){json=v},
+  get restoreCheckpoint(){return restoreCheckpoint}, set restoreCheckpoint(v){restoreCheckpoint=v},
+  get retainHistory(){return retainHistory}, set retainHistory(v){retainHistory=v},
+  get loadReplay(){return loadReplay}, set loadReplay(v){loadReplay=v},
+  get mergeDelta(){return mergeDelta}, set mergeDelta(v){mergeDelta=v},
+  get pollFailed(){return pollFailed}, set pollFailed(v){pollFailed=v},
+  get pollEvents(){return pollEvents}, set pollEvents(v){pollEvents=v},
+  get goLive(){return goLive}, set goLive(v){goLive=v},
+  get boot(){return boot}, set boot(v){boot=v},
+  get sceneName(){return sceneName}, set sceneName(v){sceneName=v},
+  get selectedEntity(){return selectedEntity}, set selectedEntity(v){selectedEntity=v},
+  get sceneSelection(){return sceneSelection}, set sceneSelection(v){sceneSelection=v},
+  get sceneOverflow(){return sceneOverflow}, set sceneOverflow(v){sceneOverflow=v},
+  get spawnMonster(){return spawnMonster}, set spawnMonster(v){spawnMonster=v},
+  get goHome(){return goHome}, set goHome(v){goHome=v},
+  get engage(){return engage}, set engage(v){engage=v},
+  get reset(){return reset}, set reset(v){reset=v},
+  get cancelTaskActions(){return cancelTaskActions}, set cancelTaskActions(v){cancelTaskActions=v},
+  get assignTask(){return assignTask}, set assignTask(v){assignTask=v},
+  get canStrike(){return canStrike}, set canStrike(v){canStrike=v},
+  get ACTIONS(){return ACTIONS},
+  get apply(){return apply}, set apply(v){apply=v},
+  get REST_REASON(){return REST_REASON},
+  get diagnostic(){return diagnostic}, set diagnostic(v){diagnostic=v},
+  get restLocked(){return restLocked}, set restLocked(v){restLocked=v},
+  get laterHero(){return laterHero}, set laterHero(v){laterHero=v},
+  get restGeometry(){return restGeometry}, set restGeometry(v){restGeometry=v},
+  get restSpotClear(){return restSpotClear}, set restSpotClear(v){restSpotClear=v},
+  get allocateRestSlots(){return allocateRestSlots}, set allocateRestSlots(v){allocateRestSlots=v},
+  get walkRest(){return walkRest}, set walkRest(v){walkRest=v},
+  get pauseHero(){return pauseHero}, set pauseHero(v){pauseHero=v},
+  get resumeHero(){return resumeHero}, set resumeHero(v){resumeHero=v},
+  get finishPortal(){return finishPortal}, set finishPortal(v){finishPortal=v},
+  get finishRestMotion(){return finishRestMotion}, set finishRestMotion(v){finishRestMotion=v},
+  get applyBotEvent(){return applyBotEvent}, set applyBotEvent(v){applyBotEvent=v},
+  get sleep(){return sleep}, set sleep(v){sleep=v},
+  get wake(){return wake}, set wake(v){wake=v},
+  get nm(){return nm},
+  get selectedScene(){return selectedScene}, set selectedScene(v){selectedScene=v},
+  get esc(){return esc},
+  get num(){return num}, set num(v){num=v},
+  get burst(){return burst}, set burst(v){burst=v},
+  get coins(){return coins}, set coins(v){coins=v},
+  get portal(){return portal}, set portal(v){portal=v},
+  get raven(){return raven}, set raven(v){raven=v},
+  get ATTACK(){return ATTACK},
+  get toolLabel(){return toolLabel}, set toolLabel(v){toolLabel=v},
+  get heroAccent(){return heroAccent}, set heroAccent(v){heroAccent=v},
+  get landHit(){return landHit}, set landHit(v){landHit=v},
+  get strike(){return strike}, set strike(v){strike=v},
+  get GESTURE(){return GESTURE},
+  get gesture(){return gesture}, set gesture(v){gesture=v},
+  get M_RANGED(){return M_RANGED},
+  get monsterHit(){return monsterHit}, set monsterHit(v){monsterHit=v},
+  get later(){return later}, set later(v){later=v},
+  get order(){return order}, set order(v){order=v},
+  get HANGOUTS(){return HANGOUTS},
+  get CHAT(){return CHAT},
+  get FRIENDS(){return FRIENDS}, set FRIENDS(v){FRIENDS=v},
+  get friends(){return friends}, set friends(v){friends=v},
+  get free(){return free}, set free(v){free=v},
+  get hangSpot(){return hangSpot}, set hangSpot(v){hangSpot=v},
+  get startHangout(){return startHangout}, set startHangout(v){startHangout=v},
+  get social(){return social}, set social(v){social=v},
+  get recentNotes(){return recentNotes}, set recentNotes(v){recentNotes=v},
+  get handOff(){return handOff}, set handOff(v){handOff=v},
+  get cheerAround(){return cheerAround}, set cheerAround(v){cheerAround=v},
+  get update(){return update}, set update(v){update=v},
+  get stepHero(){return stepHero}, set stepHero(v){stepHero=v},
+  get atkFrame(){return atkFrame}, set atkFrame(v){atkFrame=v},
+  get lunge(){return lunge}, set lunge(v){lunge=v},
+  get raf(){return raf}, set raf(v){raf=v},
+  get loop(){return loop}, set loop(v){loop=v},
+  get resize(){return resize}, set resize(v){resize=v},
+  get visibility(){return visibility}, set visibility(v){visibility=v},
+  get view(){return view}, set view(v){view=v},
+  get N(){return N},
+  get P(){return P},
+  get blit(){return blit}, set blit(v){blit=v},
+  get draw(){return draw}, set draw(v){draw=v},
+  get SHADOWS(){return SHADOWS},
+  get FLASH(){return FLASH},
+  get onScreen(){return onScreen}, set onScreen(v){onScreen=v},
+  get flashSheet(){return flashSheet}, set flashSheet(v){flashSheet=v},
+  get shadowPx(){return shadowPx}, set shadowPx(v){shadowPx=v},
+  get prop(){return prop}, set prop(v){prop=v},
+  get banner(){return banner}, set banner(v){banner=v},
+  get heroDraw(){return heroDraw}, set heroDraw(v){heroDraw=v},
+  get ACC(){return ACC},
+  get accent(){return accent}, set accent(v){accent=v},
+  get SIL(){return SIL},
+  get silhouette(){return silhouette}, set silhouette(v){silhouette=v},
+  get WINGS(){return WINGS},
+  get HALOS(){return HALOS},
+  get levelBack(){return levelBack}, set levelBack(v){levelBack=v},
+  get levelFront(){return levelFront}, set levelFront(v){levelFront=v},
+  get blitMon(){return blitMon}, set blitMon(v){blitMon=v},
+  get monsterPose(){return monsterPose}, set monsterPose(v){monsterPose=v},
+  get drawGroundedMonster(){return drawGroundedMonster}, set drawGroundedMonster(v){drawGroundedMonster=v},
+  get monster(){return monster}, set monster(v){monster=v},
+  get dragon(){return dragon}, set dragon(v){dragon=v},
+  get nameplate(){return nameplate}, set nameplate(v){nameplate=v},
+  get bubble(){return bubble}, set bubble(v){bubble=v},
+  get effectIcon(){return effectIcon}, set effectIcon(v){effectIcon=v},
+  get emoji(){return emoji}, set emoji(v){emoji=v},
+  get compact(){return compact}, set compact(v){compact=v},
+  get px(){return px}, set px(v){px=v},
+  get fxDraw(){return fxDraw}, set fxDraw(v){fxDraw=v},
+  get vignette(){return vignette}, set vignette(v){vignette=v},
+  get say(){return say}, set say(v){say=v},
+  get renderFeed(){return renderFeed}, set renderFeed(v){renderFeed=v},
+  get renderCamps(){return renderCamps}, set renderCamps(v){renderCamps=v},
+  get TASK_STATES(){return TASK_STATES},
+  get renderOverview(){return renderOverview}, set renderOverview(v){renderOverview=v},
+  get hudT(){return hudT}, set hudT(v){hudT=v},
+  get hud(){return hud}, set hud(v){hud=v},
+  get ui(){return ui}, set ui(v){ui=v},
+  get click(){return click}, set click(v){click=v},
+  get chooseCharacters(){return chooseCharacters}, set chooseCharacters(v){chooseCharacters=v},
+  get questLines(){return questLines}, set questLines(v){questLines=v},
+  get quest(){return quest}, set quest(v){quest=v},
+  get heroDialog(){return heroDialog}, set heroDialog(v){heroDialog=v},
+  get heroStatus(){return heroStatus}, set heroStatus(v){heroStatus=v},
+  get heroDetails(){return heroDetails}, set heroDetails(v){heroDetails=v}
+});
+ctx.services = {};
+ctx.services.geometry = window.HQModules.createGeometry(ctx);
+bind(ctx.services.geometry);
+ctx.services.appearance = window.HQModules.createAppearance(ctx);
+bind(ctx.services.appearance);
+ctx.services.state = window.HQModules.createState(ctx);
+bind(ctx.services.state);
+ctx.state = ctx.S; ctx.camera = ctx.cam;
 // Keep live payloads off DOM/storage. These references are for isolated tests;
 // the browser only publishes them when its harness explicitly opts in.
 const facade = {
-  $, ACTIONS, DPR, S, STRIDE, UI, WALK_V, cam, cv, cx, eventKeys, inspect,
+  $, ACTIONS, DPR, S: ctx.S, STRIDE: ctx.STRIDE, UI, WALK_V: ctx.WALK_V, cam: ctx.cam, cv, cx, eventKeys, inspect,
   captainId, cloneState,
   get D(){return D}, set D(v){D=v},
   get W(){return W}, set W(v){W=v},
@@ -1889,20 +1930,19 @@ const facade = {
   get reset(){return reset}, set reset(v){reset=v},
   get ui(){return ui}, set ui(v){ui=v},
   boot, characterName, chooseCharacters, clearInspection, click, connectedStatus,
-  draw, engage, eventKey, finishRestMotion, followCharacter, formation, friends,
-  goHome, goLive, hero, heroDialog, heroStatus, hud, inspectionLinks, json, later,
-  laterHero, loadReplay, loop, mergeDelta, monster, monsterPose, mstyle, mtier, mtype,
-  normalizeData, order, overflowed, parentLabel, plazaOf, pollEvents, pollFailed,
-  portal, px, quest, regionOf, renderFeed, renderInspection, resize, restLocked,
-  say, selectedSession, showInspection, spawnMonster, spotOf, startHangout,
-  stepHero, strike, task, update, view, wake, walkTo
+  draw, engage, eventKey, finishRestMotion, followCharacter, formation: ctx.formation, friends,
+  goHome, goLive, hero: ctx.hero, heroDialog, heroStatus, hud, inspectionLinks, json, later,
+  laterHero, loadReplay, loop, mergeDelta, monster, monsterPose, mstyle: ctx.mstyle, mtier: ctx.mtier, mtype: ctx.mtype,
+  normalizeData, order, overflowed: ctx.overflowed, parentLabel, plazaOf: ctx.plazaOf, pollEvents, pollFailed,
+  portal, px, quest, regionOf: ctx.regionOf, renderFeed, renderInspection, resize, restLocked,
+  say, selectedSession, showInspection, spawnMonster, spotOf: ctx.spotOf, startHangout,
+  stepHero, strike, task: ctx.task, update, view, wake, walkTo: ctx.walkTo
 };
 if (autoBoot) {
   if(UI){UI.init();UI.status('Loading activity…','loading');}
   boot();
 }
-return facade;
-}
+return facade;}
 (globalThis.HQModules ||= {}).createGame = createGame;
 if (globalThis.__questAutoBoot !== false) {
   const game = createGame();

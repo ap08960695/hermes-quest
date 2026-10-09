@@ -310,6 +310,7 @@ def _static_target(asset_path: str) -> Path:
     relative = PurePosixPath(asset_path)
     allowed = asset_path in {
         "index.html", "game.js", "npcs.js", "font.js", "ui-glyphs.js", "ui-panels.js", "quest/c-ui.js",
+        "quest/geometry.js", "quest/appearance.js", "quest/state.js",
         "assets/fonts/NotoSansThai-Regular.otf", "data/world.json", "assets/sprites/monsters.json"
     } or (
         len(parts) >= 3 and parts[:2] == ["assets", "px"]

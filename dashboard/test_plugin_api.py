@@ -214,6 +214,27 @@ class QuestAPItests(unittest.TestCase):
         self.assertIn("application/javascript", npc.headers["content-type"])
         self.assertEqual(npc.headers["cache-control"], "no-store")
 
+    def test_d2_module_static_paths(self):
+        modules = [p for p in api._desktop_module.SCRIPT_ORDER if p.startswith("quest/")]
+        self.assertGreater(len(modules), 1)
+        for path in modules:
+            with self.subTest(path=path):
+                source = "// synthetic module " + path
+                target = self.put(path, source)
+                response = self.client.get(PREFIX + "/static/" + path)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.text, source)
+                self.assertIn("application/javascript", response.headers["content-type"])
+                self.assertEqual(response.headers["cache-control"], "no-store")
+                self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+                target.unlink()
+                target.symlink_to(self.root / "data/replay.json")
+                self.assertEqual(self.client.get(PREFIX + "/static/" + path).status_code, 404)
+                target.unlink()
+                for unknown in [path + ".bak", path.replace(".js", ".json"), path.upper()]:
+                    self.put(unknown, "PRIVATE MODULE SENTINEL")
+                    self.assertEqual(self.client.get(PREFIX + "/static/" + unknown).status_code, 404)
+
     def test_c_ui_exact_allowlist_and_script_headers(self):
         response = self.client.get(PREFIX + "/static/quest/c-ui.js")
         self.assertEqual(response.status_code, 200)
