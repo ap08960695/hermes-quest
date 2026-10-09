@@ -101,6 +101,26 @@ for(let batch=0;batch<3;batch++) {
 }`);
 assert.strictEqual(run('D.tasks.length'),256); assert.strictEqual(run('D.bots.length'),256);
 assert.strictEqual(run('Object.keys(S.heroes).length'),256); assert.strictEqual(run('eventKeys.size'),0);
+// Inspection lineage is session-only; profile aggregation must never invent a
+// singular parent from task dependencies or silently pick one of many sessions.
+const lineage=JSON.parse(run(`JSON.stringify((()=>{
+  const data=D,heroes=S.heroes,bot=inspect.bot,session=inspect.session;
+  try {
+    D={meta:{show_profile_names:true,show_titles:false},bots:[{id:'root',display_name:'Root'},{id:'child',display_name:'Child'}],
+      tasks:[{id:'private',title:'PRIVATE',bot:'child',parents:['root']}],events:[],sessions:[
+        {bot:'root',session_ref:'11111111111111111111',parent_session_ref:null,is_subagent:false},
+        {bot:'child',session_ref:'22222222222222222222',parent_session_ref:'11111111111111111111',is_subagent:true},
+        {bot:'child',session_ref:'33333333333333333333',parent_session_ref:'99999999999999999999',is_subagent:true}]};
+    S.heroes={root:{},child:{}};inspect.bot='child';inspect.session=null;
+    const result=[parentLabel(D.sessions[0]),parentLabel(D.sessions[1]),parentLabel(D.sessions[2]),selectedSession()];
+    inspect.session=D.sessions[1].session_ref;result.push(selectedSession().session_ref);
+    D.sessions=[];result.push(parentLabel(selectedSession()));
+    D.meta.show_profile_names=false;result.push(characterName('child'));
+    return result;
+  } finally {D=data;S.heroes=heroes;inspect.bot=bot;inspect.session=session;}
+})())`));
+assert.deepStrictEqual(lineage,['Not a sub-agent','Parent: Root','Parent unknown',null,'22222222222222222222','Parent unknown','Hero 2']);
+console.log('PASS inspection: root/child/orphan, multi-session choice, no task-parent inference, independent name privacy gate');
 // Fake clock exercises the production 35s deadline without waiting in CI.
 // Both stalled headers and stalled JSON bodies must abort and then recover via
 // the scheduled 10s retry with the SAME cursor and no overlapping poll.

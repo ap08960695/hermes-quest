@@ -29,7 +29,7 @@
   function number(selector,text,label) {paint($(selector),numericImage(text),label+': '+text);}
   const visible=el=>el&&!el.hidden&&getComputedStyle(el).display!=='none'&&(!el.getClientRects||el.getClientRects().length>0);
   function bounds() {
-    const fixed=['#focus-bar','#menu','#quest'].map($).filter(visible).map(el=>el.getBoundingClientRect());
+    const fixed=['#focus-bar','#menu','#quest','#character-card'].map($).filter(visible).map(el=>el.getBoundingClientRect());
     reserved=fixed.map(r=>({left:r.left-4,top:r.top-4,right:r.right+4,bottom:r.bottom+4}));
     const outer=fixed.filter((r,i)=>!fixed.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
     budget=Math.max(0,innerWidth*innerHeight*(innerWidth<=760||innerHeight<=500?.25:.2)-outer.reduce((n,r)=>n+r.width*r.height,0));

@@ -33,6 +33,163 @@ const S = {t: 0, i: 0, speed: 120, play: true, heroes: {}, tasks: {}, fx: [], fe
   trauma: 0, stop: 0, lastFeed: {}};
 const cam = {x: 1000, y: 700, tx: 1000, ty: 700, zi: 1};
 
+// Page-local presentation only. Never part of a replay checkpoint or live cursor.
+const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null};
+const ALPHA_BOXES = new WeakMap();
+function spriteBox(im, sx, sy, w, h) {
+  let boxes = ALPHA_BOXES.get(im); if (!boxes) { boxes = new Map(); ALPHA_BOXES.set(im, boxes); }
+  const key = [sx, sy, w, h].join(':'); if (boxes.has(key)) return boxes.get(key);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d'); g.drawImage(im, sx, sy, w, h, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  let left = w, top = h, right = 0, bottom = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (d[(y * w + x) * 4 + 3] > 0) {
+    left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1);
+  }
+  const box = right ? {left, top, right, bottom} : null; boxes.set(key, box); return box;
+}
+function registerCharacter(v, type, id, box) {
+  if (!box) return;
+  const r = cv.getBoundingClientRect(), scale = r.width / cv.width;
+  const body = {left:r.left+(v.ox+box.left*v.Z)*scale, top:r.top+(v.oy+box.top*v.Z)*scale,
+    right:r.left+(v.ox+box.right*v.Z)*scale, bottom:r.top+(v.oy+box.bottom*v.Z)*scale};
+  if (body.right < r.left || body.left > r.right || body.bottom < r.top || body.top > r.bottom) return;
+  const dx = Math.max(0, (44 - (body.right-body.left))/2), dy = Math.max(0, (44 - (body.bottom-body.top))/2);
+  inspect.picks.push({type,id,world:box,body,anchor:type==='hero'?[S.heroes[id].x,S.heroes[id].y]:null,order:inspect.picks.length,
+    hit:{left:body.left-dx,right:body.right+dx,top:body.top-dy,bottom:body.bottom+dy}});
+}
+function registerSprite(v, type, id, im, sx, w, h, nx, ny, flip) {
+  const b = spriteBox(im, sx, 0, w, h); if (!b) return;
+  registerCharacter(v,type,id,{left:nx+(flip?w-b.right:b.left),right:nx+(flip?w-b.left:b.right),top:ny+b.top,bottom:ny+b.bottom});
+}
+function characterName(id) {
+  const b = D.bots.find(b => b.id === id);
+  return D.meta.show_profile_names === true && b ? b.display_name || b.profile_name || b.pet_name || 'Hero' :
+    'Hero '+Math.max(1,D.bots.findIndex(b => b.id === id)+1);
+}
+const validSessionRef = ref => typeof ref === 'string' && /^[a-f0-9]{20}$/.test(ref);
+function characterSessions(id) {
+  return (D.sessions || []).filter(s => s.bot === id && validSessionRef(s.session_ref) &&
+    (!Number.isFinite(s.started_at) || s.started_at <= S.t));
+}
+function syncInspectionSessions(delta = null) {
+  const rows=new Map((D.sessions||[]).filter(s=>s&&validSessionRef(s.session_ref)).map(s=>[s.session_ref,s]));
+  for(const s of delta||[])if(s&&validSessionRef(s.session_ref)){rows.delete(s.session_ref);rows.set(s.session_ref,s);}
+  // Presentation metadata stays finite just like the replay's entity inventory.
+  D.sessions=[...rows.values()].slice(-(HISTORY_LIMIT+METADATA_LIMIT));
+}
+function selectedSession() {
+  const rows = characterSessions(inspect.bot);
+  return inspect.session ? rows.find(s => s.session_ref === inspect.session) || null : rows.length === 1 ? rows[0] : null;
+}
+function parentLabel(s) {
+  if (!s) return 'Parent unknown';
+  if (!s.parent_session_ref) return s.is_subagent === false ? 'Not a sub-agent' : 'Parent unknown';
+  const parent = (D.sessions || []).find(p => validSessionRef(p.session_ref) && p.session_ref === s.parent_session_ref);
+  return parent ? 'Parent: '+(S.heroes[parent.bot]?characterName(parent.bot):'Character unavailable') : 'Parent unknown';
+}
+function observedTasks(id) {
+  return D.tasks.filter(t => S.tasks[t.id] ? S.tasks[t.id].bot === id : S.t >= D.meta.generated && t.bot === id).map(t => {
+    const current = S.tasks[t.id];
+    const status = current ? TASK_STATES[current.state] || 'Status unobserved' :
+      S.t >= D.meta.generated ? ({running:'Working',done:'Complete',blocked:'Blocked',todo:'Waiting',ready:'Ready',review:'In review'})[t.status] || 'Status unobserved' : 'Status unobserved';
+    return (D.meta.show_titles === true ? t.title || 'Untitled task' : 'Task details hidden')+' · '+status;
+  });
+}
+function clearInspection(restore = false) {
+  inspect.bot = inspect.session = inspect.choices = null; inspect.follow = false; inspect.key = '';
+  const card = $('#character-card'); if (card) { card.hidden = true; $('#character-content').replaceChildren?.(); }
+  if (restore) cv.focus();
+}
+function cardButton(parent, label, fn) {
+  const b = document.createElement('button'); b.className = 'text-button'; b.style.width = '100%';
+  b.textContent = label; b.onclick = fn; parent.append(b); return b;
+}
+function showInspection(id) {
+  if (privacyPending || !S.heroes[id]) return;
+  if (UI) UI.close();
+  if (UI) UI.menu(false);
+  inspect.revision = D.meta.config_revision ?? null;
+  inspect.bot = id; inspect.session = null; inspect.choices = null; inspect.follow = true; inspect.key = '';
+  renderInspection(); followCharacter(1); $('#character-close').focus();
+}
+function renderInspection() {
+  const card = $('#character-card'); if (!card) return;
+  if (privacyPending || inspect.revision !== (D.meta.config_revision ?? null)) {
+    clearInspection(); inspect.revision = D.meta.config_revision ?? null;
+  }
+  if (!inspect.bot && !inspect.choices) return;
+  // Modal/Menu surfaces own focus and space while open. Never overlap them.
+  if (!$('#quest').hidden || !$('#menu').hidden) { clearInspection(); return; }
+  card.hidden = false;
+  card.style.width = innerWidth <= 760 ? 'calc(100vw - 16px)' : '280px';
+  const selectedPick=inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot),bar=$('#focus-bar').getBoundingClientRect();
+  const bodyHeight=selectedPick?(selectedPick.world.bottom-selectedPick.world.top)*cam.zi:70*cam.zi;
+  const bodyWidth=selectedPick?(selectedPick.world.right-selectedPick.world.left)*cam.zi:48*cam.zi;
+  const safeTop=innerWidth/2-bodyWidth/2<bar.right?bar.bottom+8:8;
+  card.style.maxHeight = Math.max(62,Math.min(innerWidth <= 760 ? 160 : 240,innerHeight*.28,innerHeight-safeTop-bodyHeight-24))+'px';
+  const h = S.heroes[inspect.bot], s = selectedSession(), rows = characterSessions(inspect.bot), b = D.bots.find(b => b.id === inspect.bot);
+  if (inspect.bot && !h) inspect.follow = false;
+  const lines = inspect.choices ? [] : !h ? ['Character unavailable','Follow off'] : [
+    D.meta.show_profile_names === true ? 'Profile: '+(b?.profile_name || 'Unknown')+' · Pet: '+(b?.pet_name || 'Unknown') : 'Profile and pet names hidden',
+    rows.length > 1 && !s ? 'Choose a session to inspect its parent' : parentLabel(s),
+    ...(observedTasks(inspect.bot).length ? observedTasks(inspect.bot) : ['No observed task']),
+    'Follow '+(inspect.follow ? 'on' : 'off')];
+  const heading = inspect.choices ? 'Choose character' : characterName(inspect.bot);
+  const children=s?(D.sessions||[]).filter(row=>row.parent_session_ref===s.session_ref&&validSessionRef(row.session_ref)):[];
+  const key = JSON.stringify([heading,lines,rows.map(s=>s.session_ref),inspect.session,inspect.choices,children.map(c=>c.session_ref)]);
+  if (key === inspect.key) return; inspect.key = key;
+  const content = $('#character-content'), active = document.activeElement, owns = content.contains(active);
+  $('#character-heading').textContent = heading; content.replaceChildren();
+  for (const line of lines) { const p=document.createElement('div');p.textContent=line;p.style.overflowWrap='anywhere';content.append(p); }
+  if (inspect.choices) for (const pick of inspect.choices) cardButton(content,pick.type === 'hero' ? characterName(pick.id) : 'Monster · '+(STAGE_TH[S.tasks[pick.id]?.stage] || 'Unknown stage'),()=>{
+    if (pick.type === 'hero') showInspection(pick.id); else {clearInspection();if(S.tasks[pick.id])quest(S.tasks[pick.id]);}
+  });
+  else if (h && rows.length > 1) rows.forEach((row,i)=>cardButton(content,'Session '+(i+1)+' · '+parentLabel(row),()=>{
+    inspect.session=row.session_ref;inspect.key='';renderInspection();$('#character-close').focus();
+  }));
+  if(!inspect.choices&&children.length){const p=document.createElement('div');p.textContent=children.length+' child sessions'+(children.length>3?' · +'+(children.length-3)+' beyond three links':'');content.append(p);
+    children.forEach((child,i)=>cardButton(content,'Child '+(i+1)+' · '+characterName(child.bot),()=>{
+      if(S.heroes[child.bot]){showInspection(child.bot);inspect.session=child.session_ref;inspect.key='';renderInspection();}
+      else {inspect.bot=child.bot;inspect.session=child.session_ref;inspect.follow=false;inspect.key='';renderInspection();}
+    }));}
+  if (owns) $('#character-close').focus();
+}
+function followCharacter(dt) {
+  if (!inspect.follow || !inspect.bot) return;
+  const h = S.heroes[inspect.bot]; if (!h || privacyPending) {inspect.follow=false;return;}
+  const pick = inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
+  const card = $('#character-card').getBoundingClientRect(), bar = $('#focus-bar').getBoundingClientRect();
+  const box = pick?.world ? {...pick.world} : {left:h.x-24,right:h.x+24,top:h.y-70,bottom:h.y};
+  if(pick?.anchor){const dx=h.x-pick.anchor[0],dy=h.y-pick.anchor[1];box.left+=dx;box.right+=dx;box.top+=dy;box.bottom+=dy;}
+  const top=innerWidth/2-(box.right-box.left)*cam.zi/2<bar.right?bar.bottom+8:8,bottom=card.top-8,left=8,right=innerWidth-8;
+  const targetX = (left+right)/2, targetY = (top+bottom)/2;
+  cam.tx=(box.left+box.right)/2-(targetX-innerWidth/2)/cam.zi;
+  cam.ty=(box.top+box.bottom)/2-(targetY-innerHeight/2)/cam.zi;
+  const k=calm?1:1-Math.exp(-dt/.18);cam.x=lerp(cam.x,cam.tx,k);cam.y=lerp(cam.y,cam.ty,k);
+  // Allow background padding near world edges rather than moving the character.
+  const rect = {left:innerWidth/2+(box.left-cam.x)*cam.zi,right:innerWidth/2+(box.right-cam.x)*cam.zi,
+    top:innerHeight/2+(box.top-cam.y)*cam.zi,bottom:innerHeight/2+(box.bottom-cam.y)*cam.zi};
+  if (rect.left<left)cam.x-=(left-rect.left)/cam.zi;else if(rect.right>right)cam.x+=(rect.right-right)/cam.zi;
+  if (rect.top<top)cam.y-=(top-rect.top)/cam.zi;else if(rect.bottom>bottom)cam.y+=(rect.bottom-bottom)/cam.zi;
+  cam.tx=cam.x;cam.ty=cam.y;
+}
+function inspectionLinks(v) {
+  const s = selectedSession(); if (!s || !inspect.bot) return;
+  const selected=inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);if(!selected)return;
+  const refs = (D.sessions || []).filter(p=>validSessionRef(p.session_ref) &&
+    (p.session_ref===s.parent_session_ref || p.parent_session_ref===s.session_ref));
+  const ids=[...new Set(refs.map(p=>p.bot))].filter(id=>id!==inspect.bot);
+  const visible=ids.map(id=>inspect.picks.find(p=>p.type==='hero'&&p.id===id)).filter(Boolean);
+  const card=$('#character-card').getBoundingClientRect();
+  const point=p=>P(v,(p.world.left+p.world.right)/2,p.world.bottom);
+  cx.save();cx.beginPath();cx.rect(0,0,cv.width,Math.max(0,card.top-8)*DPR);cx.clip();
+  cx.strokeStyle='rgba(232,223,198,.25)';cx.lineWidth=DPR;
+  for(const p of visible.slice(0,3)){const a=point(selected),b=point(p);cx.beginPath();cx.moveTo(...a);cx.lineTo(...b);cx.stroke();}
+  cx.restore();
+  if(visible.length>3 && UI){const a=point(selected);UI.screenNumber('+'+(visible.length-3),a[0]/DPR,a[1]/DPR-90);}
+}
+
 const API = '/api/plugins/hermes-quest/';
 let liveFeed = false, following = false, cursor = '', pollTimer = null;
 const eventKeys = new Set();
@@ -154,11 +311,13 @@ function loadReplay(replay, live = null, at = null) {
     throw new Error('Invalid replay');
   // Rebase is transactional: a failed snapshot must not destroy the old cursor/history.
   const previous = {D, checkpoint, cursor, state: {...S}, keys: [...eventKeys]};
+  clearInspection();
   if (UI) UI.privacy();
   try {
     D = replay; checkpoint = null; eventKeys.clear();
     for (const field of ['tasks', 'bots']) D[field] = [...new Map(D[field].map(v => [v.id, v])).values()];
     normalizeData();
+    syncInspectionSessions();
     D.events.sort(eventOrder);
     D.events = D.events.filter(e => { const key = eventKey(e); const duplicate = eventKeys.has(key); eventKeys.add(key); return !duplicate; });
     const preserve = live && previous.D?.meta.show_titles === D.meta.show_titles;
@@ -198,6 +357,7 @@ function mergeDelta(delta) {
   // An identity/config migration needs a clean authoritative snapshot, not an
   // upsert mixing old profile IDs/prose with pseudonyms. Check before mutation.
   if ((delta.meta?.show_titles !== undefined && delta.meta.show_titles !== D.meta.show_titles) ||
+      (delta.meta?.show_profile_names !== undefined && delta.meta.show_profile_names !== D.meta.show_profile_names) ||
       (delta.meta?.config_revision !== undefined && delta.meta.config_revision !== D.meta.config_revision) ||
       (delta.meta?.captain !== undefined && delta.meta.captain !== D.meta.captain))
     throw new IdentityChanged('Replay identity changed');
@@ -218,6 +378,7 @@ function mergeDelta(delta) {
     for (const v of delta[field]) { const merged = {...byId.get(v.id), ...v}; byId.delete(v.id); byId.set(v.id, merged); }
     D[field] = [...byId.values()];
   }
+  syncInspectionSessions(Array.isArray(delta.sessions)?delta.sessions:[]);
   normalizeData(); FRIENDS = null;
   if (D.meta.show_titles !== true) delta.events.forEach(e => { delete e.note; delete e.title; });
   syncMetadata();
@@ -265,6 +426,7 @@ async function pollEvents() {
     try { mergeDelta(delta); } catch (e) {
       if (!(e instanceof HistoryExpired)) throw e;
       if (e instanceof IdentityChanged) {
+        clearInspection();
         privacyPending = true;
         redactText(); checkpoint = null;
         Object.assign(S, emptyState());
@@ -965,7 +1127,7 @@ function loop(ts) {
   raf = null;
   if (document.hidden) return;
   const dt = Math.min(.05, (ts - (loop.last || ts)) / 1000); loop.last = ts;
-  update(dt); draw(); hud(dt);
+  update(dt); renderInspection(); followCharacter(dt); draw(); hud(dt);
   raf = requestAnimationFrame(loop);
 }
 function resize() { cv.width = innerWidth * DPR; cv.height = innerHeight * DPR; if (UI) UI.resize(); }
@@ -1002,6 +1164,7 @@ function draw() {
   cx.fillStyle = '#0b1220'; cx.fillRect(0, 0, cv.width, cv.height);
   if (privacyPending) { if(UI)UI.flush(); return; }
   if (BG) cx.drawImage(BG, v.ox, v.oy, W.size[0] * v.Z, W.size[1] * v.Z);
+  inspectionLinks(v); inspect.picks = [];
   const ents = [...(W.layered ? W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
     ...(Object.values(S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
     ...Object.values(S.tasks).filter(t => t.alpha > 0).map(t => ({y: t.mx !== undefined ? t.my : t.y, f: () => monster(v, t)})),
@@ -1080,11 +1243,18 @@ function heroDraw(v, h) {
     for (let i = 0; i < n; i++) { const a = i / n * 6.28 + c * 4; px(v, h.x + Math.cos(a) * r, h.y - 30 + Math.sin(a) * r * .8, 2, 2, i % 3 ? st.color : st.glow); }
   }
   shadowPx(v, bx, N(h.y) + 1, 15);
+  if (inspect.bot === h.bot) {
+    cx.save();cx.strokeStyle='rgba(255,211,107,.65)';cx.lineWidth=2*DPR;
+    cx.beginPath();cx.ellipse(v.ox+bx*v.Z,v.oy+N(h.y)*v.Z,22*v.Z,7*v.Z,0,0,Math.PI*2);cx.stroke();
+    cx.beginPath();cx.moveTo(v.ox+(bx-5)*v.Z,v.oy+(by-76)*v.Z);cx.lineTo(v.ox+bx*v.Z,v.oy+(by-71)*v.Z);cx.lineTo(v.ox+(bx+5)*v.Z,v.oy+(by-76)*v.Z);cx.stroke();cx.restore();
+  }
   const sheet = h.hurt > 0 && !calm ? flashSheet(img,2.4,.2) : img;
   if (h.sleep && !walking) cx.globalAlpha = .9;
   if (h.down > 0 || (h.sleep && !walking)) {                     // lying down: rotate by exactly 90deg (stays on the grid)
     cx.save(); cx.translate(v.ox + bx * v.Z, v.oy + by * v.Z); cx.rotate(-Math.PI / 2);
     cx.drawImage(sheet, fr * M.fw, 0, M.fw, M.fh, -M.ax * v.Z, -M.base * v.Z, M.fw * v.Z, M.fh * v.Z); cx.restore();
+    const b=spriteBox(img,fr*M.fw,0,M.fw,M.fh);
+    if(b)registerCharacter(v,'hero',h.bot,{left:bx+b.top-M.base,right:bx+b.bottom-M.base,top:by+M.ax-b.right,bottom:by+M.ax-b.left});
   } else {
     const nx = h.face > 0 ? bx - M.ax : bx - (M.fw - M.ax), ny = by - M.base, lv = LEVEL[h.effort] || 0;
     levelBack(v, h, bx, by, st, lv);
@@ -1095,6 +1265,7 @@ function heroDraw(v, h) {
       cx.globalAlpha = (h.sleep && !walking) ? .9 : 1;
     }
     blit(v, sheet, fr * M.fw, 0, M.fw, M.fh, nx, ny, h.face < 0);
+    registerSprite(v,'hero',h.bot,img,fr*M.fw,M.fw,M.fh,nx,ny,h.face<0);
     levelFront(v, h, bx, by, st, lv);
   }
   cx.filter = 'none'; cx.globalAlpha = 1;
@@ -1170,15 +1341,36 @@ function blitMon(v, kind, bx, by, alpha = 1) {
   cx.globalAlpha = alpha; blit(v, im, 0, 0, im.width, im.height, bx - Math.floor(im.width / 2), by - im.height + 1); cx.globalAlpha = 1;
   return im;
 }
+function monsterPose(t,kind,walking) {
+  // Stable phase from an opaque entity key, not the simulation RNG.
+  let phase=0;for(const ch of String(t.id))phase=(Math.imul(phase,31)+ch.charCodeAt(0))>>>0;
+  const now=performance.now()/1000+phase%1000/100,grounded=!['ghost','bat'].includes(kind);
+  const owner=t.bot&&S.heroes[t.bot],anchor=t.mx??t.x;
+  const face=walking?(t.mface||-1):owner?(owner.x>=anchor?1:-1):calm?-1:Math.floor(now/5)%2?1:-1;
+  return {grounded,face,bob:calm||walking?0:grounded?(Math.sin(now*2*Math.PI/2.8)>0?1:0):Math.round(Math.sin(now*2*Math.PI/2.4)),
+    recoil:calm?0:Math.min(2,Math.round(ease(t.kick||0)*2))};
+}
+function drawGroundedMonster(v,t,base,sheet,M,fr,bx,by,pose) {
+  const box=spriteBox(base,0,0,M.fw,M.fh);if(!box)return;
+  // Keep the bottom eight opaque rows AND the original shadow byte-stable.
+  // Only the torso turns/breathes/recoils, including hurt and attack frames.
+  const cut=Math.max(1,box.bottom-8),nx=bx-M.ax,ny=by-M.base;
+  blit(v,base,0,cut,M.fw,M.fh-cut,nx,ny+cut);
+  const upperX=(pose.face<0?bx-M.ax:bx-(M.fw-M.ax))+pose.recoil;
+  blit(v,sheet,fr*M.fw,0,M.fw,cut,upperX,ny-pose.bob,pose.face>0);
+  const upper=spriteBox(base,fr*M.fw,0,M.fw,cut);
+  registerCharacter(v,'monster',t.id,{left:Math.min(nx+box.left,upperX+(upper?(pose.face>0?M.fw-upper.right:upper.left):0)),
+    right:Math.max(nx+box.right,upperX+(upper?(pose.face>0?M.fw-upper.left:upper.right):M.fw)),top:ny+(upper?.top||0)-pose.bob,bottom:ny+box.bottom});
+}
 function monster(v, t) {
   if (!onScreen(v,t.mx ?? t.x,t.my ?? t.y,200,200)) return;
   if (t.region === 'camp' && t.slot >= 18) return;                          // camp yard shows the first 18 only
   const kind = mtype(t), key = `${kind}-${mtier(t)}`, im2 = MON2[key], M = MMETA2[key];
-  const walking = !!(t.mpath && t.emerge <= 0), kick = Math.round(ease(t.kick || 0) * 8);
-  const bx = N(t.mx !== undefined ? t.mx : t.x) + kick, by = N(t.mx !== undefined ? t.my : t.y);
+  const walking = !!(t.mpath && t.emerge <= 0);
+  const bx = N(t.mx !== undefined ? t.mx : t.x), by = N(t.mx !== undefined ? t.my : t.y);
   const alpha = t.alpha * (t.emerge > 0 ? 1 - t.emerge / .9 : 1);
   if (mtier(t) === 'l' && !t.dying) {                                       // elite: smouldering red ground ring
-    cx.fillStyle = `rgba(220,40,30,${.18 + Math.sin(performance.now() / 300) * .06})`;
+    cx.fillStyle = `rgba(220,40,30,${.18 + (calm?0:Math.sin(performance.now() / 300) * .06)})`;
     const r = Math.round((M ? M.fw * .3 : 24));
     for (let i = -3; i <= 3; i++) { const half = Math.round(r * Math.sqrt(1 - (i / 3.5) ** 2)); cx.fillRect(v.ox + (bx - half) * v.Z, v.oy + (by + i) * v.Z, half * 2 * v.Z, v.Z); }
   }
@@ -1190,17 +1382,31 @@ function monster(v, t) {
     else if (t.atk >= 0) fr = 4 + Math.min(3, Math.floor(t.atk / .125));
     else if (t.flash > .02) fr = 8;
     else if (walking) fr = Math.floor(t.mdist / 9) % 4;
-    else { fr = Math.floor(performance.now() / 380 + t.slot) % 2 ? 0 : 2; bob = 0; }      // idle: shift weight between two stances
-    const face = walking ? (t.mface || -1) : -1;                            // sheets face LEFT; flip when marching right
+    else fr = 0;
+    const pose = monsterPose(t,kind,walking);
+    bob = pose.bob;
+    const face = pose.face;
 
     cx.globalAlpha = Math.max(0, Math.min(1, alpha * (t.dying ? Math.min(1, t.dying * 2.5) : 1)));
-    blit(v, t.flash > 0 && !calm ? flashSheet(im2,2.6) : im2, fr * M.fw, 0, M.fw, M.fh, face < 0 ? bx - M.ax : bx - (M.fw - M.ax), by - M.base - bob, face > 0);
+    const sheet=t.flash>0&&!calm?flashSheet(im2,2.6):im2;
+    if(pose.grounded&&!walking&&!t.dying) {
+      drawGroundedMonster(v,t,im2,sheet,M,fr,bx,by,pose);
+    } else {
+      const nx=face<0?bx-M.ax:bx-(M.fw-M.ax),ny=by-M.base-bob;
+      blit(v,sheet,fr*M.fw,0,M.fw,M.fh,nx,ny,face>0);
+      if(alpha>0)registerSprite(v,'monster',t.id,im2,fr*M.fw,M.fw,M.fh,nx,ny,face>0);
+    }
     cx.globalAlpha = 1; cx.filter = 'none';
     top = by - Math.round(M.fh * .78);
   } else {
-    const bob = Math.floor(performance.now() / 420 + t.slot) % 2 * 2;
-
-    const im = blitMon(v, t.chained ? 'skeleton' : (MON[t.stage] || 'goblin'), bx, by - bob, alpha * (t.dying ? t.dying : 1));
+    const fallbackKind=t.chained?'skeleton':(MON[t.stage]||'goblin'),im=MIMG[fallbackKind],pose=monsterPose(t,fallbackKind,walking);
+    cx.globalAlpha=alpha*(t.dying?t.dying:1);
+    if(im){
+      const M={fw:im.width,fh:im.height,ax:Math.floor(im.width/2),base:im.height-1};
+      if(pose.grounded&&!walking&&!t.dying)drawGroundedMonster(v,t,im,im,M,0,bx,by,pose);
+      else{blit(v,im,0,0,im.width,im.height,bx-M.ax,by-M.base-pose.bob,pose.face>0);if(alpha>0)registerSprite(v,'monster',t.id,im,0,im.width,im.height,bx-M.ax,by-M.base-pose.bob,pose.face>0);}
+    }
+    cx.globalAlpha=1;
     cx.filter = 'none'; top = by - (im ? im.height : 40) - 6;
   }
 
@@ -1356,38 +1562,50 @@ function ui() {
   $('#scrub').oninput=e=>{following=false;reset(D.meta.from_+(D.meta.to-D.meta.from_)*e.target.value/1000);};
   $('#live').hidden=!liveFeed;$('#live').onclick=goLive;
   $('#calm').onclick=()=>{calm=!calm;$('#calm').setAttribute('aria-pressed',String(calm));if(UI)UI.control('#calm','calm','Reduce effects',calm?'selected':'normal');};
-  $('#world').onclick=()=>{Object.assign(cam,{tx:W.size[0]/2,ty:W.size[1]/2,zi:1});
+  $('#world').onclick=()=>{clearInspection();Object.assign(cam,{tx:W.size[0]/2,ty:W.size[1]/2,zi:1});
     if(UI)UI.detail(Object.entries(W.regions).map(([k,r])=>UI.plain(r.label)+(k==='vault'?' : '+S.vault:'')),'World');};
   $('#tabs').onclick=e=>{const t=e.target.closest('[data-t]')?.dataset.t;if(t&&UI){UI.drawer(t);renderFeed();renderCamps();}};
   hudT=1;hud(0);
-  const pointers = new Map(); let moved = 0, pinch = null;
+  cv.tabIndex=0;cv.setAttribute('aria-label','Hermes Quest world. Press Enter to choose a visible character.');
+  $('#character-close').onclick=()=>clearInspection(true);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape'&&(inspect.bot||inspect.choices)){e.preventDefault();e.stopImmediatePropagation();clearInspection(true);}
+    else if(e.key==='Enter'&&document.activeElement===cv){e.preventDefault();chooseCharacters([...inspect.picks].reverse());}
+  },true);
+  const pointers = new Map(); let moved = 0, pinch = null, start = null, dragging = false, pinching = false;
   const distance = () => { const [a, b] = [...pointers.values()]; return Math.hypot(a.x - b.x, a.y - b.y); };
   cv.onpointerdown = e => {
-    if (!pointers.size) moved = 0;
+    if(e.button!==0)return;
+    if (!pointers.size) { moved = 0; dragging=false;pinching=false;start={x:e.clientX,y:e.clientY,time:performance.now()}; }
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY}); cv.setPointerCapture(e.pointerId);
-    if (pointers.size === 2) { pinch = {distance: distance(), zoom: cam.zi}; moved = 10; }
+    if (pointers.size === 2) { pinch = {distance: distance(), zoom: cam.zi}; pinching=true;moved = 10; }
   };
   cv.onpointermove = e => {
     const prev = pointers.get(e.pointerId); if (!prev) return;
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-    if (pointers.size > 1) { if (pinch) cam.zi = Math.max(1, Math.min(4, pinch.zoom * distance() / Math.max(1, pinch.distance))); return; }
-    const v = view(), dx = (e.clientX - prev.x) * DPR / v.z, dy = (e.clientY - prev.y) * DPR / v.z;
-    moved += Math.abs(dx) + Math.abs(dy); cam.tx -= dx; cam.ty -= dy; cam.x -= dx; cam.y -= dy;
+    if (pinching) { if (pinch&&pointers.size>1) cam.zi = Math.max(1, Math.min(4, pinch.zoom * distance() / Math.max(1, pinch.distance))); return; }
+    moved=Math.max(moved,Math.hypot(e.clientX-start.x,e.clientY-start.y));
+    if(moved<=8&&!dragging)return;
+    const v = view(), dx = (e.clientX - (dragging?prev.x:start.x)) * DPR / v.z, dy = (e.clientY - (dragging?prev.y:start.y)) * DPR / v.z;
+    dragging=true;clearInspection();cam.tx -= dx;cam.ty -= dy;cam.x -= dx;cam.y -= dy;
   };
-  cv.onpointerup = e => { const was = pointers.delete(e.pointerId); pinch = null; if (was && !pointers.size && moved < 4) click(e); };
+  cv.onpointerup = e => { const was = pointers.delete(e.pointerId); pinch = null;
+    if(was&&!pointers.size&&start&&Math.max(moved,Math.hypot(e.clientX-start.x,e.clientY-start.y))<=8&&performance.now()-start.time<=500)click(e); };
   cv.onpointercancel = cv.onlostpointercapture = e => { pointers.delete(e.pointerId); pinch = null; moved = 10; };
   cv.onwheel = e => { e.preventDefault(); cam.zi = Math.max(1, Math.min(4, cam.zi + (e.deltaY < 0 ? 1 : -1))); };
 }
 function click(e) {
   if(privacyPending)return;
-  const v = view(), wx = (e.clientX * DPR - v.ox) / v.z, wy = (e.clientY * DPR - v.oy) / v.z;
-  const t = Object.values(S.tasks).filter(t => t.alpha > 0).sort((a, b) => Math.hypot(a.x - wx, a.y - 15 - wy) - Math.hypot(b.x - wx, b.y - 15 - wy))[0];
-  if (t && Math.hypot(t.x - wx, t.y - 15 - wy) < 22) return quest(t);
-  const h=Object.values(S.heroes).find(h=>Math.hypot(h.x-wx,h.y-36-wy)<36);
-  if(h&&UI)return heroDialog(h);
-  const r = Object.entries(W.regions).sort((a, b) => Math.hypot(a[1].spot[0] - wx, a[1].spot[1] - wy) - Math.hypot(b[1].spot[0] - wx, b[1].spot[1] - wy))[0];
-  Object.assign(cam, {tx: r[1].spot[0], ty: r[1].spot[1] - 20, zi: 2});
-  if(UI)UI.detail([r[1].label,'Quests: '+Object.values(S.tasks).filter(t=>t.region===r[0]).length],'Region');
+  const picks=inspect.picks.filter(p=>e.clientX>=p.hit.left&&e.clientX<=p.hit.right&&e.clientY>=p.hit.top&&e.clientY<=p.hit.bottom).sort((a,b)=>b.order-a.order);
+  if(!picks.length)return clearInspection(true);
+  if(picks.length===1){if(picks[0].type==='hero')showInspection(picks[0].id);else{clearInspection();quest(S.tasks[picks[0].id]);}return;}
+  chooseCharacters(picks);
+}
+function chooseCharacters(picks) {
+  if(!picks.length||privacyPending)return;
+  if(UI){UI.close();UI.menu(false);}
+  inspect.revision=D.meta.config_revision??null;inspect.choices=picks.map(({type,id})=>({type,id}));inspect.key='';
+  renderInspection();$('#character-content button')?.focus();
 }
 function questLines(t) {
   const h=t.bot&&S.heroes[t.bot], elapsed=t.runStart?Math.round((S.t-t.runStart)/60):0;

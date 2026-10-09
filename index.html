@@ -111,6 +111,10 @@ select:focus-visible{outline:2px solid var(--gold)}
   <details id="group-settings"><summary>Settings</summary><div class="menu-controls"><button id="calm" aria-label="Reduce motion and flashes"></button><button id="help" aria-label="Icon help"></button><button id="hide-panels" class="text-button">Hide panels</button></div><p>Menu and group visibility are saved only on this device. Closing panels does not pause playback or live updates.</p></details>
 </nav>
 <div id="quest" class="panel" role="dialog" aria-modal="true" aria-label="Details" hidden></div>
+<section id="character-card" class="panel" aria-label="Character inspection" hidden style="z-index:5;left:8px;bottom:8px;width:280px;max-width:calc(100vw - 16px);padding:8px;overflow:auto">
+  <div style="position:sticky;top:0;background:#111b30;display:flex;align-items:center;justify-content:space-between;gap:8px"><strong id="character-heading" style="min-width:0;max-height:44px;overflow:auto;overflow-wrap:anywhere">Character</strong><button id="character-close" aria-label="Close character inspection">Close</button></div>
+  <div id="character-content"></div>
+</section>
 <script src="font.js"></script>
 <script src="ui-glyphs.js"></script>
 <script src="ui-panels.js"></script>
