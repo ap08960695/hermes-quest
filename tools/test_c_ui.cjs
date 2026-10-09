@@ -199,10 +199,11 @@ test('concurrent pairs >7: deterministic sorted unique safe resting slots',()=>{
   const bots=Array.from({length:18},(_,i)=>({id:'pair-'+String(i).padStart(2,'0'),cls:'mage',region:homes[i%homes.length],wallet:'codex'}));
   const events=Array.from({length:9},(_,i)=>event('pair-'+i,'failover',bots[i*2].id,{other:bots[i*2+1].id,t:10}));
   const run=order=>{const g=load([],{bots,tasks:[]});for(const e of order)g.apply(e,false);return g;};
+  const anchor=world.regions.rest_inn.spot;
   const g=run(events),reverse=run([...events].reverse());const resting=Object.values(g.S.heroes).filter(h=>h.rest.state==='transferred').sort((a,b)=>a.bot.localeCompare(b.bot));
   assert.equal(resting.length,9);assert.equal(Object.keys(g.S.heroes).length,18);assert.equal(new Set(resting.map(h=>h.rest.slot)).size,9);
   const slots=resting.map(h=>h.rest.slot);assert.deepEqual(slots,[...slots].sort((a,b)=>a-b));assert.ok(slots.some(k=>k>=7));
-  for(const h of resting){assert.deepEqual(copy(h.rest.spot),copy(reverse.hero(h.bot).rest.spot));assert.equal(h.rest.slot,reverse.hero(h.bot).rest.slot);assert.ok(((h.rest.spot[0]-970)/112)**2+((h.rest.spot[1]-1200)/66)**2<=1);}
+  for(const h of resting){assert.deepEqual(copy(h.rest.spot),copy(reverse.hero(h.bot).rest.spot));assert.equal(h.rest.slot,reverse.hero(h.bot).rest.slot);assert.ok(((h.rest.spot[0]-anchor[0])/112)**2+((h.rest.spot[1]-anchor[1])/66)**2<=1);}
   for(let i=0;i<resting.length;i++)for(let j=i+1;j<resting.length;j++)assert.ok(Math.hypot(resting[i].rest.spot[0]-resting[j].rest.spot[0],resting[i].rest.spot[1]-resting[j].rest.spot[1])>=12);
   settle(g);for(const h of resting)assert.equal(h.rest.phase,'resting');
 });
