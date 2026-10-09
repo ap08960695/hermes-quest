@@ -21,7 +21,7 @@ RULES = {
     'private-key': re.compile(r'-----BEGIN (?P<kind>(?:[A-Z0-9]+ )*PRIVATE KEY)-----'
                               r'(?:.*?-----END (?P=kind)-----)?', re.S),
     'internal-host': re.compile(r'\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?[.])+'
-                                r'(?:local|internal|lan)\b(?![\w.-])', re.I),
+                                r'(?:local|internal|lan)\b(?![\w-])(?!\.[\w-])', re.I),
     'profile-path': re.compile(r'~/' + r'\.hermes/profiles\b', re.I),
     'operator': re.compile('|'.join(('orchestra' + '-captain', 'ap089' + '60695', 'Phaisit' + '-Big')), re.I),
     'network': re.compile(r'\b(?:172[.]22[.]|(?:\d{1,3}[.]){3}\d{1,3}\b)'),
@@ -86,7 +86,7 @@ def forbidden_path(path):
         sequence = tuple(forbidden.rstrip('/').split('/'))
         if any(parts[i:i + len(sequence)] == sequence for i in range(len(parts))):
             return True
-    return any(p == '.env' or p.endswith(('.pem', '.key')) for p in parts)
+    return any(p == '.env' or p.lower().endswith(('.pem', '.key')) for p in parts)
 
 
 def permitted(path, rule, value):

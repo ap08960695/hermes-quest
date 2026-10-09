@@ -43,13 +43,15 @@ EXTENDED_SIGNATURES = (
     *('xox' + kind + '-FictionalOnly123-456' for kind in ('b', 'p', 'a', 's', 'r')),
     'AI' + 'za' + 'FictionalOnly_123-456',
     *('fictional.' + suffix for suffix in ('local', 'internal', 'lan')),
+    *('fictional.' + suffix + '.' for suffix in ('local', 'internal', 'lan')),
     'https://nested.fictional.' + 'LOCAL' + ':443/path',
 )
 FORBIDDEN_TEST_PATHS = tuple(
     prefix + path for prefix in ('', 'docs/', 'pkg/nested/')
     for path in ('RUNBOOK.md', 'HANDOFF.md', '.claude/config.json',
                  'data/replay.json', 'preview/demo.gif', 'assets/raw/demo.png',
-                 '.env', 'deploy.pem', 'client.key'))
+                 '.env', 'deploy.pem', 'client.key', 'UPPER.PEM', 'UPPER.KEY',
+                 'mixed.PeM', 'mixed.KeY'))
 
 
 class PublicGuardTests(unittest.TestCase):
@@ -97,7 +99,8 @@ class PublicGuardTests(unittest.TestCase):
                 self.assertTrue(guard.forbidden_path(path))
         for path in ('assets/rawish/demo.png', 'docs/preview-guide/demo.gif',
                      'metadata/replay.json', 'data/replay.json.example',
-                     '.env.example', 'docs/deploy.pem.example', 'keynote.md',
+                     '.env.example', 'docs/deploy.pem.example', 'docs/UPPER.PEM.example',
+                     'docs/mixed.KeY.example', 'keynote.md',
                      'docs/assets/rawish', 'docs/notpreview/file'):
             with self.subTest(path=path):
                 self.assertFalse(guard.forbidden_path(path))
@@ -279,6 +282,7 @@ class HistoryGuardTests(unittest.TestCase):
     def test_safe_nested_paths_pass_both_modes(self):
         for path in ('docs/preview-guide/demo.gif', 'docs/assets/rawish/demo.png',
                      'config/.env.example', 'docs/deploy.pem.example',
+                     'docs/UPPER.PEM.example', 'docs/mixed.KeY.example',
                      'metadata/replay.json', 'data/replay.json.example'):
             self.put(path, 'synthetic')
         self.commit()
