@@ -7,6 +7,7 @@ const sandbox={console,URLSearchParams,Date,Math,Set,Map,Number,Object,JSON,Prom
   document:{querySelector:el,querySelectorAll:()=>[],body:el('body')},window:{devicePixelRatio:1},
   innerWidth:1440,innerHeight:900,requestAnimationFrame:noop,addEventListener:noop,setTimeout:noop,clearTimeout:noop,performance:{now:()=>0}};
 vm.createContext(sandbox);
+const connected=require('./ui_test_support.cjs')(sandbox,el);
 const src=fs.readFileSync(path.join(__dirname,'../game.js'),'utf8').replace(/\nboot\(\);\s*$/,'\n');
 vm.runInContext(src,sandbox);
 const run=code=>vm.runInContext(code,sandbox);
@@ -15,6 +16,7 @@ run(`W=world; D={meta:{from_:0,to:100,captain:'chief',classes:{builder:'ranger'}
 assert.strictEqual(run('captainId()'),'chief');
 assert.strictEqual(run('D.bots[0].cls'),'ranger'); assert.strictEqual(run('D.bots[0].region'),'forest');
 assert.strictEqual(run('D.tasks[0].title'),'q');
+assert.strictEqual(run('D.bots[0].name'),'builder-one');
 assert.strictEqual(run("regionOf('unknown','PLAN')"),'forge');
 run(`mergeDelta({events:[{id:'e1',t:10,kind:'created',task:'q'}],tasks:[],bots:[],cursor:'c1'}); S.play=true; S.speed=1; update(11);`);
 assert.strictEqual(run('S.i'),1); assert.strictEqual(run('S.tasks.q.state'),'quest');
@@ -37,7 +39,8 @@ assert.strictEqual(run('following'),true); assert.strictEqual(run('S.speed'),1);
 assert(Math.abs(run('S.t')-Date.now()/1000)<1);
 // More than three windows: prerequisite assignment/run/block/sleep state must
 // survive eviction, including aggregate gold/mana, not just tail event count.
-run(`loadReplay({meta:{from_:0,to:7000},bots:[{id:'worker',name:'Worker',region:'forge',wallet:'codex'}],
+// Checkpoint metadata/notes are synthetic opt-in prose, not default-private data.
+run(`loadReplay({meta:{from_:0,to:7000,show_titles:true},bots:[{id:'worker',name:'Worker',region:'forge',wallet:'codex'}],
   tasks:[{id:'long',stage:'BUILD',campaign:'synthetic'}],cursor:'initial',events:[
   {id:'created',t:1,kind:'created',task:'long'},
   {id:'assigned',t:2,kind:'assigned',task:'long',bot:'worker'},
@@ -130,7 +133,7 @@ process.on('beforeExit',()=>{if(!finished){console.error('FAIL: asynchronous reg
   const poll=async(delta,replay)=>{
     sandbox.fetch=async url=>({ok:true,json:async()=>JSON.parse(JSON.stringify(url.includes('events?')?delta:replay))});
     await run('pollEvents()');run('S.stop=0; update(.001)');retryOnly();
-    assert.strictEqual(el('#connection').dataset.state,'online');
+    assert(connected('online'));
   };
   const assertEffects=expected=>assert.deepStrictEqual(sandbox.effectCalls,expected);
   for(const n of [1,1999,2000,2200]) {
@@ -237,7 +240,7 @@ process.on('beforeExit',()=>{if(!finished){console.error('FAIL: asynchronous reg
   const retained=run('cursor'), count=run('D.events.length');
   await run('pollEvents()');
   assert.strictEqual(run('cursor'),retained); assert.strictEqual(run('D.events.length'),count);
-  assert.strictEqual(el('#connection').dataset.state,'offline'); retryOnly();
+  assert(connected('offline')); retryOnly();
   for(const phase of ['headers','body']) {
     let active=0,maxActive=0,calls=0,signal,requested;
     sandbox.fetch=(url,options)=>{
@@ -254,7 +257,7 @@ process.on('beforeExit',()=>{if(!finished){console.error('FAIL: asynchronous reg
     fire(35000); await pending;
     assert.strictEqual(signal.aborted,true);assert.strictEqual(active,0);assert.strictEqual(maxActive,1);
     assert.strictEqual(run('pollBusy'),false);assert.strictEqual(run('cursor'),retained);
-    assert.strictEqual(el('#connection').dataset.state,'offline');retryOnly();
+    assert(connected('offline'));retryOnly();
   }
   let requested;
   sandbox.fetch=async url=>{requested=url;return {ok:true,json:async()=>({events:[{id:'recovered',t:101,kind:'completed',task:'q'}],tasks:[],bots:[],cursor:'recovered-cursor'})}};
@@ -263,7 +266,7 @@ process.on('beforeExit',()=>{if(!finished){console.error('FAIL: asynchronous reg
   assert.strictEqual(run('cursor'),'recovered-cursor'); assert.strictEqual(run('D.events.length'),count+1);
   run('S.stop=0; update(.001)');assertEffects(['recovered']);
   assert.strictEqual(run('S.vault'),1);assert.strictEqual(run('S.feed.length'),1);
-  assert.strictEqual(el('#connection').dataset.state,'online');retryOnly();
+  assert(connected('online'));retryOnly();
   // Old overlap / unseen late write must rebase from authoritative replay,
   // rather than silently lose prerequisites or count an old completion twice.
   const replay={meta:{from_:0,to:5000},cursor:'snapshot-new',bots:[],tasks:[{id:'long',stage:'BUILD',campaign:'synthetic'}],events:[
@@ -311,7 +314,16 @@ process.on('beforeExit',()=>{if(!finished){console.error('FAIL: asynchronous reg
   }
   // Metadata-only reappearance is also unsafe after eviction, even without an
   // event referring to it yet. The cursor cannot advance without a rebase.
+  const beforeUnknown=run('JSON.stringify({D,checkpoint,cursor,S,keys:[...eventKeys]})');
   assert.throws(()=>run(`mergeDelta({events:[],tasks:[{id:'cq0-0'}],bots:[],cursor:'lost-prerequisite'})`),/rebase/);
+  assert.throws(()=>run(`mergeDelta({events:[],tasks:[],bots:[{id:'cb0-0'}],cursor:'lost-bot'})`),/rebase/);
+  assert.strictEqual(run('JSON.stringify({D,checkpoint,cursor,S,keys:[...eventKeys]})'),beforeUnknown);
+  // Known metadata and provably new tasks remain incremental (no whole replay).
+  run(`mergeDelta({events:[],tasks:[{id:'cq3-2199',max_rt:2345}],bots:[{id:'cb3-2199',effort:'high'}],cursor:'known-metadata'});`);
+  assert.strictEqual(run('cursor'),'known-metadata');assert.strictEqual(run('S.vault'),churn.events.length);
+  assert.strictEqual(run('S.tasks["cq3-2199"].max_rt'),2345);
+  run(`mergeDelta({events:[{id:'new-born',t:9001,kind:'created',task:'truly-new'}],tasks:[{id:'truly-new',stage:'BUILD'}],bots:[],cursor:'born-incremental'});`);
+  assert.strictEqual(run('cursor'),'born-incremental');assert(run('D.tasks.some(t=>t.id==="truly-new")'));
   // Duplicate metadata IDs cannot circumvent a count bound.
   run(`loadReplay({meta:{from_:0,to:1},cursor:'duplicates',events:[],
     tasks:Array.from({length:5000},()=>({id:'duplicate',stage:'BUILD',parents:['duplicate','duplicate']})),

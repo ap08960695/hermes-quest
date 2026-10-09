@@ -27,12 +27,14 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
       calls.push({url, options});
       return {ok: true, json: async () => copy(url === 'assets/px/heroes.json' ? manifest : url.startsWith('assets/') ? {} : url.includes('world') ? world : replay)};
     }};
-  vm.createContext(sandbox); vm.runInContext(source, sandbox);
+  vm.createContext(sandbox);
+  const connected = require('./ui_test_support.cjs')(sandbox, el);
+  vm.runInContext(source, sandbox);
   const run = code => vm.runInContext(code, sandbox);
   // Asset drawing/UI are browser-tested separately; keep the actual boot,
   // source selection, snapshot validation, timeline and polling code here.
   run('ui=()=>{};');
-  return {sandbox, calls, images, run, el};
+  return {sandbox, calls, images, run, el, connected};
 }
 (async () => {
   for (const [search, pathname, expected, live] of [
@@ -56,7 +58,7 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
       assert(c.images.includes('assets/px/heroes/' + sprite), sprite + ' not requested');
     }
     if (!live && !search) assert(!c.calls.some(v => /replay|\/api\//.test(v.url)));
-    assert.notStrictEqual(c.el('#connection').dataset.state, 'offline');
+    assert(c.connected(live ? 'online' : 'file'), 'boot connection must expose its exact accessible meaning');
   }
   // Real data may contain new classes/models. Listed sheets load once; the five
   // historical missing demo combos, unknown styles/classes and absent manifests
@@ -72,7 +74,7 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
     const c = client('', '/index.html', unusual, manifest); await c.run('boot()');
     assert.deepStrictEqual(c.images.filter(v => v.startsWith('assets/px/heroes/')),
       manifest === heroMeta || manifest === legacyMeta ? ['assets/px/heroes/mage-Sonnet.png'] : []);
-    assert.strictEqual(c.el('#connection').dataset.state, 'file');
+    assert(c.connected('file'));
     assert(c.images.includes('assets/px/mage.png')); // Class fallback remains loaded.
   }
   // No metadata means no implicit machine-specific Captain profile.

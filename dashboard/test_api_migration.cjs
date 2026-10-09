@@ -16,9 +16,11 @@ const box = {console, URLSearchParams, AbortController, Date, Math, setTimeout: 
   requestAnimationFrame: noop, addEventListener: noop, performance: {now: () => 0},
   document: {querySelector: el, querySelectorAll: () => [], body: el('body')},
   window: {devicePixelRatio: 1}, world, initial: copy(fixture.initial)};
-vm.createContext(box); vm.runInContext(source, box);
+vm.createContext(box);
+const connected = require('./ui_test_support.cjs')(box, el);
+vm.runInContext(source, box);
 const run = s => vm.runInContext(s, box);
-const state = () => run('JSON.stringify({D,checkpoint,cursor,S,keys:[...eventKeys],following,play:S.play})');
+const state = () => run('JSON.stringify({D,checkpoint,cursor,S,keys:[...eventKeys],following,play:S.play,privacyPending})');
 run('W=world; loadReplay(initial); reset(initial.meta.to); liveFeed=true; following=true; S.play=true;');
 assert.strictEqual(run('captainId()'), fixture.initial.meta.captain);
 assert.strictEqual(run('S.heroes[captainId()].cls'), 'commander');
@@ -40,22 +42,43 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
       if (mode === 'invalid-snapshot') return {ok: true, json: async () => ({cursor: 'BAD', events: []})};
       return {ok: true, json: async () => copy(box.replay)};
     };
-    // Every config surface must request a clean replay without first committing
-    // any delta cursor or changing current scene; retry failure is byte-stable.
+    // The direct guard is non-mutating. A poll discovering config churn must
+    // revoke old prose/scene immediately, even when replay retrieval fails.
     assert.throws(() => run('mergeDelta(delta)'), /identity changed/, step.case);
     assert.strictEqual(state(), before, step.case + ' guard');
     await run('pollEvents()');
-    assert.strictEqual(state(), before, step.case + ' 503 rollback');
-    assert.strictEqual(el('#connection').dataset.state, 'offline');
+    const prior = JSON.parse(before), failed = JSON.parse(state());
+    const safeData = copy(prior.D);
+    for (const task of safeData.tasks) {task.title = task.id; delete task.note;}
+    for (const bot of safeData.bots) bot.name = bot.id;
+    for (const event of safeData.events) {delete event.title; delete event.note;}
+    const safeExpected = copy(prior);
+    safeExpected.D = safeData; safeExpected.checkpoint = null; safeExpected.privacyPending = true;
+    // Exact safe rollback snapshot: only revoked prose and the old scene change.
+    Object.assign(safeExpected.S, {i:0, heroes:{}, tasks:{}, fx:[], feed:[], vault:0,
+      trauma:0, stop:0, lastFeed:{}, soc:{}, later:[], rt:0, mana:{claude:92,codex:96,agy:100}});
+    assert.deepStrictEqual(failed, safeExpected, step.case + ' exact fail-closed rollback snapshot');
+    assert.deepStrictEqual(failed.D, safeData, step.case + ' preserves all non-prose replay fields');
+    assert.strictEqual(failed.cursor, prior.cursor, step.case + ' cursor rollback');
+    assert.deepStrictEqual(failed.keys, prior.keys, step.case + ' dedup rollback');
+    assert.strictEqual(failed.following, prior.following);
+    for (const field of ['t', 'play', 'speed']) assert.strictEqual(failed.S[field], prior.S[field]);
+    assert.strictEqual(failed.checkpoint, null, 'old scene checkpoint cannot retain prose');
+    assert.strictEqual(failed.privacyPending, true);
+    for (const field of ['heroes', 'tasks', 'lastFeed', 'soc']) assert.deepStrictEqual(failed.S[field], {});
+    for (const field of ['fx', 'feed', 'later']) assert.deepStrictEqual(failed.S[field], []);
+    assert(!state().includes('Harmless old prose') && !state().includes('STALE OLD PRIVATE PROSE'));
+    const safeBefore = state();
+    assert(connected('offline'));
     mode = 'invalid-snapshot'; await run('pollEvents()');
-    assert.strictEqual(state(), before, step.case + ' invalid rollback');
+    assert.strictEqual(state(), safeBefore, step.case + ' invalid safe rollback');
     // Reconstruction errors must also roll back the authoritative snapshot and
     // cursor (not just transport/shape failures). Use actual reset first.
     mode = 'success';
     run('var originalReset=reset; reset=(...args)=>{originalReset(...args);throw new Error("synthetic reset failure")};');
     await run('pollEvents()');
     run('reset=originalReset;');
-    assert.strictEqual(state(), before, step.case + ' reset rollback');
+    assert.strictEqual(state(), safeBefore, step.case + ' reset safe rollback');
     await run('pollEvents()');
     assert.strictEqual(run('cursor'), step.replay.cursor, step.case);
     assert.strictEqual(run('D.meta.config_revision'), step.replay.meta.config_revision);
@@ -64,7 +87,8 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
     assert.strictEqual(run('S.heroes[captainId()].home'), step.replay.meta.regions.commander);
     assert.strictEqual(run('S.feed.length'), 0); assert.strictEqual(run('S.fx.length'), 0);
     assert.strictEqual(run('following && S.play'), true);
-    assert.strictEqual(el('#connection').dataset.state, 'online');
+    assert.strictEqual(run('privacyPending'), false);
+    assert(connected('online'));
     const bots = JSON.parse(run('JSON.stringify(D.bots)'));
     for (const bot of step.replay.bots) {
       const actual = bots.find(b => b.id === bot.id);

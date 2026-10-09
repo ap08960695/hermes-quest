@@ -188,12 +188,14 @@ function mergeDelta(delta) {
       (delta.meta?.config_revision !== undefined && delta.meta.config_revision !== D.meta.config_revision) ||
       (delta.meta?.captain !== undefined && delta.meta.captain !== D.meta.captain))
     throw new IdentityChanged('Replay identity changed');
-  // Metadata-only refreshes do not change history. A newly created task is
+  // Known metadata refreshes do not change history. A newly created task is
   // provably new; unknown older identities still require the bounded-history safeguard.
   const born = new Set(delta.events.filter(e => e.kind === 'created' && e.t > (checkpoint?.t ?? -Infinity)).map(e => e.task));
-  if (checkpoint && delta.events.some(e => e.t <= checkpoint.t ||
+  if (checkpoint && (delta.events.some(e => e.t <= checkpoint.t ||
       (e.task && !D.tasks.some(t => t.id === e.task) && !checkpoint.state.tasks[e.task] && !born.has(e.task)) ||
-      (e.bot && !D.bots.some(b => b.id === e.bot) && !checkpoint.state.heroes[e.bot])))
+      (e.bot && !D.bots.some(b => b.id === e.bot) && !checkpoint.state.heroes[e.bot])) ||
+      delta.tasks.some(t => !D.tasks.some(old => old.id === t.id) && !born.has(t.id)) ||
+      delta.bots.some(b => !D.bots.some(old => old.id === b.id))))
     throw new HistoryExpired('Replay rebase required');
   const playhead = S.t, appliedThrough = D.events[S.i - 1]?.t ?? checkpoint?.t ?? -Infinity;
   const pending = new Set(D.events.slice(S.i).map(eventKey));
