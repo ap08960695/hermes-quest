@@ -17,7 +17,7 @@ import sys
 import threading
 import types
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 @asynccontextmanager
@@ -45,6 +45,7 @@ _sampler = {"lock": threading.Lock(), "key": None, "thread": None, "stop": None,
 _EXTRACT = r'''
 import contextlib, importlib.util, json, os, pathlib, sys, tempfile, time
 path, mode, value = sys.argv[1:4]
+show_profile_names = len(sys.argv) > 4 and sys.argv[4] == "authenticated"
 sys.argv = [path, value if mode == "replay" else "12"]
 with contextlib.redirect_stdout(sys.stderr):
     spec = importlib.util.spec_from_file_location("hermes_quest_extractor", path)
@@ -55,6 +56,8 @@ with contextlib.redirect_stdout(sys.stderr):
                  ("load_config", "build_replay", "collect_since"))
     if modern:
         cfg = module.load_config(os.environ.get("HERMES_QUEST_CONFIG") or None)
+        if isinstance(cfg, dict):
+            cfg['show_profile_names'] = show_profile_names
         payload = (module.build_replay(cfg, float(value)) if mode == "replay"
                    else module.collect_since(cfg, value or None))
     elif mode == "events":
@@ -78,10 +81,11 @@ print(json.dumps(payload, ensure_ascii=False, allow_nan=False))
 '''
 
 
-def _extract(mode: str, value: str) -> dict:
+def _extract(mode: str, value: str, show_profile_names: bool = False) -> dict:
     try:
         result = subprocess.run(
-            [sys.executable, "-c", _EXTRACT, str(ROOT / "tools" / "extract.py"), mode, value],
+            [sys.executable, "-c", _EXTRACT, str(ROOT / "tools" / "extract.py"), mode, value,
+             "authenticated" if show_profile_names else "anonymous"],
             cwd=ROOT, env=os.environ.copy(), capture_output=True, text=True,
             timeout=EXTRACT_TIMEOUT, check=True,
         )
@@ -184,19 +188,54 @@ def _ensure_sampler() -> str:
         return _sampler["state"]
 
 
+def _profile_names_allowed(request: Request | None) -> bool:
+    """Only verified host state or provider-verified credentials disclose names.
+
+    Isolated plugin hosts forward headers/cookies, not parent ASGI state. Reverify
+    those with the host's own providers; never trust a query or presence of a header.
+    Missing Hermes auth support leaves pseudonyms rather than widening disclosure.
+    """
+    if request is None:
+        return False
+    if getattr(request.state, "session", None) is not None:
+        return True
+    if (getattr(request.state, "token_authenticated", False) is True
+            and getattr(request.state, "token_principal", None) is not None):
+        return True
+    try:
+        from hermes_cli.dashboard_auth.cookies import read_session_cookies, read_session_provider
+        from hermes_cli.dashboard_auth.middleware import _extract_bearer, _verify_access_token
+        token = _extract_bearer(request) or read_session_cookies(request)[0]
+        if not token:
+            return False
+        if _verify_access_token(request, access_token=token,
+                                provider_hint=read_session_provider(request), audit=False) is not None:
+            return True
+        # Basic sessions are stateless. The isolated host may not have registered
+        # this bundled provider; use its official verifier/config, without logging
+        # in, refreshing, registering providers, or minting a new signing secret.
+        from plugins.dashboard_auth.basic import BasicAuthProvider, _settings, _load_config_basic_auth_section
+        section = _load_config_basic_auth_section()
+        if not (os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_SECRET") or section.get("secret")):
+            return False
+        return BasicAuthProvider(**_settings()).verify_session(access_token=token) is not None
+    except Exception:  # optional host seam/provider outage: fail closed on names
+        return False
+
+
 @router.get("/replay")
-def replay(hours: float = Query(default=12, gt=0, le=168)):
+def replay(hours: float = Query(default=12, gt=0, le=168), request: Request = None):
     _ensure_sampler()
-    return JSONResponse(_extract("replay", str(hours)), headers={"Cache-Control": "no-store"})
+    return JSONResponse(_extract("replay", str(hours), _profile_names_allowed(request)), headers={"Cache-Control": "no-store"})
 
 
 @router.get("/events")
-def events(since: str = Query(default="", max_length=32768)):
+def events(since: str = Query(default="", max_length=32768), request: Request = None):
     # Query max_length counts characters, not the decoded opaque cursor's bytes.
     if len(since.encode("utf-8")) > 32768:
         raise HTTPException(status_code=422, detail="Cursor exceeds 32 KiB UTF-8")
     _ensure_sampler()
-    return JSONResponse(_extract("events", since), headers={"Cache-Control": "no-store"})
+    return JSONResponse(_extract("events", since, _profile_names_allowed(request)), headers={"Cache-Control": "no-store"})
 
 
 def _static_target(asset_path: str) -> Path:

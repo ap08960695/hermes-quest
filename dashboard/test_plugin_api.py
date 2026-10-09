@@ -102,6 +102,18 @@ class QuestAPItests(unittest.TestCase):
             self.assertIn("quest/c-ui.js", api._desktop_module.SCRIPT_ORDER)
             self.assertEqual(client.get(PREFIX + "/desktop-asset?path=invalid", headers={"Authorization": "Bearer synthetic"}).status_code, 404)
 
+    def test_name_permission_uses_only_verified_server_state(self):
+        from fastapi import Request
+        def request(state=None, headers=()):
+            return Request({'type': 'http', 'method': 'GET', 'path': '/replay',
+                            'query_string': b'show_profile_names=true', 'headers': headers,
+                            'state': state or {}})
+        self.assertFalse(api._profile_names_allowed(None))
+        self.assertFalse(api._profile_names_allowed(request(headers=[(b'x-quest-authenticated', b'true')])))
+        self.assertFalse(api._profile_names_allowed(request({'token_authenticated': True})))
+        self.assertTrue(api._profile_names_allowed(request({'session': object()})))
+        self.assertTrue(api._profile_names_allowed(request({'token_authenticated': True, 'token_principal': object()})))
+
     def test_modern_replay_config_and_hours(self):
         response = self.client.get(PREFIX + "/replay?hours=2.5")
         self.assertEqual(response.status_code, 200)

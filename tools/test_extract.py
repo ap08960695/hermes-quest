@@ -299,6 +299,9 @@ class AbsentSourceTests(unittest.TestCase):
                 with self.subTest(name=name, profiles=profiles):
                     cfg = dict(self.cfg, hermes_home=str(home), profiles=profiles)
                     before = set(self.root.rglob('*'))
+                    clock = patch.object(extract.time, 'time', return_value=time.time())
+                    clock.start()
+                    self.addCleanup(clock.stop)
                     replay = extract.build_replay(cfg, 12)
                     self.assertEqual([replay[k] for k in ('tasks', 'bots', 'events')], [[], [], []])
                     self.assertEqual(replay['meta']['captain'], extract._bot_id(cfg['captain']))
@@ -351,6 +354,10 @@ class ExtractTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.home = Path(self.tmp.name)
         self.now = time.time()
+        # Pin the observation playhead so retry equality also covers additive as_of.
+        clock = patch.object(extract.time, 'time', return_value=self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
         self.k = sqlite3.connect(self.home / 'kanban.db')
         self.addCleanup(self.k.close)
         self.k.executescript('''
@@ -762,7 +769,8 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.assertFalse({e['id'] for e in initial['events']} & {e['id'] for e in delta['events']})
         self.assertEqual(len(delta['events']), len({e['id'] for e in delta['events']}))
         self.assertEqual(extract.collect_since(self.cfg, delta['cursor']),
-                         dict(meta=delta['meta'], events=[], tasks=[], bots=[], cursor=delta['cursor']))
+                         dict(meta=delta['meta'], events=[], tasks=[], bots=[],
+                              sessions=delta['sessions'], cursor=delta['cursor']))
         # Reusing the same cursor gives the same delta (retry-safe).
         self.assertEqual(extract.collect_since(self.cfg, initial['cursor']), delta)
 
@@ -935,6 +943,130 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
             self.assertNotIn(marker, str(observed))
         self.assertTrue(any('json_each' in q for q in queries))
         self.assertFalse(any(re.search(r'SELECT\s+rowid AS seq,\*\s+FROM messages', q) for q in queries))
+
+    def test_truth_fixture_archive_tombstone_preserves_history(self):
+        # truth-fixture.json archived_task: created -> blocked -> archived.
+        self.k.execute('DELETE FROM task_events')
+        for kind, offset in [('created', -30), ('blocked', -20), ('archived', -10)]:
+            self.event(kind, self.now + offset)
+        self.k.execute('UPDATE tasks SET status=?', ('archived',))
+        self.k.commit()
+        replay = extract.build_replay(self.cfg, 12)
+        self.assertEqual([e['kind'] for e in replay['events'] if e.get('task') == self.tid and
+                          e['kind'] in ('created', 'blocked', 'archived')], ['created', 'blocked', 'archived'])
+        self.assertTrue(replay['tasks'][0]['tombstone'])
+        self.assertEqual(replay['tasks'][0]['status'], 'archived')
+        self.assertGreater(replay['meta']['as_of'], self.now - 10)
+        # Missing archive history still provides an as-of-only tombstone, never
+        # a fabricated event that would hide the task at earlier playheads.
+        self.k.execute("DELETE FROM task_events WHERE kind='archived'")
+        self.k.commit()
+        missing = extract.build_replay(self.cfg, 12)
+        self.assertTrue(missing['tasks'][0]['tombstone'])
+        self.assertNotIn('archived', [e['kind'] for e in missing['events']])
+        self.assertIn('created', [e['kind'] for e in missing['events']])
+
+    def test_archive_without_event_delivers_old_task_tombstone_once(self):
+        self.k.execute('UPDATE tasks SET created_at=?,started_at=?', (self.now - 48 * 3600,) * 2)
+        self.k.execute('DELETE FROM task_events')
+        self.k.execute('DELETE FROM task_runs')
+        self.s.execute('DELETE FROM messages')
+        self.s.execute('DELETE FROM sessions')
+        self.s.commit()
+        self.k.commit()
+        first = extract.build_replay(self.cfg, 12)
+        self.k.execute('UPDATE tasks SET status=?', ('archived',))
+        self.k.commit()
+        delta = extract.collect_since(self.cfg, first['cursor'])
+        self.assertEqual([t['id'] for t in delta['tasks']], [self.tid])
+        self.assertTrue(delta['tasks'][0]['tombstone'])
+        self.assertEqual(delta['events'], [])
+        quiet = extract.collect_since(self.cfg, delta['cursor'])
+        self.assertEqual(quiet['tasks'], [])
+        self.assertEqual(extract._decode(quiet['cursor'])['tasks'], {})
+
+    def test_truth_fixture_commenter_and_names_are_not_task_prose(self):
+        self.k.execute('INSERT INTO task_comments(task_id,author,body,created_at) VALUES(?,?,?,?)',
+                       (self.tid, 'human-demo', 'Synthetic comment', self.now))
+        self.k.commit()
+        for enabled in (False, True):
+            cfg = dict(self.cfg, show_profile_names=enabled)
+            replay = extract.build_replay(cfg, 12)
+            profiles = {b['id']: b for b in replay['bots'] if b['entity_type'] == 'profile'}
+            actor = next(b for b in replay['bots'] if b['id'] == extract._bot_id('human-demo'))
+            self.assertNotIn(actor['id'], profiles)
+            self.assertEqual((actor['entity_type'], actor['actor_type']), ('actor', 'commenter'))
+            self.assertIsNone(actor['profile_name'])
+            bot = profiles[extract._bot_id('developer-demo')]
+            self.assertEqual(bot['profile_name'], 'developer-demo' if enabled else None)
+            self.assertEqual(bot['name'], 'developer-demo' if enabled else bot['id'])
+            self.assertNotIn('Synthetic comment', json.dumps(replay))
+            self.assertNotIn('Private project', json.dumps(replay))
+            self.assertEqual(extract.collect_since(cfg, replay['cursor'])['bots'], [])
+
+    def test_truth_fixture_29_children_nested_parent_and_orphan(self):
+        parent = 'worker'
+        for i in range(29):
+            sid = f'synthetic-child-session-{i}'
+            self.s.execute('INSERT INTO sessions VALUES(?,?,?,?,?)',
+                           (sid, 'subagent', parent, self.now, 'Subagent synthetic verification'))
+            self.message('assistant', sid=sid, token_count=1)
+            parent = sid
+        self.s.execute('INSERT INTO sessions VALUES(?,?,?,?,?)',
+                       ('synthetic-orphan-session', 'subagent', 'missing-parent-session', self.now, 'Subagent orphan'))
+        self.s.commit()
+        replay = extract.build_replay(self.cfg, 12)
+        refs = {s['session_ref']: s for s in replay['sessions']}
+        summons = [e for e in replay['events'] if e['kind'] == 'summon']
+        self.assertEqual(len(summons), 29)
+        self.assertEqual(sum(e['parent_session_ref'] in refs for e in summons), 29)
+        for e in summons:
+            self.assertEqual(e['parent_session_ref'], refs[e['session_ref']]['parent_session_ref'])
+        orphan = refs[extract._hash(['developer-demo', 'synthetic-orphan-session'])[:20]]
+        self.assertTrue(orphan['is_subagent'])
+        self.assertIsNone(orphan['parent_session_ref'])
+        self.assertIsNone(orphan['task'])
+        for s in refs.values():
+            self.assertRegex(s['session_ref'], r'^[0-9a-f]{20}$')
+        raw = json.dumps(replay) + json.dumps(extract._decode(replay['cursor']))
+        for marker in ('synthetic-child-session', 'synthetic-orphan-session', 'missing-parent-session'):
+            self.assertNotIn(marker, raw)
+        delta = extract.collect_since(self.cfg, replay['cursor'])
+        self.assertEqual(delta['sessions'], replay['sessions'])
+        self.assertEqual(delta['events'], [])
+
+    def test_truth_availability_observed_snapshot_and_missing_are_unknown(self):
+        path = self.home / 'bot-status.json'
+        observed = self.now - 5
+        path.write_text(json.dumps(dict(updated=observed, bots={
+            'developer-demo': dict(status='unavailable', since=self.now - 1000, reason='Private status reason')})))
+        replay = extract.build_replay(self.cfg, 12)
+        bot = next(b for b in replay['bots'] if b['id'] == extract._bot_id('developer-demo'))
+        self.assertEqual(bot['availability'], dict(status='unavailable', observed_at=observed))
+        self.assertNotIn('Private status reason', json.dumps(replay))
+        path.write_text(json.dumps(dict(updated=self.now, bots={'developer-demo': dict(status='active')})))
+        delta = extract.collect_since(self.cfg, replay['cursor'])
+        self.assertEqual(delta['bots'][0]['availability'], dict(status='active', observed_at=self.now))
+        for content in ('{}', '{"updated":true,"bots":{}}', '{"updated":NaN,"bots":{}}', 'broken'):
+            path.write_text(content)
+            unknown = extract.build_replay(self.cfg, 12)
+            self.assertTrue(all(b['availability'] == dict(status='unknown', observed_at=None) for b in unknown['bots']))
+        path.unlink()
+        self.assertTrue(all(b['availability']['status'] == 'unknown' for b in extract.build_replay(self.cfg, 12)['bots']))
+
+    def test_truth_config_invalid_types_are_named_and_names_are_server_only(self):
+        path = self.home / 'quest.json'
+        for key, value, message in [('classes', {'developer': []}, 'classes.developer'),
+                                    ('regions', {'mage': None}, 'regions.mage'),
+                                    ('stages', {'mage': 'WRONG'}, 'stages.mage'),
+                                    ('stage_regions', {'BUILD': []}, 'stage_regions.BUILD'),
+                                    ('hermes_home', [], 'hermes_home'),
+                                    ('show_profile_names', 'true', 'show_profile_names')]:
+            path.write_text(json.dumps({key: value}))
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, re.escape(message)):
+                extract.load_config(path)
+        path.write_text(json.dumps(dict(hermes_home=str(self.home), show_profile_names=True)))
+        self.assertFalse(extract.load_config(path)['show_profile_names'])
 
     def test_config_precedence_and_custom_mapping(self):
         path = self.home / 'quest.json'

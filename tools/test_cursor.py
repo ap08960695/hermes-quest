@@ -247,6 +247,9 @@ class CursorRoundtripTests(unittest.TestCase):
         db.rename(absent)
         self.addCleanup(lambda: absent.rename(db))
         expired = extract.collect_since(self.cfg, first['cursor'])
+        self.assertEqual([t['status'] for t in expired['tasks']], ['archived'],
+                         'a formerly retained task needs one final snapshot tombstone')
+        expired = extract.collect_since(self.cfg, expired['cursor'])
         self.assertFalse(extract._decode(expired['cursor'])['tasks'])
         self.f.event('heartbeat')
         self.f.k.commit()
@@ -382,7 +385,10 @@ class CursorRoundtripTests(unittest.TestCase):
                                "WHERE session_id LIKE 'PRIVATE-SYNTHETIC-SESSION-%'", (change,))
                 self.s.commit()
                 delta = get('/events', since=cursor)
-                self.assertEqual(get('/events', since=cursor), delta, 'retry must be identical')
+                retry = get('/events', since=cursor)
+                self.assertGreaterEqual(retry['meta']['as_of'], delta['meta']['as_of'])
+                retry['meta']['as_of'] = delta['meta']['as_of']
+                self.assertEqual(retry, delta, 'retry rows/cursor must be identical at either observation time')
                 corrections = [e for e in delta['events'] if e.get('correction')]
                 self.assertEqual(len(corrections), count)
                 self.assertEqual({e['tokens'] for e in corrections}, {change - previous_change})

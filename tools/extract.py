@@ -11,6 +11,7 @@ import datetime
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -21,7 +22,7 @@ import unicodedata
 import zlib
 
 DEFAULTS = {
-    'profiles': 'auto', 'captain': 'auto', 'show_titles': False,
+    'profiles': 'auto', 'captain': 'auto', 'show_titles': False, 'show_profile_names': False,
     'classes': {'developer': 'warrior', 'tester': 'ranger', 'reviewer': 'paladin',
                 'devops': 'engineer', 'operator': 'engineer', 'researcher': 'mage',
                 'analyst': 'sage'},
@@ -57,17 +58,32 @@ def load_config(path=None):
         if not isinstance(custom, dict):
             raise ValueError('config must be a JSON object')
         cfg.update(custom)
+    if not isinstance(cfg['hermes_home'], str) or not cfg['hermes_home'].strip() or '\0' in cfg['hermes_home']:
+        raise ValueError('hermes_home must be a non-empty path string')
     cfg['hermes_home'] = str(Path(cfg['hermes_home']).expanduser().resolve())
     if cfg['profiles'] != 'auto' and not isinstance(cfg['profiles'], list):
         raise ValueError('profiles must be auto or a list of profile IDs')
     if not isinstance(cfg['show_titles'], bool):
         raise ValueError('show_titles must be boolean')
+    if not isinstance(cfg['show_profile_names'], bool):
+        raise ValueError('show_profile_names must be boolean')
+    # Presentation permission is injected by the authenticated API, never a file.
+    cfg['show_profile_names'] = False
     for p in ([] if cfg['profiles'] == 'auto' else cfg['profiles']) + [cfg['captain']]:
         if not isinstance(p, str) or not re.fullmatch(r'[\w-]+', p):
             raise ValueError('invalid profile ID')
     for key in ('classes', 'regions', 'stages', 'stage_regions'):
         if not isinstance(cfg[key], dict):
             raise ValueError(f'{key} must be an object')
+        for name, value in cfg[key].items():
+            if not isinstance(name, str) or not re.fullmatch(r'[\w-]+', name):
+                raise ValueError(f'{key} keys must be game identifiers')
+            if not isinstance(value, str) or not re.fullmatch(r'[\w-]+', value):
+                raise ValueError(f'{key}.{name} must be a game identifier string')
+            if key == 'classes' and value not in {'warrior', 'ranger', 'paladin', 'engineer', 'mage', 'sage', 'commander'}:
+                raise ValueError(f'classes.{name} must be a supported hero class')
+            if key == 'stages' and value not in {'PLAN', 'BUILD', 'TEST', 'REVIEW', 'DEPLOY', 'VERIFY'}:
+                raise ValueError(f'stages.{name} must be a supported pipeline stage')
     history = _history_module()
     if history:
         history.resolve_settings(cfg)  # botstatus_path/history_* are validated with the rest
@@ -258,12 +274,15 @@ def _bot_id(value):
 
 # Source-controlled enumerations: unknown upstream strings never become default text.
 TEXT_ENUMS = {
-    'status': {'triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review', 'done', 'archived'},
     'kind': {'created', 'assigned', 'claimed', 'spawned', 'heartbeat', 'completed', 'failed',
              'blocked', 'unblocked', 'reassigned', 'promoted', 'scheduled', 'linked', 'unlinked',
              'comment', 'run_start', 'run_end', 'summon', 'tool', 'hurt', 'tests', 'mana', 'compress',
              'captain', 'review_requested', 'changes_requested', 'dependency_wait', 'wake', 'moa',
-             'pause', 'resume', 'failover'},
+             'pause', 'resume', 'failover', 'archived'},
+    'entity_type': {'profile', 'actor'},
+    'actor_type': {'profile', 'commenter', 'unknown'},
+    'status': {'triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review', 'done', 'archived',
+               'active', 'limited', 'waiting-start', 'unavailable', 'unknown'},
     'why': {'limited', 'waiting-start', 'unavailable'},   # pause cause / the cause a resume ended
     'basis': {'chars', 'usage'},                          # how an estimated mana figure was derived
     'outcome': {'', 'completed', 'failed', 'interrupted', 'timed_out', 'blocked', 'review', 'success'},
@@ -492,7 +511,7 @@ def _class(prof, cfg, captain):
     return next((c for role, c in cfg['classes'].items() if prof.startswith(role)), 'mage')
 
 
-def _bot(prof, cfg, captain):
+def _bot(prof, cfg, captain, entity_type='profile', availability=None, commenter=False):
     root = Path(cfg['hermes_home']) / 'profiles' / prof
     def text(name):
         try:
@@ -511,11 +530,17 @@ def _bot(prof, cfg, captain):
     cls = _class(prof, cfg, captain)
     wallet = 'agy' if 'gemini' in model.lower() else 'codex' if any(x in model.lower() for x in ('gpt', 'codex', 'sol')) else 'claude'
     # Default labels are generated, never redacted copies of upstream prose.
-    name = _opt_in_text(display.group(1)) if display and cfg['show_titles'] else _bot_id(prof)
+    permitted = entity_type == 'profile' and cfg.get('show_profile_names', False)
+    profile_name = _opt_in_text(prof) if permitted else None
+    display_name = _opt_in_text(display.group(1).strip('"\'')) if permitted and display else None
+    name = (display_name or profile_name) if permitted else _bot_id(prof)
     if not cfg['show_titles']:
         model = ('gemini' if 'gemini' in model.lower() else 'gpt' if wallet == 'codex'
                  else 'claude' if 'claude' in model.lower() else 'unknown')
-    return dict(id=_bot_id(prof), name=name,
+    return dict(id=_bot_id(prof), name=name, entity_type=entity_type,
+                actor_type='profile' if entity_type == 'profile' else 'commenter' if commenter else 'unknown',
+                profile_name=profile_name, display_name=display_name, pet_name=None,
+                availability=availability or dict(status='unknown', observed_at=None),
                 cls=cls, region=cfg['regions'].get(cls, cfg['regions'].get('mage', 'tower')),
                 wallet=wallet, model=model, effort=effort)
 
@@ -531,10 +556,18 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                  mana=dict(previous.get('mana', {})),
                  mana_versions=dict(previous.get('mana_versions', {})))
     marks, events, tasks, task_keys = state['marks'], [], {}, {}
+    session_entities, session_lineage = {}, {}
+    as_of = time.time()
     home = Path(cfg['hermes_home'])
     captain = cfg['captain'] if cfg['captain'] != 'auto' else ''
     def safe(value, key=''):
         if isinstance(value, str):
+            if key in ('session_ref', 'parent_session_ref'):
+                return value if re.fullmatch(r'[0-9a-f]{20}', value) else None
+            if key in ('profile_name', 'display_name', 'pet_name'):
+                return _opt_in_text(value) if cfg.get('show_profile_names', False) else None
+            if key in TEXT_ENUMS:
+                return value if value in TEXT_ENUMS[key] else 'unknown'
             if key in ('id', 'task', 'other', 'parents'):
                 if re.fullmatch(r'(?:t_[0-9a-f]{8}|e_[0-9a-f]{64}|bot-[0-9a-f]{20})', value):
                     return value
@@ -543,8 +576,6 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 return _bot_id(value)
             if cfg['show_titles']:
                 return _opt_in_text(value)
-            if key in TEXT_ENUMS:
-                return value if value in TEXT_ENUMS[key] else 'unknown'
             if key in ('title', 'note', 'name'):
                 return value  # Generated by this module only in default mode.
             if key == 'sub' and re.fullmatch(r'[0-9a-f]{6}', value):
@@ -565,13 +596,14 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         return dict(captain=_bot_id(captain),
                     **{key: {_opt_in_text(k): _opt_in_text(v) for k, v in cfg[key].items()}
                        for key in ('classes', 'regions', 'stage_regions')},
-                    show_titles=cfg['show_titles'], source='live', mock=False,
-                    config_revision=_hash([cfg, captain, 'mana-ledger-v1']))
+                    show_titles=cfg['show_titles'], show_profile_names=cfg.get('show_profile_names', False),
+                    as_of=as_of, source='live', mock=False,
+                    config_revision=_hash([cfg, captain, 'truth-identity-v1']))
     if previous and 'mana' not in previous:
         # Legacy cursors cannot reconstruct yesterday's evolving usage totals.
         # The revision change makes the production client rebase before accepting
         # any events, rather than guessing what it has already charged.
-        return dict(meta=meta(), tasks=[], bots=[], events=[], cursor=_cursor(previous))
+        return dict(meta=meta(), tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous))
     path = home / 'kanban.db'
     try:
         path.stat()
@@ -580,7 +612,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
             raise  # A broken configured source is not an absent database.
         # No board means no live observations. Preserve an existing cursor so a
         # temporarily absent source cannot acknowledge rows or duplicate recovery.
-        return dict(meta=meta(), tasks=[], bots=[], events=[], cursor=_cursor(previous or state))
+        return dict(meta=meta(), tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous or state))
     def emit(source, seq, event):
         event['id'] = 'e_' + _hash([source, seq])
         if t0 is None or event['t'] >= t0:
@@ -597,7 +629,9 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                               (old.get(source, 0), hi) + ((t0,) if t0 is not None else ()))
     k = ro(home / 'kanban.db')
     task_activity, active_tasks = {}, set()
+    commenters = set()
     try:
+        commenters = {r[0] for r in k.execute('SELECT DISTINCT author FROM task_comments') if r[0]}
         captain = cfg['captain']
         if captain == 'auto':
             row = k.execute('SELECT created_by,count(*) AS n FROM tasks WHERE created_by IS NOT NULL '
@@ -617,6 +651,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                                   created=r['created_at'], started=r['started_at'], completed=r['completed_at'],
                                   campaign='quests', moa=r.get('provider_override') == 'moa',
                                   max_rt=r.get('max_runtime_seconds') or 1800, parents=[], stage=stage)
+            # Snapshot-only tombstone: do not synthesize a historical archive time.
+            tasks[r['id']]['tombstone'] = r['status'] == 'archived'
         for table, timestamp in (('task_events', 'created_at'), ('task_comments', 'created_at'),
                                  ('task_runs', 'started_at'), ('task_runs', 'ended_at')):
             for r in k.execute(f'SELECT task_id,max({timestamp}) AS stamp FROM {table} GROUP BY task_id'):
@@ -666,7 +702,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         except FileNotFoundError:
             profiles = []
     else:
-        profiles = sorted(cfg['profiles'])
+        profiles = sorted(p for p in cfg['profiles'] if (home / 'profiles' / p).is_dir())
     sid_map, nonworker_sessions = {}, set()
     for prof in profiles:
         path = home / 'profiles' / prof / 'state.db'
@@ -676,12 +712,20 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         try:
             json1 = _has_json1(s)
             sessions = {r['id']: dict(r) for r in s.execute('SELECT rowid AS seq,* FROM sessions')}
+            def lineage(sid):
+                parent = sessions[sid]['parent_session_id']
+                return dict(session_ref=_hash([prof, sid])[:20],
+                            parent_session_ref=_hash([prof, parent])[:20] if parent in sessions else None)
+            for sid, r in sessions.items():
+                session_lineage[_hash([prof, sid])] = lineage(sid)
             nonworker_sessions.update(_hash([prof, sid]) for sid, r in sessions.items()
                                       if r['source'] != 'kanban' and not r['parent_session_id'])
             message_source = 'messages-' + _hash(prof)[:20]
             session_source = 'sessions-' + _hash(prof)[:20]
             message_hi = s.execute('SELECT coalesce(max(rowid),0) FROM messages').fetchone()[0]
             marks[message_source] = message_hi
+            message_activity = {r[0]: r[1] for r in s.execute(
+                'SELECT session_id,max(timestamp) FROM messages WHERE rowid<=? GROUP BY session_id', (message_hi,))}
             marks[session_source] = max((r['seq'] for r in sessions.values()), default=0)
             mapping, newly_mapped = {}, set()
             for sid, r in sessions.items():
@@ -708,12 +752,32 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     if sessions[sid]['parent_session_id'] in newly_mapped:
                         newly_mapped.add(sid)
                 pending -= found
+            # Send the retained window plus its ancestor closure. No lineage ledger
+            # goes into the cursor; a delta repeats this bounded authoritative list.
+            retained = set()
+            for sid, r in sessions.items():
+                last = message_activity.get(sid)
+                activity = max(r['started_at'] or 0, r.get('ended_at') or 0,
+                               r.get('last_activity_at') or 0, last or 0)
+                if r.get('ended_at') is None or activity >= cutoff:
+                    retained.add(sid)
+            todo = list(retained)
+            while todo:
+                parent = sessions[todo.pop()]['parent_session_id']
+                if parent in sessions and parent not in retained:
+                    retained.add(parent)
+                    todo.append(parent)
+            for sid in sorted(retained):
+                r = sessions[sid]
+                entity = dict(**lineage(sid), bot=prof, task=mapping.get(sid),
+                              started_at=r['started_at'], ended_at=r.get('ended_at'),
+                              is_subagent=bool(r['parent_session_id']))
+                session_entities[entity['session_ref']] = entity
             for sid, tid in mapping.items():
                 sid_map[(prof, sid)] = tid
                 r = sessions[sid]
                 source = 'session-' + _hash([prof, sid])[:20]
-                last_stamp = s.execute('SELECT coalesce(max(timestamp),?) FROM messages WHERE session_id=? AND rowid<=?',
-                                       (r['started_at'], sid, message_hi)).fetchone()[0]
+                last_stamp = message_activity.get(sid) or r['started_at']
                 activity = max(r['started_at'] or 0, r.get('ended_at') or 0,
                                r.get('last_activity_at') or 0, last_stamp or 0)
                 task_activity[tid] = max(task_activity.get(tid, 0), activity)
@@ -721,7 +785,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 if r['parent_session_id'] and (r.get('title') or '').startswith('Subagent'):
                     if r['seq'] > old.get(session_source, 0) or sid in newly_mapped:
                         emit(source, 'summon', dict(t=r['started_at'], task=tid, kind='summon', bot=prof,
-                             sub=_hash(sid)[:6], note=note(tid, 'summon', r['title'][9:])))
+                             **lineage(sid), sub=_hash(sid)[:6], note=note(tid, 'summon', r['title'][9:])))
                 lower = 0 if sid in newly_mapped else old.get(message_source, 0)
                 messages = s.execute(f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages WHERE session_id=? AND rowid>? AND rowid<=?' +
                                      (' AND timestamp>=?' if t0 is not None else '') + ' ORDER BY rowid',
@@ -735,7 +799,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 accounted = ledger if ledger is not None else 0
                 charged = 0
                 for m in messages:
-                    base = dict(t=m['timestamp'], task=tid, bot=prof)
+                    base = dict(t=m['timestamp'], task=tid, bot=prof, **lineage(sid))
                     sub = _hash(sid)[:6] if r['parent_session_id'] else None
                     for i, call in enumerate(_json(m['tool_calls'], [])):
                         fn = call.get('function') or {}
@@ -792,7 +856,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                         state['mana_versions'][source] = version
                         emit(source, f'usage:{version}:{message_hi}:{accounted}:{usage}:{activity}',
                              dict(t=last_stamp,
-                                  task=tid, bot=prof, kind='mana', tokens=delta,
+                                  task=tid, bot=prof, **lineage(sid), kind='mana', tokens=delta,
                                   estimated=True, basis='usage', correction=True))
                     accounted = usage
                 else:
@@ -845,7 +909,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                             # Keep only row/call coordinates, never raw arguments/results.
                             state['captain_pending'].setdefault(str(m['seq']), []).append(i)
                         if tid in tasks:
-                            e = dict(t=m['timestamp'], task=tid, kind='captain', act=act)
+                            e = dict(t=m['timestamp'], task=tid, kind='captain', act=act,
+                                     **lineage(m['session_id']))
                             if args.get('assignee'):
                                 e['bot'] = args['assignee']
                             if act == 'link' and args.get('parent_id'):
@@ -864,7 +929,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         if target:
             tid, prof = target
             emit(event['source'], event['seq'], dict(t=event['t'], task=tid, kind='compress',
-                 bot=prof, before=event['before'], after=event['after']))
+                 bot=prof, **session_lineage[event['session']], before=event['before'], after=event['after']))
         elif t0 is None or event['t'] >= t0:
             # A complete line is consumed, but not acknowledged as delivered until
             # its session/task is visible across the independent source snapshots.
@@ -912,7 +977,22 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     bot_ids = set(profiles) | {t['bot'] for t in tasks.values() if t['bot']} | ({captain} if captain else set())
     bot_ids |= {e[key] for e in events for key in ('bot', 'author') if e.get(key)}
     bot_ids |= {e['other'] for e in events if e['kind'] == 'failover'}
-    bots = [_bot(p, cfg, captain) for p in sorted(bot_ids) if re.fullmatch(r'[\w-]+', p)]
+    availability = {}
+    if history:
+        try:
+            data = json.loads(history._read_regular(settings['botstatus_path'], history.MAX_STATUS_BYTES)[0])
+            observed = data.get('updated')
+            if (not isinstance(observed, bool) and isinstance(observed, (int, float))
+                    and math.isfinite(observed) and 0 < observed <= as_of):
+                for p, entry in data.get('bots', {}).items():
+                    if isinstance(entry, dict) and entry.get('status') in history.STATUSES:
+                        availability[p] = dict(status=entry['status'], observed_at=observed)
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass  # Absent/malformed observation is unknown, never active.
+
+    bots = [_bot(p, cfg, captain, 'profile' if p in profiles else 'actor',
+                 availability.get(p) if p in profiles else None, p in commenters)
+            for p in sorted(bot_ids) if re.fullmatch(r'[\w-]+', p)]
     tasks = [safe(t) for t in tasks.values()]
     bots = safe(bots)
     # Event high-water marks, not task fingerprints, deduplicate events. Keep a
@@ -920,7 +1000,9 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     # by this response, so a returning task's snapshot accompanies its new event.
     referenced = {e['task'] for e in events if e.get('task')} | {e['other'] for e in events if e.get('other') and e.get('task')}
     retained_tasks = {t['id'] for t in tasks if t['id'] in active_tasks or
-                      task_activity.get(t['id'], 0) >= cutoff or t['id'] in referenced}
+                      task_activity.get(t['id'], 0) >= cutoff or t['id'] in referenced or
+                      (t['tombstone'] and task_keys[t['id']] in previous.get('tasks', {}) and
+                       previous['tasks'][task_keys[t['id']]] != _hash(t)[:16])}
     state['tasks'] = {task_keys[t['id']]: _hash(t)[:16] for t in tasks if t['id'] in retained_tasks}
     state['bots'] = {b['id']: _hash(b)[:16] for b in bots}
     changed_tasks = [t for t in tasks if t['id'] in retained_tasks and
@@ -938,7 +1020,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     state['delivered'] = sorted((delivered | {task_keys[t['id']] for t in changed_tasks}) & set(state['tasks']))
     events = safe(events)
     events.sort(key=lambda e: (e['t'], e['id']))
-    return dict(meta=meta(), tasks=changed_tasks, bots=changed_bots, events=events, cursor=_cursor(state))
+    return dict(meta=meta(), tasks=changed_tasks, bots=changed_bots,
+                sessions=safe(list(session_entities.values())), events=events, cursor=_cursor(state))
 
 
 def build_replay(cfg, hours=12):

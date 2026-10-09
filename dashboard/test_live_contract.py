@@ -76,6 +76,48 @@ class LiveContractTests(unittest.TestCase):
         self.assertEqual(r.headers['cache-control'], 'no-store')
         return r.json()
 
+    def test_authenticated_profile_names_actual_extractor_still_hides_tasks(self):
+        from fastapi import Request
+        from fastapi.responses import JSONResponse
+        f = self.fixture()
+        (f.home / 'profiles/developer-demo/profile.yaml').write_text('display_name: Demo Builder\n')
+        cfgpath = f.home / 'config.json'
+        cfgpath.write_text(json.dumps(dict(f.cfg, show_titles=False, show_profile_names=True)))
+        self.enterContext(patch.dict(os.environ, {'HERMES_QUEST_CONFIG': str(cfgpath),
+                                                 'HERMES_QUEST_SAMPLER': 'off'}))
+        app = FastAPI()
+        @app.middleware('http')
+        async def host_auth(request: Request, call_next):
+            if request.headers.get('Authorization') != 'Bearer synthetic':
+                return JSONResponse({'detail': 'Unauthorized'}, status_code=401)
+            request.state.session = object()  # host-verified state, not a user query
+            return await call_next(request)
+        app.include_router(api.router, prefix=PREFIX)
+        client = self.enterContext(TestClient(app))
+        self.assertEqual(client.get(PREFIX + '/replay?show_profile_names=true').status_code, 401)
+        headers = {'Authorization': 'Bearer synthetic'}
+        replay = client.get(PREFIX + '/replay?show_profile_names=false', headers=headers).json()
+        bot = next(b for b in replay['bots'] if b['id'] == extract._bot_id('developer-demo'))
+        self.assertEqual((bot['name'], bot['profile_name'], bot['display_name']),
+                         ('Demo Builder', 'developer-demo', 'Demo Builder'))
+        self.assertTrue(replay['meta']['show_profile_names'])
+        self.assertFalse(replay['meta']['show_titles'])
+        self.assertNotIn('Private project', json.dumps(replay))
+        delta = client.get(PREFIX + '/events', params={'since': replay['cursor']}, headers=headers).json()
+        self.assertEqual(delta['events'], [])
+        self.assertEqual(delta['meta']['config_revision'], replay['meta']['config_revision'])
+        # An ungated synthetic mount/default config cannot self-authorize names.
+        anonymous_app = FastAPI()
+        anonymous_app.include_router(api.router, prefix=PREFIX)
+        with TestClient(anonymous_app) as anonymous:
+            hidden = anonymous.get(PREFIX + '/replay?show_profile_names=true',
+                                   headers={'X-Quest-Authenticated': 'true'}).json()
+            self.assertFalse(hidden['meta']['show_profile_names'])
+            self.assertTrue(all(b['name'] == b['id'] and b['profile_name'] is None for b in hidden['bots']))
+            downgraded = anonymous.get(PREFIX + '/events', params={'since': replay['cursor']}).json()
+            self.assertNotEqual(downgraded['meta']['config_revision'], replay['meta']['config_revision'])
+            self.assertNotIn('Demo Builder', json.dumps(downgraded))
+
     def test_seeded_unicode_privacy_actual_replay_and_events(self):
         corpus = privacy_cases()
         self.assertGreaterEqual(len(corpus), 500)
