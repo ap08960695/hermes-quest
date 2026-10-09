@@ -16,7 +16,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 const MTYPE = {PLAN: 'ghost', BUILD: 'golem', TEST: 'slime', REVIEW: 'bat', DEPLOY: 'skeleton', VERIFY: 'goblin'};
 const LAIR_OF = {goblin: 'lair_cave', golem: 'lair_cave', slime: 'lair_swamp', ghost: 'lair_ruins', bat: 'lair_ruins', skeleton: 'lair_ruins'};
 function mtype(t) { const k = MTYPE[t.stage] || 'goblin'; return k === 'golem' && (t.max_rt || 1800) <= 1200 ? 'goblin' : k; }
-function mtier(t) { const r = t.max_rt || 1800; return t.chained ? 'l' : r <= 1200 ? 's' : r <= 2400 ? 'm' : 'l'; }
+function mtier(t) { const r = t.max_rt || 1800; return t.chained ? 'l' : r <= 1200 ? 's' : r <= 2400 ? 'm' : 'l'; }   // difficulty = time budget
 // Model = element, colour and attack speed; effort = charge time, hit power and crit chance (from each bot's
 // config.yaml: model.default + agent.reasoning_effort, or the effort suffix in the model id).
 const MODEL_STYLE = [
