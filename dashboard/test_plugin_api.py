@@ -62,7 +62,7 @@ class QuestAPItests(unittest.TestCase):
         self.env_patch = patch.dict(os.environ, {"HERMES_QUEST_CONFIG": "synthetic-config.json"})
         self.env_patch.start()
         self.put("tools/extract.py", MODERN)
-        for path in ["index.html", "game.js", "npcs.js", "data/world.json", "assets/px/heroes/warrior.png",
+        for path in ["index.html", "game.js", "npcs.js", "quest/c-ui.js", "data/world.json", "assets/px/heroes/warrior.png",
                      "assets/px/heroes.json", "assets/sprites/monsters.json"]:
             self.put(path, "{}")
         self.put("data/replay.json", "PRIVATE REPLAY SENTINEL")
@@ -172,7 +172,7 @@ class QuestAPItests(unittest.TestCase):
             extract.assert_not_called()
 
     def test_allowed_static_paths(self):
-        for path in ["index.html", "game.js", "npcs.js", "data/world.json", "assets/px/heroes/warrior.png",
+        for path in ["index.html", "game.js", "npcs.js", "quest/c-ui.js", "data/world.json", "assets/px/heroes/warrior.png",
                      "assets/px/heroes.json", "assets/sprites/monsters.json"]:
             with self.subTest(path=path):
                 response = self.client.get(PREFIX + "/static/" + path)
@@ -182,6 +182,27 @@ class QuestAPItests(unittest.TestCase):
         npc = self.client.get(PREFIX + "/static/npcs.js")
         self.assertIn("application/javascript", npc.headers["content-type"])
         self.assertEqual(npc.headers["cache-control"], "no-store")
+
+    def test_c_ui_exact_allowlist_and_script_headers(self):
+        response = self.client.get(PREFIX + "/static/quest/c-ui.js")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, (self.root / "quest/c-ui.js").read_text())
+        self.assertIn("application/javascript", response.headers["content-type"])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertEqual(response.headers["x-content-type-options"], "nosniff")
+        # Existing files must still be denied: the directory is not public.
+        for path in ["quest/private.js", "quest/c-ui.json", "quest/C-UI.js", "quest/sub/c-ui.js"]:
+            self.put(path, "PRIVATE QUEST SENTINEL")
+            self.assertEqual(self.client.get(PREFIX + "/static/" + path).status_code, 404)
+        for path in ["quest//c-ui.js", "quest/./c-ui.js", "quest/../game.js", "quest\\c-ui.js"]:
+            with self.assertRaises(api.HTTPException) as caught:
+                api._static_target(path)
+            self.assertEqual(caught.exception.status_code, 404)
+
+    def test_c_ui_symlink_denied(self):
+        (self.root / "quest/c-ui.js").unlink()
+        (self.root / "quest/c-ui.js").symlink_to(self.root / "data/replay.json")
+        self.assertEqual(self.client.get(PREFIX + "/static/quest/c-ui.js").status_code, 404)
 
     def test_private_static_paths_and_traversal_denied(self):
         paths = ["data/replay.json", "data/demo.json", "assets/raw/private.png", "tools/extract.py",

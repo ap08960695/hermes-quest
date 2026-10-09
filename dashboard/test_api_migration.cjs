@@ -56,7 +56,8 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
     safeExpected.D = safeData; safeExpected.checkpoint = null; safeExpected.privacyPending = true;
     // Exact safe rollback snapshot: only revoked prose and the old scene change.
     Object.assign(safeExpected.S, {i:0, heroes:{}, tasks:{}, fx:[], feed:[], vault:0,
-      trauma:0, stop:0, lastFeed:{}, soc:{}, later:[], rt:0, mana:{claude:92,codex:96,agy:100}});
+      trauma:0, stop:0, lastFeed:{}, soc:{}, later:[], rt:0, mana:{claude:100,codex:100,agy:100},
+      tokenNetByBot:{},tokenNetByWallet:Object.fromEntries(['claude','codex','agy'].map(w=>[w,{net:0,hasCharsEstimate:false,hasUsageCorrection:false}])),diagnostics:{}});
     assert.deepStrictEqual(failed, safeExpected, step.case + ' exact fail-closed rollback snapshot');
     assert.deepStrictEqual(failed.D, safeData, step.case + ' preserves all non-prose replay fields');
     assert.strictEqual(failed.cursor, prior.cursor, step.case + ' cursor rollback');

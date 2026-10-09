@@ -36,13 +36,13 @@ module.exports = function loadUI(box, el) {
   box.URL = URL;
   box.innerWidth ??= 1440; box.innerHeight ??= 900;
   box.getComputedStyle = () => ({display: 'block'});
-  for (const file of ['font.js', 'ui-glyphs.js', 'ui-panels.js']) {
+  for (const file of ['font.js', 'ui-glyphs.js', 'ui-panels.js', 'quest/c-ui.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), box, {filename: file});
   }
   // Match initially closed drawers, so these timeline tests don't invoke font rasterization.
   for (const id of ['#camp', '#chron', '#quest']) box.document.querySelector(id).hidden = true;
   return state => el('#connection').getAttribute('aria-label') === ({
-    file: 'ไฟล์ย้อนหลัง normal', online: 'เชื่อมต่อแล้ว · 10s normal',
-    offline: 'ขาดการเชื่อมต่อ · ลองใหม่ใน 10s alert'
+    file: 'Replay file normal', online: 'Connected · 10s normal',
+    offline: 'Offline · retrying in 10s alert'
   })[state];
 };

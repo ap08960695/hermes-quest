@@ -7,6 +7,7 @@ const sandbox={console,URLSearchParams,Date,Math,Set,Map,Number,Object,JSON,Prom
   document:{querySelector:el,querySelectorAll:()=>[],body:el('body')},window:{devicePixelRatio:1},
   innerWidth:1440,innerHeight:900,requestAnimationFrame:noop,addEventListener:noop,setTimeout:noop,clearTimeout:noop,performance:{now:()=>0}};
 vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../quest/c-ui.js'),'utf8'),sandbox);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../game.js'),'utf8').replace(/\nboot\(\);\s*$/,'\n'),sandbox);
 const run=code=>vm.runInContext(code,sandbox);
 sandbox.world=JSON.parse(fs.readFileSync(path.join(__dirname,'../data/world.json')));

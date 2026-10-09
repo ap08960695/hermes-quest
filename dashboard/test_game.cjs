@@ -52,11 +52,11 @@ run(`loadReplay({meta:{from_:0,to:7000,show_titles:true},bots:[{id:'worker',name
 assert.strictEqual(run('D.events.length'),2000); assert.strictEqual(run('eventKeys.size'),2000);
 assert.strictEqual(run('S.tasks.long.state'),'blocked'); assert.strictEqual(run('S.tasks.long.chained'),true);
 assert.strictEqual(run('S.tasks.long.bot'),'worker'); assert.strictEqual(run('S.tasks.long.runStart'),3);
-assert.strictEqual(run('S.heroes.worker.sleep'),true); assert.strictEqual(run('S.mana.codex'),0);
+assert.strictEqual(run('S.heroes.worker.sleep'),true); assert.strictEqual(run('S.mana.codex'),100);
 run(`mergeDelta({events:[],tasks:[{id:'long',title:'Updated metadata',status:'done'}],bots:[{id:'worker',name:'Updated bot',model:'sol',effort:'high'}],cursor:'metadata-after-checkpoint'}); reset(D.meta.from_);`);
 assert.strictEqual(run('S.tasks.long.title'),'Updated metadata');assert.strictEqual(run('S.tasks.long.state'),'blocked');
 assert.strictEqual(run('S.heroes.worker.name'),'Updated bot');assert.strictEqual(run('S.heroes.worker.model'),'sol');
-assert.strictEqual(run('S.heroes.worker.sleep'),true);assert.strictEqual(run('S.mana.codex'),0);
+assert.strictEqual(run('S.heroes.worker.sleep'),true);assert.strictEqual(run('S.mana.codex'),100);
 const floor=run('D.meta.from_');
 run('reset(0)'); assert.strictEqual(run('S.t'),floor); assert.strictEqual(run('S.tasks.long.note'),'beat3999');
 run(`reset(5010); mergeDelta({events:[{id:'f4000',t:4010,kind:'heartbeat',task:'long'},

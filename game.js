@@ -9,8 +9,9 @@ const $ = s => document.querySelector(s);
 const cv = $('#stage'), cx = cv.getContext('2d');
 const DPR = Math.min(2, window.devicePixelRatio || 1);
 const UI = window.UIPanels;
+const CUI = window.QuestCUI.create();
 const STAGES = ['PLAN', 'BUILD', 'TEST', 'REVIEW', 'DEPLOY', 'VERIFY'];
-const STAGE_TH = {PLAN: 'วางแผน', BUILD: 'สร้าง', TEST: 'ทดสอบ', REVIEW: 'รีวิว', DEPLOY: 'deploy', VERIFY: 'ตรวจ'};
+const STAGE_TH = {PLAN: 'Plan', BUILD: 'Build', TEST: 'Test', REVIEW: 'Review', DEPLOY: 'Deploy', VERIFY: 'Verify'};
 const MON = {PLAN: 'ghost', BUILD: 'golem', TEST: 'slime', REVIEW: 'bat', DEPLOY: 'skeleton', VERIFY: 'mimic'};
 const CLS_HUE = {warrior: 0, ranger: 95, paladin: 45, engineer: 25, mage: 220, sage: 140, commander: 250};
 const WALLET = {claude: ['CLAUDE', '#4aa3ff'], codex: ['CODEX', '#58c27a'], agy: ['GEMINI', '#b07cff']};
@@ -23,7 +24,7 @@ let calm = false;
 const img = src => new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = src; });
 const ease = t => t < .5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
 const lerp = (a, b, t) => a + (b - a) * t;
-const fmt = t => new Date(t * 1000).toLocaleTimeString('th-TH', {hour: '2-digit', minute: '2-digit'});
+const fmt = t => new Date(t * 1000).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
 
 let MON2 = {}, MMETA2 = {}, SPRV = {};
 let D, W, BG, SPR = {}, MONS = null, MONMETA = null, BLD = {}, MIMG = {}, HMETA = {fw: 128, fh: 96, ax: 48, base: 91, walk: [0, 1, 2, 3], atk: [4, 5, 6, 7], idle: []};
@@ -76,6 +77,10 @@ function eventKey(e) {
     Object.fromEntries(Object.keys(v).sort().map(k => [k, canonical(v[k])]))) : v;
   return e.id !== undefined ? String(e.id) : JSON.stringify(canonical(e));
 }
+function eventOrder(a, b) {
+  const x = String(a.id ?? ''), y = String(b.id ?? '');
+  return a.t - b.t || (x < y ? -1 : x > y ? 1 : 0);
+}
 function connection(text, state) { if (UI) UI.status(text, state); }
 async function json(url) {
   // One deadline covers both headers and body, allowing backend extraction 30s.
@@ -95,7 +100,7 @@ async function json(url) {
 }
 function emptyState() {
   return {i: 0, heroes: {}, tasks: {}, fx: [], feed: [], vault: 0, trauma: 0, stop: 0,
-    lastFeed: {}, soc: {}, later: [], rt: 0, mana: {claude: 92, codex: 96, agy: 100}};
+    lastFeed: {}, soc: {}, later: [], rt: 0, mana: {claude: 100, codex: 100, agy: 100}, ...CUI.empty()};
 }
 function restoreCheckpoint() {
   Object.assign(S, emptyState(), checkpoint ? cloneState(checkpoint.state) : {});
@@ -111,14 +116,15 @@ function retainHistory() {
       syncMetadata(false);
       for (const e of D.events.slice(0, cut)) { S.t = e.t; apply(e, false); }
       checkpoint = {t: D.events[cut - 1].t, state: cloneState({
-        heroes: S.heroes, tasks: S.tasks, vault: S.vault, mana: S.mana})};
+        heroes: S.heroes, tasks: S.tasks, vault: S.vault, mana: S.mana,
+        tokenNetByBot: S.tokenNetByBot, tokenNetByWallet: S.tokenNetByWallet, diagnostics: S.diagnostics})};
     } finally { Object.assign(S, current); }
     D.events.splice(0, cut); D.meta.from_ = checkpoint.t;
   }
   const tasks = new Set(D.tasks.slice(-METADATA_LIMIT).map(t => t.id));
   const bots = new Set(D.bots.slice(-METADATA_LIMIT).map(b => b.id));
   bots.add(captainId());
-  for (const e of D.events) { if (e.task) tasks.add(e.task); if (e.bot) bots.add(e.bot); }
+  for (const e of D.events) { if (e.task) tasks.add(e.task); if (e.bot) bots.add(e.bot); if (e.kind === 'failover' && e.other) bots.add(e.other); }
   for (const t of D.tasks) if (tasks.has(t.id) && t.bot) bots.add(t.bot);
   for (const t of Object.values(checkpoint?.state.tasks || {})) if (tasks.has(t.id) && t.bot) bots.add(t.bot);
 
@@ -127,8 +133,12 @@ function retainHistory() {
   const prune = state => {
     for (const id of Object.keys(state.tasks)) if (!tasks.has(id)) delete state.tasks[id];
     for (const id of Object.keys(state.heroes)) if (!bots.has(id)) delete state.heroes[id];
+    for (const id of Object.keys(state.tokenNetByBot)) if (!bots.has(id)) delete state.tokenNetByBot[id];
     for (const t of Object.values(state.tasks)) t.parents = [...new Set(t.parents || [])].filter(p => tasks.has(p));
-    for (const h of Object.values(state.heroes)) if (h.task && !tasks.has(h.task)) { h.task = null; h.q = []; }
+    for (const h of Object.values(state.heroes)) {
+      if (h.task && !tasks.has(h.task)) { h.task = null; h.q = []; }
+      if (h.rest?.savedTask && !tasks.has(h.rest.savedTask)) h.rest.savedTask = null;
+    }
   };
   prune(S); if (checkpoint) prune(checkpoint.state);
   FRIENDS = null;
@@ -146,7 +156,7 @@ function loadReplay(replay, live = null, at = null) {
     D = replay; checkpoint = null; eventKeys.clear();
     for (const field of ['tasks', 'bots']) D[field] = [...new Map(D[field].map(v => [v.id, v])).values()];
     normalizeData();
-    D.events.sort((a, b) => a.t - b.t);
+    D.events.sort(eventOrder);
     D.events = D.events.filter(e => { const key = eventKey(e); const duplicate = eventKeys.has(key); eventKeys.add(key); return !duplicate; });
     const preserve = live && previous.D?.meta.show_titles === D.meta.show_titles;
     Object.assign(S, emptyState(), preserve ? cloneState({feed: previous.state.feed, lastFeed: previous.state.lastFeed, fx: previous.state.fx}) : {});
@@ -193,7 +203,8 @@ function mergeDelta(delta) {
   const born = new Set(delta.events.filter(e => e.kind === 'created' && e.t > (checkpoint?.t ?? -Infinity)).map(e => e.task));
   if (checkpoint && (delta.events.some(e => e.t <= checkpoint.t ||
       (e.task && !D.tasks.some(t => t.id === e.task) && !checkpoint.state.tasks[e.task] && !born.has(e.task)) ||
-      (e.bot && !D.bots.some(b => b.id === e.bot) && !checkpoint.state.heroes[e.bot])) ||
+      (e.bot && !D.bots.some(b => b.id === e.bot) && !checkpoint.state.heroes[e.bot]) ||
+      (e.kind === 'failover' && e.other && !D.bots.some(b => b.id === e.other) && !checkpoint.state.heroes[e.other])) ||
       delta.tasks.some(t => !D.tasks.some(old => old.id === t.id) && !born.has(t.id)) ||
       delta.bots.some(b => !D.bots.some(old => old.id === b.id))))
     throw new HistoryExpired('Replay rebase required');
@@ -213,7 +224,7 @@ function mergeDelta(delta) {
     if (eventKeys.has(key)) continue;
     eventKeys.add(key); pending.add(key); D.events.push(e); late ||= e.t <= appliedThrough;
   }
-  D.events.sort((a, b) => a.t - b.t);
+  D.events.sort(eventOrder);
   const animate = liveFeed && following && S.play;
   if (late) reset(playhead, animate ? pending : null);
   // Preserve the current scene during normal compaction. Apply due live actions
@@ -262,8 +273,8 @@ async function pollEvents() {
       else if (animate) loadReplay(replay, {t: playhead, keys: pending});
       else { loadReplay(replay); reset(playhead); }
     }
-    connection(delta.state === 'legacy-fallback' ? 'SNAPSHOT · รอ M3' : 'เชื่อมต่อแล้ว · 10s', delta.state === 'legacy-fallback' ? 'snapshot' : 'online');
-  } catch (e) { connection('ขาดการเชื่อมต่อ · ลองใหม่ใน 10s', 'offline'); }
+    connection(delta.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', delta.state === 'legacy-fallback' ? 'snapshot' : 'online');
+  } catch (e) { connection('Offline · retrying in 10s', 'offline'); }
   finally {
     // Serial requests: no overlap or advancing the cursor on a failed response.
     pollBusy = false; pollTimer = document.hidden ? null : setTimeout(pollEvents, 10000);
@@ -272,7 +283,7 @@ async function pollEvents() {
 function goLive() {
   following = true; S.play = true; S.speed = 1;
   document.querySelectorAll('[data-s]').forEach(b => b.classList.toggle('on', false));
-  reset(Date.now() / 1000); if (UI) UI.control('#play','pause','หยุด');
+  reset(Date.now() / 1000); if (UI) UI.control('#play','pause','Pause');
 }
 async function boot() {
   try {
@@ -295,15 +306,15 @@ async function boot() {
   for (const p of W.props || []) if (!BLD[p.img]) BLD[p.img] = await img(`assets/px/${p.src || 'buildings'}/${p.img}.png`);
   if (window.NPCS) await NPCS.load(W, D, img);                      // M4 villagers (npcs.js)
   MONMETA = await fetch('assets/sprites/monsters.json').then(r => r.ok ? r.json() : null).catch(() => null);
-  if (UI) UI.control('#mode',D.meta.source === 'demo' || !liveFeed ? 'demo' : 'connected','แหล่งข้อมูล');
+  if (UI) UI.control('#mode',D.meta.source === 'demo' || !liveFeed ? 'demo' : 'connected','Data source');
   ui();
   if (liveFeed) {
     goLive();
-    connection(D.state === 'legacy-fallback' ? 'SNAPSHOT · รอ M3' : 'เชื่อมต่อแล้ว · 10s', D.state === 'legacy-fallback' ? 'snapshot' : 'online');
+    connection(D.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', D.state === 'legacy-fallback' ? 'snapshot' : 'online');
     if (!document.hidden) pollTimer = setTimeout(pollEvents, 10000);
-  } else { reset(D.meta.from_); connection('ไฟล์ย้อนหลัง', 'file'); }
+  } else { reset(D.meta.from_); connection('Replay file', 'file'); }
   if (!document.hidden) raf = requestAnimationFrame(loop);
-  } catch (e) { connection('โหลดข้อมูลไม่ได้ · ลองโหลดหน้าใหม่', 'offline'); }
+  } catch (e) { connection('Unable to load data · reload to retry', 'offline'); }
 }
 
 // ---------- world geometry ----------
@@ -345,13 +356,14 @@ function regionOf(bot, stage) { const b = D.bots.find(b => b.id === bot); return
 // ---------- state ----------
 function hero(bot) {
   if (!S.heroes[bot]) {
-    const b = D.bots.find(x => x.id === bot) || {id: bot, name: bot, cls: 'mage', region: defaultRegion(), wallet: 'claude'};
+    const b = D.bots.find(x => x.id === bot) || {id: bot, name: bot, cls: 'mage', region: defaultRegion(), wallet: ''};
     const home = b.region, k = Object.values(S.heroes).filter(h => h.home === home).length;
     const [x, y] = slotPos(home, k, 'home');
     S.heroes[bot] = {bot, name: b.name, cls: b.cls, wallet: b.wallet, home, homeK: k, x, y, region: home, path: [],
       st: mstyle(b.model), eff: EFF[b.effort] || EFF.medium, model: b.model || '', effort: b.effort || 'medium', charge: 0,
       v: 0, dist: 0, face: 1, task: null, q: [], atk: -1, hurt: 0, sleep: false, down: 0, bubble: null, combo: 0, fam: [],
-      idle: 3 + Math.random() * 10, act: null, cheer: 0, talk: 0};
+      idle: 3 + Math.random() * 10, act: null, cheer: 0, talk: 0,
+      rest: {state: 'active-unobserved', why: '', savedTask: null, target: null, generation: 0, slot: null, phase: 'idle'}};
   }
   return S.heroes[bot];
 }
@@ -387,11 +399,17 @@ function inPlaza(region, [x, y]) {                // clamp a final standing spot
   return r <= 1 ? [x, y] : [cx_ + dx / r * PLAZA_RX * .97, cy_ + dy / r * PLAZA_RY * .97];
 }
 function walkTo(h, region, spot) {
-  const p = route([h.x, h.y], region).map(q => q.slice());
+  // The camp's portal sits inside its plaza, closer to an unrelated road.
+  // Leave via the camp graph node before joining the road; nearest-segment
+  // routing directly from the portal would cut across the edge of the plaza.
+  const rest = W.regions[h.rest?.target], center = rest?.spot;
+  const inside = center && Math.hypot((h.x-center[0])/PLAZA_RX,(h.y-center[1])/PLAZA_RY) <= 1;
+  const exit = inside && W.graph.pts[rest.node || h.rest.target];
+  const p = [...(exit ? [exit] : []), ...route(exit || [h.x, h.y], region)].map(q => q.slice());
   if (spot) p.push(inPlaza(region, spot));
   h.path = [[h.x, h.y], ...p]; h.region = region;
 }
-function goHome(h) { walkTo(h, h.home, slotPos(h.home, h.homeK, 'home')); h.task = null; }
+function goHome(h) { if (restLocked(h)) return; walkTo(h, h.home, slotPos(h.home, h.homeK, 'home')); h.task = null; }
 // Model = element, colour and attack speed; effort = charge time, hit power and crit chance (from each bot's
 // config.yaml: model.default + agent.reasoning_effort, or the effort suffix in the model id).
 const MODEL_STYLE = [
@@ -411,6 +429,7 @@ const EL_PARTICLE = {fire: ['#ff8a3a', -1], frost: ['#e6f0ff', 1], storm: ['#ffe
 // attack range per class (px between hero and monster): melee classes close in, casters/archers keep distance
 const RANGE = {warrior: 46, paladin: 52, engineer: 96, sage: 132, mage: 150, ranger: 176, commander: 64};
 function engage(h, t) {
+  if (restLocked(h)) return;
   if (!t.region) spawnMonster(t, regionOf(h.bot, t.stage));
   h.task = t.id; walkTo(h, t.region, [t.x - (RANGE[h.cls] || 72), t.y + 2]);
 }
@@ -432,7 +451,9 @@ function reset(t, liveKeys = null) {
   }
   for (const h of Object.values(S.heroes)) {         // snap: no walking during a scrub
     if (activeBots.has(h.bot)) continue;
+    if (h.rest.phase === 'portal') finishPortal(h);
     if (h.path.length) { [h.x, h.y] = h.path[h.path.length - 1]; h.path = []; }
+    finishRestMotion(h);
   }
   for (const k of Object.values(S.tasks)) if (k.alpha > 0 && !activeTasks.has(k.id)) { k.alpha = 1; k.mx = undefined; k.mpath = null; k.emerge = 0; }   // scrub: everyone already in place
   // scrub lands mid-day: about half the idle heroes are already out socialising (snapped, no walk)
@@ -445,21 +466,23 @@ function reset(t, liveKeys = null) {
 
 // ---------- events -> game actions (the action table; extend here) ----------
 const ACTIONS = {
-  created(e, fx, t) { t.state = 'quest'; if (t.bot && D.tasks.some(x => x.id === t.id)) spawnMonster(t, 'camp'); fx && say(`👹 มอนสเตอร์ตัวใหม่ออกจากรัง: <b>${esc(t.title)}</b>`, e.t, 'new' + t.id); },
+  created(e, fx, t) { t.state = 'quest'; if (t.bot && D.tasks.some(x => x.id === t.id)) spawnMonster(t, 'camp'); fx && say(`👹 New monster: <b>${esc(t.title)}</b>`, e.t, 'new' + t.id); },
   specified(e, fx, t) {},
   dependency_wait(e, fx, t) { t.state = 'caged'; if (t.bot && !t.region) spawnMonster(t, 'camp'); },
   promoted(e, fx, t) { if (t.state === 'caged') t.state = 'quest'; },
   assigned(e, fx, t) { if (e.bot) t.bot = e.bot; },
   claimed(e, fx, t) { if (e.bot) t.bot = e.bot; },
   run_start(e, fx, t) {
-    const h = hero(e.bot); t.bot = e.bot; t.state = 'fight'; t.runStart = e.t; h.act = null;
+    const h = hero(e.bot); t.bot = e.bot; t.state = 'fight'; t.runStart = e.t;
     if (h.sleep) wake(h, fx);
     spawnMonster(t, regionOf(e.bot, t.stage));
+    if (restLocked(h)) return;
+    h.act = null;
     if (!fx) { engage(h, t); return; }
     order(h, t, e.t);
   },
   tool(e, fx, t) {
-    const h = hero(e.bot); drain(h.wallet, h.wallet === 'agy' ? .25 : .02);
+    const h = hero(e.bot); if (restLocked(h)) return;
     if (!fx) return;
     // only work that changes or tests something is an attack; reading, searching, git status/diff, skills,
     // web and memory lookups are gestures (icon + small effect) so the fight reads like the real session
@@ -470,31 +493,31 @@ const ACTIONS = {
     if (h.q.length < 6) h.q.push(e); else h.combo++;
   },
   compress(e, fx, t) {
-    const h = hero(e.bot); if (!fx) return;
+    const h = hero(e.bot); if (!fx || restLocked(h)) return;
     h.meditate = 1.8; h.q.length = 0; S.soc.compress = (S.soc.compress || 0) + 1;
     S.fx.push({k: 'swirl', x: h.x, y: h.y - 30, life: 1.6, max: 1.6});
-    h.bubble = {text: `🧘 บีบอัดความจำ ${e.before}→${e.after}`, until: 2.2};
-    say(`🧘 ${nm(h)} บีบอัด context ${e.before}→${e.after} ข้อความ`, e.t, 'cp' + h.bot, 300);
+    h.bubble = {text: `🧘 Context compressed ${e.before}→${e.after}`, until: 2.2};
+    say(`🧘 ${nm(h)} compressed context ${e.before}→${e.after} messages`, e.t, 'cp' + h.bot, 300);
   },
   captain(e, fx, t) {
-    const cap = S.heroes[captainId()]; if (!fx || !cap) return;
+    const cap = S.heroes[captainId()]; if (!fx || !cap || restLocked(cap)) return;
     S.soc.captain = (S.soc.captain || 0) + 1;
-    const LINE = {create: ['📌 เควสใหม่!', '#ffd36b'], reassign: ['🔁 เปลี่ยนตัว!', '#9fd3ff'], extend: ['⏳ ให้เวลาเพิ่ม', '#ffd36b'],
-      unblock: ['🔨 ทุบโซ่!', '#ff9f5a'], block: ['⛓ หยุดก่อน', '#ff6b5a'], link: ['🔗 ต่อสาย', '#c8b0ff'], unlink: ['✂ ตัดสาย', '#c8b0ff'], note: ['✒', '#cfd8ea']}[e.act];
+    const LINE = {create: ['📌 New quest!', '#ffd36b'], reassign: ['🔁 Reassigned!', '#9fd3ff'], extend: ['⏳ More time', '#ffd36b'],
+      unblock: ['🔨 Unblocked!', '#ff9f5a'], block: ['⛓ On hold', '#ff6b5a'], link: ['🔗 Linked', '#c8b0ff'], unlink: ['✂ Unlinked', '#c8b0ff'], note: ['✒', '#cfd8ea']}[e.act];
     if (e.act !== 'note' || Math.random() < .15) { cap.atk = 0; cap.cur = {tool: 'order'}; cap.bubble = {text: LINE[0], until: 1.6}; }
-    if (e.act === 'extend' && t.alpha > 0) num(t.x, t.y - 46, '⏳ +เวลา', '#ffd36b', 1.4);
+    if (e.act === 'extend' && t.alpha > 0) num(t.x, t.y - 46, '⏳ +time', '#ffd36b', 1.4);
     if (e.act === 'unblock' && t.alpha > 0) { burst(t.x, t.y - 20, '#ff9f5a', 14); S.fx.push({k: 'ring', x: t.x, y: t.y - 20, color: '#ffcf6b', r: 26, life: .4, max: .4}); }
     if (e.act === 'reassign' && e.bot) { const h = S.heroes[e.bot]; if (h) S.fx.push({k: 'raven', x0: cap.x, y0: cap.y - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3}); }
     if (e.act !== 'note') say(`👑 Captain ${LINE[0]} ${esc(t.title)}`, e.t, 'cap' + e.act + t.id, 120);
   },
-  tests(e, fx, t) { if (fx) { const h = hero(e.bot); h.q.push({...e, tool: 'tests'}); say(`🏹 ${nm(h)} รันทดสอบผ่าน ${e.passed.toLocaleString()}`, e.t, 'ts' + t.id, 600); } },
-  hurt(e, fx, t) { if (fx) { const h = hero(e.bot); if (t.state === 'fight' && t.alpha > 0 && !t.mpath) { t.atk = 0; S.soc.fightbacks = (S.soc.fightbacks || 0) + 1; monsterHit(t, h); return say(`💥 ${nm(h)} โดน ${mtype(t)} สวนกลับ (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } h.hurt = .35; num(h.x, h.y - HERO_H, `exit ${e.code}`, '#ff6b5a'); say(`💥 ${nm(h)} คำสั่งพัง (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } },
+  tests(e, fx, t) { if (fx) { const h = hero(e.bot); h.q.push({...e, tool: 'tests'}); say(`🏹 ${nm(h)} passed ${e.passed.toLocaleString('en-GB')} tests`, e.t, 'ts' + t.id, 600); } },
+  hurt(e, fx, t) { if (fx) { const h = hero(e.bot); if (t.state === 'fight' && t.alpha > 0 && !t.mpath) { t.atk = 0; S.soc.fightbacks = (S.soc.fightbacks || 0) + 1; monsterHit(t, h); return say(`💥 ${nm(h)} hit by ${mtype(t)} (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } h.hurt = .35; num(h.x, h.y - HERO_H, `exit ${e.code}`, '#ff6b5a'); say(`💥 ${nm(h)} command failed (exit ${e.code})`, e.t, 'hu' + h.bot, 900); } },
   heartbeat(e, fx, t) { t.note = e.note || t.note; const h = t.bot && S.heroes[t.bot]; if (fx && h && e.note) { h.bubble = {text: e.note, until: 3.5}; say(`💬 ${nm(h)}: ${esc(e.note)}`, e.t, 'hb' + t.id, 900); } },
   commented(e, fx, t) {},
   comment(e, fx, t) {
     if (!fx) return;
-    if (e.tag === '[failover]') { portal(t); say(`🌀 ส่งต่อเควส: ${esc(e.note.replace('[failover] ', ''))}`, e.t); }
-    else if (e.tag === '[extend-done]') { num(t.x, t.y - 40, '⏳ +เวลา', '#ffd36b'); say(`⏳ ขยายเวลาเควส ${esc(t.title)}`, e.t); }
+    if (e.tag === '[failover]') { portal(t); say(`🌀 Quest handoff: ${esc(e.note.replace('[failover] ', ''))}`, e.t); }
+    else if (e.tag === '[extend-done]') { num(t.x, t.y - 40, '⏳ +time', '#ffd36b'); say(`⏳ Quest time extended: ${esc(t.title)}`, e.t); }
     else if (e.author === captainId()) { raven(t); say(`🐦‍⬛ Captain: ${esc(e.note)}`, e.t, 'cap' + t.id, 600); }
   },
   summon(e, fx, t) {
@@ -502,23 +525,23 @@ const ACTIONS = {
     if (!fx) return;
     h.fam.push({a: Math.random() * 6, life: 8, task: t.id}); burst(h.x + 10, h.y - 6, '#ffb36b', 12);
     S.fx.push({k: 'ring', x: h.x + 26, y: h.y - 10, color: '#ffb36b', r: 18, flat: true, life: .6, max: .6});
-    h.bubble = {text: '🦊 ออกไปช่วยหน่อย!', until: 1.6};
-    say(`🦊 ${nm(h)} อัญเชิญ subagent${e.note ? ': ' + esc(e.note) : ''}`, e.t);
+    h.bubble = {text: '🦊 Help requested!', until: 1.6};
+    say(`🦊 ${nm(h)} summoned a subagent${e.note ? ': ' + esc(e.note) : ''}`, e.t);
   },
-  moa(e, fx, t) { if (fx) { const h = hero(e.bot); S.fx.push({k: 'council', h, life: 4}); say(`✨ สภาพ่อมด FABLE + ASTRA ให้คำปรึกษา ${nm(h)}`, e.t); } },
-  review_requested(e, fx, t) { fx && say(`🛡️ ส่งเควสให้วิหารตรวจ: ${esc(t.title)}`, e.t); },
+  moa(e, fx, t) { if (fx) { const h = hero(e.bot); S.fx.push({k: 'council', h, life: 4}); say(`✨ FABLE + ASTRA council advised ${nm(h)}`, e.t); } },
+  review_requested(e, fx, t) { fx && say(`🛡️ Quest submitted for review: ${esc(t.title)}`, e.t); },
   blocked(e, fx, t) {
     t.state = 'blocked'; t.chained = true; spawnMonster(t, 'volcano'); t.note = e.note || t.note;
     const h = t.bot && S.heroes[t.bot]; if (h && h.task === t.id) goHome(h);
-    if (fx) { S.trauma = Math.min(1, S.trauma + .5); say(`⛓️ บอสขวางทาง: <b>${esc(t.title)}</b> ${e.note ? '— ' + esc(e.note) : ''}`, e.t); }
+    if (fx) { S.trauma = Math.min(1, S.trauma + .5); say(`⛓️ Quest blocked: <b>${esc(t.title)}</b> ${e.note ? '— ' + esc(e.note) : ''}`, e.t); }
   },
   block_loop_detected(e, fx, t) { ACTIONS.blocked(e, fx, t); },
-  unblocked(e, fx, t) { t.chained = false; t.state = 'quest'; if (t.bot) spawnMonster(t, t.runStart ? regionOf(t.bot) : 'camp'); fx && say(`🔓 ปลดโซ่: ${esc(t.title)}`, e.t); },
+  unblocked(e, fx, t) { t.chained = false; t.state = 'quest'; if (t.bot) spawnMonster(t, t.runStart ? regionOf(t.bot) : 'camp'); fx && say(`🔓 Quest unblocked: ${esc(t.title)}`, e.t); },
   run_end(e, fx, t) {
     const h = hero(e.bot);
     if (e.outcome === 'rate_limited') { sleep(h, fx); return; }
     if (['timed_out', 'crashed', 'gave_up'].includes(e.outcome)) {
-      if (fx) { h.down = 1.2; num(h.x, h.y - HERO_H, '💀 ' + e.outcome, '#ff6b5a'); say(`💀 ${nm(h)} ล้ม (${e.outcome})`, e.t); }
+      if (fx) { h.down = 1.2; num(h.x, h.y - HERO_H, '💀 ' + e.outcome, '#ff6b5a'); say(`💀 ${nm(h)} stopped (${e.outcome})`, e.t); }
       goHome(h);
     }
   },
@@ -529,20 +552,136 @@ const ACTIONS = {
     if (fx) {
       t.flash = 1; t.dying = 1; S.stop = .07; S.trauma = Math.min(1, S.trauma + .35);
       coins(t.x, t.y - 10); num(t.x, t.y - 46, 'QUEST CLEAR!', '#ffd36b', 1.6);
-      say(`🏆 สำเร็จ: <b>${esc(t.title)}</b>`, e.t);
+      say(`🏆 Quest complete: <b>${esc(t.title)}</b>`, e.t);
       cheerAround(t);
     } else t.alpha = 0;
-    const h = t.bot && S.heroes[t.bot]; if (h && h.task === t.id) { if (fx) later(.9, () => { if (h.task === t.id) { h.task = null; handOff(t); if (!h.act) goHome(h); } }); else goHome(h); }
+    const h = t.bot && S.heroes[t.bot]; if (h && h.task === t.id) { if (fx) laterHero(h, .9, () => { if (h.task === t.id) { h.task = null; handOff(t); if (!h.act) goHome(h); } }); else goHome(h); }
   },
   archived(e, fx, t) { t.alpha = 0; },
 };
 function apply(e, fx) {
+  if (applyBotEvent(e, fx)) return;
+  if (!e.task) return;
+  if (['tool','tests','hurt','compress','summon','moa'].includes(e.kind) && e.bot && restLocked(hero(e.bot))) return;
   const t = task(e.task);
   (ACTIONS[e.kind] || (() => { if (fx && t.alpha > 0) num(t.x, t.y - 30, e.kind, '#8aa0c8', .8); }))(e, fx, t);
 }
-function sleep(h, fx) { h.sleep = true; drain(h.wallet, 100); h.task = null; walkTo(h, 'inn', slotPos('inn', h.homeK, 'home')); fx && say(`😴 ${nm(h)} mana หมด กลับไปนอนโรงเตี๊ยม`, S.t); }
-function wake(h, fx) { if (!h.sleep) return; h.sleep = false; S.mana[h.wallet] = Math.max(S.mana[h.wallet], 80); fx && (num(h.x, h.y - HERO_H, 'READY', '#ffd36b'), say(`☀️ ${nm(h)} ตื่นแล้ว พร้อมรบ`, S.t)); goHome(h); }
-function drain(w, n) { S.mana[w] = Math.max(0, (S.mana[w] ?? 100) - n); }
+// Bot-level events never fabricate a task or transfer its ownership.
+const REST_REASON = {limited: 'Rate limited', 'waiting-start': 'Waiting to start', unavailable: 'Unavailable'};
+function diagnostic(message, fx = false, key = message) {
+  S.diagnostics[message] = (S.diagnostics[message] || 0) + 1;
+  if (fx) say(message, S.t, 'diagnostic:' + key, 0);
+}
+function restLocked(h) { return h.rest && (['paused', 'transferred'].includes(h.rest.state) || h.rest.phase === 'portal'); }
+function laterHero(h, sec, callback) {
+  const generation = h.rest.generation;
+  later(sec, () => { if (h.rest.generation === generation && !restLocked(h)) callback(); });
+}
+function restGeometry(fx) {
+  const region = W.regions.rest_inn ? 'rest_inn' : W.regions.inn ? 'inn' : null;
+  if (region !== 'rest_inn') diagnostic('Rest camp unavailable; using the inn', fx);
+  const data = W.regions[region], node = data?.node || region;
+  if (!data || !W.graph?.pts[node] || !W.graph.edges?.length) {
+    diagnostic('Rest geometry unavailable; staying in place', fx); return null;
+  }
+  return {region, node, data};
+}
+function restSpotClear(region, spot, occupied) {
+  if (occupied.some(p => Math.hypot(p[0] - spot[0], p[1] - spot[1]) < 12)) return false;
+  return !(W.props || []).some(p => {
+    if (p.src === 'buildings') return spot[0] >= p.x - p.w * .46 && spot[0] <= p.x + p.w * .46 && spot[1] >= p.y - p.h && spot[1] <= p.y + 6;
+    return ['tent','campfire','well','barrels','crates','cart','rock','rocks','oak','pine','pillar','fence'].includes(p.img) && Math.hypot(spot[0] - p.x, spot[1] - p.y) < 8;
+  });
+}
+function allocateRestSlots(geometry) {
+  const occupied = [], {region, data} = geometry;
+  const resting = Object.values(S.heroes).filter(h => ['paused', 'transferred'].includes(h.rest.state)).sort((a,b) => a.bot < b.bot ? -1 : a.bot > b.bot ? 1 : 0);
+  // Sorted IDs make slots deterministic independent of event delivery order.
+  for (const h of resting) {
+    let spot, slot;
+    for (let k = 0; k < 256; k++) {
+      const candidate = inPlaza(region, data.rest_spots?.[k] || hangSpot(region, k));
+      if (restSpotClear(region, candidate, occupied)) { spot = candidate; slot = k; break; }
+    }
+    if (!spot) { diagnostic('Rest camp has no free safe slot'); h.path = []; h.rest.phase = 'resting'; continue; }
+    occupied.push(spot);
+    if (h.rest.slot === slot && h.rest.target === region && h.rest.spot?.every((v,i) => v === spot[i])) continue;
+    h.rest.slot = slot; h.rest.target = region; h.rest.spot = spot; h.rest.phase = 'moving';
+    walkRest(h, geometry, spot);
+  }
+}
+function walkRest(h, geometry, spot) {
+  const [cx_,cy_] = geometry.data.spot;
+  if (Math.hypot((h.x-cx_)/PLAZA_RX,(h.y-cy_)/PLAZA_RY) <= 1) {
+    // Slot reallocation or a repeated pause can start inside the camp.
+    // Keep that short walk wholly in the plaza rather than detouring to
+    // the nearest (possibly unrelated) road beyond its edge.
+    h.path = [[h.x,h.y], inPlaza(geometry.region, spot)]; h.region = geometry.region; return;
+  }
+  const points = route([h.x,h.y], geometry.node);
+  // A disconnected graph must not produce a direct jump across unpaved terrain.
+  if (points.length < 3 && Math.hypot(points[0][0] - W.graph.pts[geometry.node][0],points[0][1] - W.graph.pts[geometry.node][1]) > 1) {
+    h.path = []; diagnostic('Rest route unavailable; staying in place'); return;
+  }
+  h.path = [[h.x,h.y], ...points.map(p => p.slice()), inPlaza(geometry.region, spot)]; h.region = geometry.region;
+}
+function pauseHero(h, kind, why, observed = true, fx = false) {
+  const savedTask = h.task || h.rest.savedTask;
+  h.rest = CUI.transitionRest(h.rest, kind, {why, savedTask, observed});
+  h.sleep = true; h.task = null; h.act = null; h.q = []; h.atk = -1; h.cur = null;
+  h.charge = 0; h.fam = []; h.bubble = null; h.gest = null;
+  const geometry = restGeometry(fx);
+  if (geometry) allocateRestSlots(geometry);
+  else { h.path = []; h.v = 0; h.rest.phase = 'resting'; h.rest.target = null; h.rest.slot = null; }
+}
+function resumeHero(h) {
+  const saved = S.tasks[h.rest.savedTask];
+  h.rest = CUI.transitionRest(h.rest, 'resume'); h.sleep = false; h.act = null; h.q = []; h.atk = -1;
+  if (saved?.state === 'fight' && saved.bot === h.bot) engage(h, saved); else goHome(h);
+  h.rest.savedTask = null;
+}
+function finishPortal(h) { h.rest.phase = 'returning'; goHome(h); }
+function finishRestMotion(h) {
+  if (h.path.length > 1) return;
+  if (h.rest.phase === 'portal') finishPortal(h);
+  else if (['moving','returning'].includes(h.rest.phase)) h.rest.phase = restLocked(h) ? 'resting' : 'idle';
+}
+function applyBotEvent(e, fx) {
+  if (!['mana','pause','resume','failover'].includes(e.kind)) return false;
+  if (!e.bot || typeof e.bot !== 'string') { diagnostic('Invalid bot event ignored', fx, eventKey(e)); return true; }
+  if (e.kind === 'mana') {
+    // Validate before creating even a hero for malformed token payloads.
+    if (!Number.isSafeInteger(e.tokens) || (e.tokens < 0 && e.correction !== true)) { diagnostic('Invalid token event ignored', fx, eventKey(e)); return true; }
+    if (!e.tokens) return true;
+    const h = hero(e.bot), error = CUI.reduceMana(S, e, h.wallet);
+    if (error) diagnostic(error, fx, eventKey(e));
+    else if (fx) say(`🔮 ${nm(h)} token usage ${e.tokens > 0 ? '+' : ''}${e.tokens}${e.basis === 'chars' ? ' (text estimate)' : e.correction ? ' (usage correction)' : ''}`, e.t, 'mana:' + eventKey(e), 0);
+    return true;
+  }
+  if (e.kind === 'pause' && !REST_REASON[e.why]) { diagnostic('Invalid rest reason ignored', fx, eventKey(e)); return true; }
+  if (e.kind === 'failover' && (!e.other || typeof e.other !== 'string' || e.other === e.bot)) { diagnostic('Invalid switch event ignored', fx, eventKey(e)); return true; }
+  const h = hero(e.bot);
+  if (e.kind === 'resume') {
+    resumeHero(h); if (fx) say(`☀️ ${nm(h)} resumed`, e.t, 'resume:' + eventKey(e), 0);
+  } else {
+    pauseHero(h, e.kind, e.why || 'unavailable', true, fx);
+    if (fx) say(`😴 ${nm(h)} ${e.kind === 'failover' ? 'switched to ' + nm(hero(e.other)) + ' (signal only; quest ownership unchanged)' : 'is resting: ' + REST_REASON[e.why]}`, e.t, 'rest:' + eventKey(e), 0);
+    if (e.kind === 'failover') {
+      const target = hero(e.other), geometry = restGeometry(false);
+      const busy = Object.values(S.tasks).some(t => t.bot === target.bot && t.state === 'fight');
+      if (fx && geometry) { const [x,y] = geometry.data.portal?.spot || geometry.data.spot; S.fx.push({k:'portal',x,y,life:2.2,max:2.2}); }
+      if (geometry && !busy && !restLocked(target)) {
+        target.rest = {...target.rest, generation: target.rest.generation + 1, state:'active',phase:'portal',target:geometry.region,slot:null};
+        target.act = null; target.q = []; target.atk = -1;
+        walkRest(target, geometry, geometry.data.portal?.spot || geometry.data.spot);
+        // A portal visit does not reserve a resting slot or claim a quest.
+      }
+    }
+  }
+  return true;
+}
+function sleep(h, fx) { if (restLocked(h) && h.rest.observed) return; pauseHero(h, 'pause', 'limited', false, fx); fx && say(`😴 ${nm(h)} is resting: rate limited`, S.t); }
+function wake(h, fx) { if (!h.sleep || h.rest.observed) return; resumeHero(h); fx && say(`☀️ ${nm(h)} resumed`, S.t); }
 const nm = h => `<span class="who">${esc(h.name)}</span> (${esc(h.bot)})`;
 const esc = s => String(s ?? '').replace(/[<>&]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;'}[c]));
 
@@ -571,7 +710,7 @@ function toolLabel(e) {
 }
 function heroAccent(h) { const im = SPRV[`${h.cls}-${(h.st || NO_STYLE).tag}`] || SPR[h.cls]; return im ? accent(im) : {}; }
 function landHit(h, t, e, a0, ix, iy) {
-  if (!S.tasks[t.id] || t.dying) return;
+  if (restLocked(h) || !S.tasks[t.id] || t.dying) return;
   const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, ef = h.eff || EFF.medium, crit = Math.random() < ef.crit;
   const a = {...a0, color: a0.kind === 'proj' ? st.color : a0.color, glow: st.glow};
   t.flash = .09 * ef.mult; t.kick = Math.min(1.6, ef.mult * (crit ? 1.4 : 1));
@@ -593,12 +732,13 @@ function strike(h, t, e) {
   const st = {...(h.st || NO_STYLE), ...heroAccent(h)}, sx = h.x + 22 * h.face, sy = h.y - 34, dur = Math.max(.12, Math.hypot(ix - sx, iy - sy) / (a.speed * st.speed));
   S.fx.push({k: 'proj', proj: a.proj, x0: sx, y0: sy, x1: ix, y1: iy, color: st.color, glow: st.glow, life: dur, max: dur, big: (h.eff || EFF.medium).mult,
     arc: a.proj === 'arrow' ? 16 : a.proj === 'gear' ? 24 : 0});
-  later(dur, () => landHit(h, t, e, a, ix, iy));
+  laterHero(h, dur, () => landHit(h, t, e, a, ix, iy));
 }
 const GESTURE = {read: ['📜', '#cfd8ea'], scout: ['🔍', '#cfd8ea'], tome: ['📖', '#c8b0ff'], crystal: ['🔮', '#9fd3ff'],
   memory: ['🗝', '#ffd36b'], pigeon: ['🕊', '#ffffff'], spawn: ['🐣', '#ffcf6b'], commit: ['⚒ commit', '#ffe08a'],
   push: ['🎈 push', '#9fd3ff'], merge: ['⚔ merge', '#ffb36b']};
 function gesture(h, e, kind) {
+  if (restLocked(h)) return;
   const [icon, col] = GESTURE[kind] || GESTURE.read;
   h.gest = {icon, until: kind === 'read' || kind === 'scout' ? .8 : 1.3};
   if (kind === 'push') S.fx.push({k: 'balloon', x: h.x, y: h.y - 40, life: 2.2, max: 2.2});
@@ -613,24 +753,25 @@ function monsterHit(t, h) {
   const kind = mtype(t), r = M_RANGED[kind], tx = h.x, ty = h.y - 26;
   const hit = () => { h.hurt = .35; h.knock = 1; S.trauma = Math.min(1, S.trauma + .15); burst(tx, ty, '#ff6b5a', 8);
     if (kind === 'golem') S.fx.push({k: 'ring', x: t.x - 20, y: t.y, color: '#d8b98a', r: 34, flat: true, life: .4, max: .4}); };
-  if (!r) return later(.26, hit);
+  if (!r) return laterHero(h, .26, hit);
   const sx = t.x - 20, sy = t.y - 28, dur = Math.max(.15, Math.hypot(tx - sx, ty - sy) / r.speed);
-  later(.26, () => S.fx.push({k: 'proj', proj: r.proj, x0: sx, y0: sy, x1: tx, y1: ty, color: r.color, glow: '#fff', life: dur, max: dur, arc: 10}));
-  later(.26 + dur, hit);
+  laterHero(h, .26, () => S.fx.push({k: 'proj', proj: r.proj, x0: sx, y0: sy, x1: tx, y1: ty, color: r.color, glow: '#fff', life: dur, max: dur, arc: 10}));
+  laterHero(h, .26 + dur, hit);
 }
 
 
 // ---------- orders: the Captain sends a raven, the hero acknowledges, then sets out ----------
 function later(sec, f) { S.later.push({at: S.rt + sec, f}); }
 function order(h, t, ts) {
+  if (restLocked(h)) return;
   const cap = S.heroes[captainId()], [cx_, cy_] = cap ? [cap.x, cap.y] : spotOf(regionOf(captainId()));
-  if (cap) { cap.bubble = {text: `⚔️ ${h.name} ไปจัดการ ${t.title.slice(0, 24)}`, until: 2.6}; cap.cheer = .5; }
+  if (cap && !restLocked(cap)) { cap.bubble = {text: `⚔️ ${h.name}, take on ${t.title.slice(0, 24)}`, until: 2.6}; cap.cheer = .5; }
   S.fx.push({k: 'raven', x0: cx_, y0: cy_ - 50, x1: h.x, y1: h.y - 50, life: 1.3, max: 1.3});
   S.soc.orders = (S.soc.orders || 0) + 1;
-  say(`📯 Captain สั่ง ${nm(h)} ไปจัดการ <b>${esc(t.title)}</b>`, ts, 'run' + t.id);
+  say(`📯 Captain sent ${nm(h)} to <b>${esc(t.title)}</b>`, ts, 'run' + t.id);
   h.act = null; h.task = t.id;                      // reserved: no hangout while the order is in the air
-  later(1.3, () => { if (h.task !== t.id || t.state !== 'fight') return; h.bubble = {text: '❗ รับทราบ!', until: 1.4}; h.cheer = .5; });
-  later(1.9, () => { if (h.task === t.id && t.state === 'fight') engage(h, t); });
+  laterHero(h, 1.3, () => { if (h.task !== t.id || t.state !== 'fight') return; h.bubble = {text: '❗ Acknowledged!', until: 1.4}; h.cheer = .5; });
+  laterHero(h, 1.9, () => { if (h.task === t.id && t.state === 'fight') engage(h, t); });
 }
 
 // ---------- social life ----------
@@ -638,14 +779,14 @@ function order(h, t, ts) {
 // through parent/child cards in the replay), visit the tavern, the market or the campfire, chat, cheer each other's
 // wins and walk over to hand off a finished quest to whoever picks it up next. All walks go through route().
 const HANGOUTS = [
-  {region: 'inn', kind: 'tavern', icon: '🍺', th: 'ไปนั่งโรงเตี๊ยม'}, {region: 'castle', kind: 'square', icon: '💬', th: 'คุยกันที่ลานปราสาท'},
-  {region: 'vault', kind: 'treasure', icon: '🪙', th: 'แวะชมคลังทอง'}, {region: 'port', kind: 'harbor', icon: '⚓', th: 'เดินเล่นท่าเรือ'},
-  {region: 'forest', kind: 'campfire', icon: '🔥', th: 'ล้อมวงรอบกองไฟ'}];
+  {region: 'inn', kind: 'tavern', icon: '🍺', th: 'visited the inn'}, {region: 'castle', kind: 'square', icon: '💬', th: 'chatted in the castle square'},
+  {region: 'vault', kind: 'treasure', icon: '🪙', th: 'visited the vault'}, {region: 'port', kind: 'harbor', icon: '⚓', th: 'visited the harbor'},
+  {region: 'forest', kind: 'campfire', icon: '🔥', th: 'gathered around the campfire'}];
 const CHAT = {
-  generic: ['วันนี้งานเยอะจัง', 'ใครเห็น Captain บ้าง', 'พักแป๊บนึง', 'เดี๋ยวไปต่อ', 'ฮ่าๆ', 'ระวังบอสที่ภูเขาไฟนะ', 'mana จะหมดแล้ว', '☕ ขอกาแฟหน่อย'],
-  warrior: ['patch ไปอีก 3 ไฟล์', 'build ผ่านแล้ว!', 'เดี๋ยวแก้ให้'], ranger: ['test ผ่านหมด', 'เจอ bug อีกตัว', 'ยิงอีกรอบ'],
-  paladin: ['รีวิวรอบนี้โหด', 'ขอแก้ 2 จุด', 'LGTM 👍'], engineer: ['deploy เสร็จละ', 'CDN ตรงแล้ว', 'เรือเหาะพร้อม'],
-  mage: ['หาข้อมูลมาแล้ว', 'อ่าน doc อยู่'], sage: ['วาด flow ใหม่', 'ตัวเลขแปลกๆ'], commander: ['ทุกคนพร้อมไหม', 'แผนใหม่มาแล้ว']};
+  generic: ['Busy day', 'Seen the Captain?', 'Taking a break', 'Back soon', 'Ha!', 'Watch out for the volcano boss', 'Checking my tokens', '☕ Coffee, please'],
+  warrior: ['Patched three files', 'Build passed!', 'On it'], ranger: ['Tests passed', 'Found another bug', 'Testing again'],
+  paladin: ['A tough review', 'Two changes requested', 'LGTM 👍'], engineer: ['Deployed', 'CDN checked', 'Airship ready'],
+  mage: ['Research ready', 'Reading docs'], sage: ['Drawing a new flow', 'Checking the numbers'], commander: ['Ready, everyone?', 'New plan ready']};
 let FRIENDS = null;
 function friends(bot) {
   if (!FRIENDS) {
@@ -658,12 +799,13 @@ function friends(bot) {
   }
   return Object.entries(FRIENDS[bot] || {}).sort((a, b) => b[1] - a[1]).map(x => x[0]);
 }
-function free(h) { return !h.task && !h.sleep && h.down <= 0 && h.atk < 0 && h.cls !== 'commander'; }   // Captain stays at the war room
+function free(h) { return !restLocked(h) && h.rest.phase !== 'returning' && !h.task && !h.sleep && h.down <= 0 && h.atk < 0 && h.cls !== 'commander'; }   // Captain stays at the war room
 function hangSpot(region, k) {                       // circle formation inside the plaza, facing the centre
   const [x, y] = W.regions[region].spot, ring = Math.floor(k / 6), a = (k % 6) / 6 * 6.283 + ring * .5 + region.length * .7;
   return [x + Math.cos(a) * (50 + ring * 26), y + 30 + Math.sin(a) * (22 + ring * 10)];   // 6 per ring, rings grow outward
 }
 function startHangout(h, place, withWho = []) {
+  if (restLocked(h)) return;
   const party = [h, ...withWho.filter(free)].slice(0, 4);
   const used = new Set(Object.values(S.heroes).filter(o => o.act && o.act.region === place.region).map(o => o.act.k));
   S.soc.hangouts = (S.soc.hangouts || 0) + 1; if (party.length > 1) S.soc.group = (S.soc.group || 0) + 1;
@@ -703,14 +845,14 @@ function recentNotes(bot) {
   return Object.values(S.tasks).filter(t => t.bot === bot && t.note).slice(-2).map(t => t.note.slice(0, 40));
 }
 function handOff(t) {                                // the finisher walks a quest scroll to whoever does the next card
-  const from = t.bot && S.heroes[t.bot]; if (!from) return;
+  const from = t.bot && S.heroes[t.bot]; if (!from || restLocked(from)) return;
   const next = D.tasks.find(c => (c.parents || []).includes(t.id) && c.bot && c.bot !== t.bot);
   const to = next && S.heroes[next.bot]; if (!to || !free(to) || to.path.length > 1) return;   // only to someone standing still
   S.soc.handoffs = (S.soc.handoffs || 0) + 1;
   from.act = {region: to.region, kind: 'handoff', icon: '📜', until: 6, k: 0};
   walkTo(from, to.region, [to.x - 26, to.y]);
-  from.bubble = {text: `📜 ส่งต่อให้ ${to.name}`, until: 3};
-  say(`📜 ${nm(from)} ส่งงานต่อให้ ${nm(to)}`, S.t, 'ho' + t.id);
+  from.bubble = {text: `📜 Handoff to ${to.name}`, until: 3};
+  say(`📜 ${nm(from)} handed work to ${nm(to)}`, S.t, 'ho' + t.id);
 }
 function cheerAround(t) {
   for (const h of Object.values(S.heroes)) if (free(h) && Math.hypot(h.x - t.x, h.y - t.y) < 260) { h.cheer = .9; S.soc.cheers = (S.soc.cheers || 0) + 1; if (Math.random() < .4) h.bubble = {text: '🎉', until: 1.2}; }
@@ -725,7 +867,7 @@ function update(dt) {
     let n = 0;
     while (S.i < D.events.length && D.events[S.i].t <= S.t && n++ < 400) apply(D.events[S.i++], true);
     if (!(liveFeed && following) && S.t > D.meta.to + 60) S.play = false;
-    for (const w in S.mana) S.mana[w] = Math.min(100, S.mana[w] + dt * S.speed * .0008);
+
   }
   S.rt += dt;
   for (const l of S.later.filter(l => l.at <= S.rt)) l.f();
@@ -768,7 +910,7 @@ function stepHero(h, dt) {
   }
   h.hurt = Math.max(0, h.hurt - dt); h.down = Math.max(0, h.down - dt); h.knock = Math.max(0, (h.knock || 0) - dt * 3);
   h.meditate = Math.max(0, (h.meditate || 0) - dt); if (h.gest && (h.gest.until -= dt) <= 0) h.gest = null;
-  for (const f of h.fam) if (f.task && S.tasks[f.task] && S.tasks[f.task].state === 'fight' && Math.random() < dt * .6) { const t2 = S.tasks[f.task]; S.fx.push({k: 'proj', proj: 'orb', x0: h.x + Math.cos(f.a) * 34, y0: h.y - 46, x1: t2.x, y1: t2.y - 22, color: '#ffb36b', glow: '#fff', life: .35, max: .35, arc: 6}); later(.35, () => { t2.flash = .05; burst(t2.x, t2.y - 22, '#ffb36b', 4); }); }
+  for (const f of h.fam) if (!restLocked(h) && f.task && S.tasks[f.task] && S.tasks[f.task].state === 'fight' && Math.random() < dt * .6) { const t2 = S.tasks[f.task]; S.fx.push({k: 'proj', proj: 'orb', x0: h.x + Math.cos(f.a) * 34, y0: h.y - 46, x1: t2.x, y1: t2.y - 22, color: '#ffb36b', glow: '#fff', life: .35, max: .35, arc: 6}); laterHero(h, .35, () => { t2.flash = .05; burst(t2.x, t2.y - 22, '#ffb36b', 4); }); }
   if (h.bubble && (h.bubble.until -= dt) <= 0) h.bubble = null;
   h.fam = h.fam.filter(f => (f.life -= dt) > 0); for (const f of h.fam) f.a += dt * 3;
   if (h.down > 0) return;
@@ -784,6 +926,8 @@ function stepHero(h, dt) {
     return;
   }
   h.v = 0; h.path = [];
+  finishRestMotion(h);
+  if (restLocked(h)) return;
   const t = h.task && S.tasks[h.task];
   if (t && t.state === 'fight') h.face = t.x >= h.x ? 1 : -1;
   if (h.atk >= 0) {                                         // anticipation .14 / swing .08 / impact .1 / recover .14
@@ -923,7 +1067,7 @@ function heroDraw(v, h) {
   if (h.sleep && !walking) cx.globalAlpha = .9;
   if (h.down > 0 || (h.sleep && !walking)) {                     // lying down: rotate by exactly 90deg (stays on the grid)
     cx.save(); cx.translate(v.ox + bx * v.Z, v.oy + by * v.Z); cx.rotate(-Math.PI / 2);
-    cx.drawImage(sheet, fr * M.fw, 0, M.fw, M.fh, -M.base * v.Z, -M.ax * v.Z, M.fw * v.Z, M.fh * v.Z); cx.restore();
+    cx.drawImage(sheet, fr * M.fw, 0, M.fw, M.fh, -M.ax * v.Z, -M.base * v.Z, M.fw * v.Z, M.fh * v.Z); cx.restore();
   } else {
     const nx = h.face > 0 ? bx - M.ax : bx - (M.fw - M.ax), ny = by - M.base, lv = LEVEL[h.effort] || 0;
     levelBack(v, h, bx, by, st, lv);
@@ -1133,7 +1277,7 @@ function renderCamps() {
   const by={};for(const t of D.tasks)(by[t.campaign]||=[]).push(t);
   const rows=Object.entries(by).map(([title,ts])=>{
     const live=ts.map(t=>S.tasks[t.id]).filter(Boolean),done=live.filter(t=>t.state==='done').length;
-    return {title,count:done+'/'+ts.length+' เควส',blocked:live.find(t=>t.state==='blocked')?.title,
+    return {title,count:done+'/'+ts.length+' quests',blocked:live.find(t=>t.state==='blocked')?.title,
       stages:STAGES.map(st=>{const group=live.filter(t=>t.stage===st);return {id:st.toLowerCase(),state:group.some(t=>t.state==='fight')?'selected':group.length&&group.every(t=>t.state==='done')?'normal':'disabled'};})};
   });UI.camps(rows);
 }
@@ -1141,13 +1285,13 @@ let hudT=0;
 function hud(dt) {
   if(!UI || privacyPending)return;
   if((hudT+=dt)<.1)return;hudT=0;
-  UI.number('#clock',fmt(S.t),'เวลา replay');UI.number('#speeds',String(S.speed),'ความเร็ว');
-  UI.control('#play',S.play?'pause':'play',S.play?'หยุด':'เล่น');
-  UI.control('#live','live-follow','ติดตามสด',following?'selected':'normal');
+  UI.number('#clock',fmt(S.t),'Replay time');UI.number('#speeds',String(S.speed),'Speed');
+  UI.control('#play',S.play?'pause':'play',S.play?'Pause':'Play');
+  UI.control('#live','live-follow','Follow live',following?'selected':'normal');
   $('#play').setAttribute('aria-pressed',String(!S.play));$('#live').setAttribute('aria-pressed',String(following));
   $('#scrub').value=Math.max(0,Math.min(1000,Math.round((S.t-D.meta.from_)/Math.max(1,D.meta.to-D.meta.from_)*1000)));
   $('#scrub').setAttribute('aria-valuetext',fmt(S.t));
-  renderFeed();renderCamps();UI.resources(S.mana);
+  renderFeed();renderCamps();UI.resources(S.mana,S.tokenNetByWallet);
 }
 function ui() {
   if(UI)UI.init();resize();addEventListener('resize',resize);
@@ -1156,9 +1300,9 @@ function ui() {
   $('#play').onclick=()=>{following=false;S.play=!S.play;hudT=1;hud(0);};
   $('#scrub').oninput=e=>{following=false;reset(D.meta.from_+(D.meta.to-D.meta.from_)*e.target.value/1000);};
   $('#live').hidden=!liveFeed;$('#live').onclick=goLive;
-  $('#calm').onclick=()=>{calm=!calm;$('#calm').setAttribute('aria-pressed',String(calm));if(UI)UI.control('#calm','calm','ลดเอฟเฟกต์',calm?'selected':'normal');};
+  $('#calm').onclick=()=>{calm=!calm;$('#calm').setAttribute('aria-pressed',String(calm));if(UI)UI.control('#calm','calm','Reduce effects',calm?'selected':'normal');};
   $('#world').onclick=()=>{Object.assign(cam,{tx:W.size[0]/2,ty:W.size[1]/2,zi:1});
-    if(UI)UI.detail(Object.entries(W.regions).map(([k,r])=>UI.plain(r.label)+(k==='vault'?' : '+S.vault:'')),'แผนที่');};
+    if(UI)UI.detail(Object.entries(W.regions).map(([k,r])=>UI.plain(r.label)+(k==='vault'?' : '+S.vault:'')),'World');};
   $('#tabs').onclick=e=>{const t=e.target.closest('[data-t]')?.dataset.t;if(t&&UI){UI.drawer(t);renderFeed();renderCamps();}};
   hudT=1;hud(0);
   const pointers = new Map(); let moved = 0, pinch = null;
@@ -1185,21 +1329,34 @@ function click(e) {
   const t = Object.values(S.tasks).filter(t => t.alpha > 0).sort((a, b) => Math.hypot(a.x - wx, a.y - 15 - wy) - Math.hypot(b.x - wx, b.y - 15 - wy))[0];
   if (t && Math.hypot(t.x - wx, t.y - 15 - wy) < 22) return quest(t);
   const h=Object.values(S.heroes).find(h=>Math.hypot(h.x-wx,h.y-36-wy)<36);
-  if(h&&UI)return UI.detail([h.name,h.bot,'อาชีพ : '+h.cls,'model : '+h.model,'effort : '+h.effort,
-    h.sleep?'พักที่โรงเตี๊ยม':h.task?'กำลังทำงาน':'พร้อมรับงาน',h.bubble?.text||'-'],'ฮีโร่');
+  if(h&&UI)return UI.detail(heroDetails(h),'Hero');
   const r = Object.entries(W.regions).sort((a, b) => Math.hypot(a[1].spot[0] - wx, a[1].spot[1] - wy) - Math.hypot(b[1].spot[0] - wx, b[1].spot[1] - wy))[0];
   Object.assign(cam, {tx: r[1].spot[0], ty: r[1].spot[1] - 20, zi: 2});
-  if(UI)UI.detail([r[1].label,'เควส : '+Object.values(S.tasks).filter(t=>t.region===r[0]).length],'พื้นที่');
+  if(UI)UI.detail([r[1].label,'Quests: '+Object.values(S.tasks).filter(t=>t.region===r[0]).length],'Region');
 }
 function quest(t) {
   if(privacyPending)return;
   const h=t.bot&&S.heroes[t.bot], elapsed=t.runStart?Math.round((S.t-t.runStart)/60):0;
-  const states={quest:'รอรับงาน',fight:'กำลังทำงาน',blocked:'ติดขัด',caged:'รอ dependency',done:'สำเร็จ'};
+  const states={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Waiting for dependencies',done:'Complete'};
   if(UI)UI.detail([t.id,D.meta.show_titles===true?t.title:t.id,
-    'ผู้รับ : '+(h?h.name+' ('+h.bot+')':'-'),
-    'ขั้น : '+(STAGE_TH[t.stage]||'ไม่ทราบ')+' สถานะ : '+(states[t.state]||'ไม่ทราบ'),
-    'เวลา : '+elapsed+' / '+Math.round((t.max_rt||1800)/60)+' นาที',
-    'ชุดงาน : '+t.campaign,'บันทึกล่าสุด : '+(D.meta.show_titles===true?t.note||'-':'-'),
-    [t.moa?'MoA':'',t.mock?'ข้อมูลจำลอง':'',t.chained?'ติดขัด':''].join(' ')],'เควส');
+    'Assigned to: '+(h?h.name+' ('+h.bot+')':'-'),
+    'Stage: '+(STAGE_TH[t.stage]||'Unknown')+' · Status: '+(states[t.state]||'Unknown'),
+    'Time: '+elapsed+' / '+Math.round((t.max_rt||1800)/60)+' minutes',
+    'Campaign: '+t.campaign,'Latest note: '+(D.meta.show_titles===true?t.note||'-':'-'),
+    [t.moa?'MoA':'',t.mock?'Demo':'',t.chained?'Blocked':''].join(' ')],'Quest');
+}
+function heroDetails(h) {
+  const ledger = S.tokenNetByBot[h.bot];
+  const status = restLocked(h) ? (h.rest.phase === 'moving' ? 'Walking to rest' : 'Resting') : h.task ? 'Working' : h.rest.state === 'active-unobserved' ? 'Status unobserved' : 'Active';
+  return [h.name,h.bot,'Class: '+h.cls,'Model: '+h.model,'Effort: '+h.effort,status,
+    'Rest reason: '+(REST_REASON[h.rest.why] || 'None'),
+    ...(h.rest.state === 'transferred' ? ['Switch signal only; quest ownership is unchanged'] : []),
+    'Used tokens: '+(ledger ? Math.max(0,ledger.net).toLocaleString('en-GB') : 'Unknown (no usage events)'),
+    'Signed token balance: '+(ledger?.net ?? 'Unknown'),
+    ...(ledger?.hasCharsEstimate ? ['Includes estimates from text size'] : []),
+    ...(ledger?.hasUsageCorrection ? ['Includes signed usage corrections'] : []),
+    'Simulated capacity: 100,000 tokens per wallet per replay epoch; not real quota',
+    'Historical usage may differ until reload (backend limitations)',
+    ...Object.keys(S.diagnostics).filter(key=>key.startsWith('Rest ')),h.bubble?.text||'-'];
 }
 boot();

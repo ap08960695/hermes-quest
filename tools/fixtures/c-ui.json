@@ -1,0 +1,27 @@
+{
+  "synthetic": true,
+  "meta": {"from_": 0, "to": 10000, "show_titles": false, "config_revision": "synthetic-v1", "captain": "", "source": "synthetic"},
+  "cursor": "synthetic-0",
+  "bots": [
+    {"id": "a", "name": "a", "cls": "mage", "region": "castle", "wallet": "codex"},
+    {"id": "b", "name": "b", "cls": "ranger", "region": "forge", "wallet": "codex"},
+    {"id": "c", "name": "c", "cls": "sage", "region": "vault", "wallet": "agy"}
+  ],
+  "tasks": [{"id": "q", "title": "q", "bot": "a", "stage": "BUILD", "campaign": "synthetic", "parents": [], "max_rt": 1800}],
+  "events": [
+    {"id": "mana-100", "t": 10, "kind": "mana", "bot": "a", "tokens": 100, "basis": "chars", "estimated": true},
+    {"id": "mana-refund", "t": 20, "kind": "mana", "bot": "a", "tokens": -45, "basis": "usage", "correction": true, "estimated": true},
+    {"id": "pause-a", "t": 30, "kind": "pause", "bot": "a", "why": "limited"},
+    {"id": "pause-b", "t": 31, "kind": "pause", "bot": "b", "why": "waiting-start"},
+    {"id": "pause-c", "t": 32, "kind": "pause", "bot": "c", "why": "unavailable"},
+    {"id": "resume-a", "t": 40, "kind": "resume", "bot": "a"},
+    {"id": "invalid-token", "t": 41, "kind": "mana", "bot": "a", "tokens": "100"},
+    {"id": "missing-token", "t": 42, "kind": "mana", "bot": "a"},
+    {"id": "zero-token", "t": 43, "kind": "mana", "bot": "a", "tokens": 0},
+    {"id": "negative-uncorrected", "t": 44, "kind": "mana", "bot": "a", "tokens": -1}
+  ],
+  "knownLimitations": {
+    "F2": {"liveEvents": [], "replayEvents": [{"id": "f2-old", "t": 10, "kind": "mana", "bot": "a", "tokens": 100, "basis": "usage"}], "liveNet": 0, "replayNet": 100},
+    "F3": {"liveEvents": [{"id": "f3-100", "t": 10, "kind": "mana", "bot": "a", "tokens": 100, "basis": "chars"}], "replayEvents": [{"id": "f3-100", "t": 10, "kind": "mana", "bot": "a", "tokens": 100, "basis": "chars"}, {"id": "f3-correction", "t": 20, "kind": "mana", "bot": "a", "tokens": -45, "basis": "usage", "correction": true}], "liveNet": 100, "replayNet": 55}
+  }
+}

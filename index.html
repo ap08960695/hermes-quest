@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="th">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -70,27 +70,28 @@ canvas{image-rendering:pixelated;display:block;flex:none}
 </style>
 </head>
 <body>
-<canvas id="stage" aria-label="โลก Hermes Quest"></canvas>
+<canvas id="stage" aria-label="Hermes Quest world"></canvas>
 <div id="ui-stage" aria-hidden="true"></div>
-<div id="tag" class="panel"><span id="mode" role="img"></span><span id="connection" role="status"></span><button id="live" hidden aria-label="ติดตามสด"></button></div>
-<button id="help" aria-label="คำอธิบายไอคอน"></button>
-<div id="camp" class="panel" hidden aria-label="งาน"><button id="camp-close" class="drawer-close" aria-label="ปิด"></button><div id="camps"></div></div>
-<div id="chron" class="panel" hidden aria-label="บันทึก"><button id="chron-close" class="drawer-close" aria-label="ปิด"></button><div id="feed"></div></div>
-<div id="quest" class="panel" role="dialog" aria-label="รายละเอียด" hidden></div>
+<div id="tag" class="panel"><span id="mode" role="img"></span><span id="connection" role="status"></span><button id="live" hidden aria-label="Follow live"></button></div>
+<button id="help" aria-label="Icon help"></button>
+<div id="camp" class="panel" hidden aria-label="Quests"><button id="camp-close" class="drawer-close" aria-label="Close"></button><div id="camps"></div></div>
+<div id="chron" class="panel" hidden aria-label="Log"><button id="chron-close" class="drawer-close" aria-label="Close"></button><div id="feed"></div></div>
+<div id="quest" class="panel" role="dialog" aria-label="Details" hidden></div>
 <div id="hud" class="panel">
-  <button id="play" aria-label="เล่นหรือหยุด"></button>
-  <button id="speeds" aria-label="ความเร็ว replay"></button>
+  <button id="play" aria-label="Play or pause"></button>
+  <button id="speeds" aria-label="Replay speed"></button>
   <span id="clock" role="timer"></span>
-  <input id="scrub" aria-label="เวลา replay" type="range" min="0" max="1000" value="0">
+  <input id="scrub" aria-label="Replay time" type="range" min="0" max="1000" value="0">
   <div class="mana" id="mana"></div>
-  <span id="tabs"><button id="quests" data-t="camp" aria-label="งาน"></button><button id="log" data-t="chron" aria-label="บันทึก"></button></span>
-  <button id="world" aria-label="แผนที่"></button>
-  <button id="calm" aria-label="ลดการสั่นและแสงกะพริบ"></button>
+  <span id="tabs"><button id="quests" data-t="camp" aria-label="Quests"></button><button id="log" data-t="chron" aria-label="Log"></button></span>
+  <button id="world" aria-label="Map"></button>
+  <button id="calm" aria-label="Reduce motion and flashes"></button>
 </div>
 <script src="font.js"></script>
 <script src="ui-glyphs.js"></script>
 <script src="ui-panels.js"></script>
 <script src="npcs.js"></script>
+<script src="quest/c-ui.js"></script>
 <script src="game.js"></script>
 </body>
 </html>

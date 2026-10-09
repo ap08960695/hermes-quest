@@ -87,8 +87,8 @@ async function runViewport(browser, base, vp) {
     await page.goto(`${base}/index.html`, {waitUntil: 'load'});
     await page.waitForFunction(() => document.querySelector('#connection')?.getAttribute('aria-label'), null, {timeout: 30000});
     const state = await page.locator('#connection').getAttribute('aria-label');
-    if (state !== 'ไฟล์ย้อนหลัง normal') problems.push(`boot did not reach file/demo mode (connection label "${state}")`);
-    await page.waitForFunction(() => /^เวลา replay: \d/.test(document.querySelector('#clock')?.getAttribute('aria-label') || ''), null, {timeout: 30000});
+    if (state !== 'Replay file normal') problems.push(`boot did not reach file/demo mode (connection label "${state}")`);
+    await page.waitForFunction(() => /^Replay time: \d/.test(document.querySelector('#clock')?.getAttribute('aria-label') || ''), null, {timeout: 30000});
     // Let the scene draw: clock must advance (loop is running) and a few frames must pass.
     const first = await clock();
     await page.waitForFunction(t => document.querySelector('#clock').getAttribute('aria-label') !== t, first, {timeout: 30000});
@@ -98,7 +98,7 @@ async function runViewport(browser, base, vp) {
 
     // Pause
     await page.click('#play');
-    if ((await page.locator('#play').getAttribute('aria-label')) !== 'เล่น normal' ||
+    if ((await page.locator('#play').getAttribute('aria-label')) !== 'Play normal' ||
         (await page.locator('#play').getAttribute('aria-pressed')) !== 'true') problems.push('pause: button did not switch to accessible play state');
     await page.waitForTimeout(300);
     const frozen = await clock();
@@ -107,7 +107,7 @@ async function runViewport(browser, base, vp) {
     await shot('2-paused');
     // Play
     await page.click('#play');
-    if ((await page.locator('#play').getAttribute('aria-label')) !== 'หยุด normal' ||
+    if ((await page.locator('#play').getAttribute('aria-label')) !== 'Pause normal' ||
         (await page.locator('#play').getAttribute('aria-pressed')) !== 'false') problems.push('play: button did not switch to accessible pause state');
     await page.waitForFunction(t => document.querySelector('#clock').getAttribute('aria-label') !== t, frozen, {timeout: 15000})
       .catch(() => problems.push('play: clock did not advance after resume'));

@@ -23,6 +23,7 @@ global.Image = class { set src(v) { setTimeout(() => this.onerror && this.onerro
 global.fetch = async u => ({ok: true, json: async () => (u.includes('replay') ? D : u.includes('world') ? W : null)});
 const timers = []; global.setTimeout = (f, ms) => timers.push([ms / 1000, f]);
 const src = fs.readFileSync(path.join(root, 'game.js'), 'utf8').replace(/\nboot\(\);\s*$/, '\n');
+global.QuestCUI = require(path.join(root, 'quest/c-ui.js'));
 // M4 villagers: npcs.js is loaded like index.html does (global NPCS); init() replaces the fetch in NPCS.load
 const NPCS = global.NPCS = require(path.join(root, 'npcs.js'));
 const NPC_META = JSON.parse(fs.readFileSync(path.join(root, 'assets/px/npcs/meta.json')));
