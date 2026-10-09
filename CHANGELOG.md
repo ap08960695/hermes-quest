@@ -20,6 +20,8 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Known limitations
 
+- Menu: closing a task/hero detail opened from a collapsed Overview group after a poll evicts that entity may leave keyboard focus on the page body (P2, no data impact).
+
 - Live cursors retain session mana ledgers and task snapshot/delivery metadata
   only for the replay window plus one hour, or while active. Event high-water
   marks and unresolved deliveries are preserved; returning tasks receive their
