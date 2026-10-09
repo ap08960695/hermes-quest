@@ -328,9 +328,10 @@ def _tool_calls_sql(captain=False, json1=True):
 def _message_columns(captain=False, json1=True):
     # chars is a number only: the size of what the model wrote/received in this message
     # (content + tool-call arguments / tool result), used to estimate mana when Hermes
-    # recorded no token_count (assistant turns only). The prose itself never leaves SQLite.
+    # recorded no token_count. Tool results count once, separately from call arguments.
+    # Only lengths are projected; result prose is not fetched for mana.
     return ("session_id,role,tool_name,tool_call_id,timestamp,token_count,"
-            "CASE WHEN role='assistant' THEN coalesce(length(messages.content),0)"
+            "CASE WHEN role IN ('assistant','tool') THEN coalesce(length(messages.content),0)"
             "+coalesce(length(messages.tool_calls),0) ELSE 0 END AS chars,"
             "CASE WHEN role='tool' AND tool_name='terminal' THEN content END AS content,"
             + _tool_calls_sql(captain, json1) + " AS tool_calls")
@@ -382,6 +383,13 @@ def _decode(cursor):
                 not all(isinstance(e.get(k), (int, float)) for k in ('t', 'before', 'after'))
                 for e in compression_pending):
             raise ValueError()
+        for field in ('mana', 'mana_versions'):
+            totals = state.get(field, {})
+            if not isinstance(totals, dict) or any(
+                    not re.fullmatch(r'session-[0-9a-f]{20}', key) or
+                    isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 2 ** 53
+                    for key, value in totals.items()):
+                raise ValueError()
         return state
     except (ValueError, TypeError, AttributeError, zlib.error):
         raise ValueError('invalid Hermes Quest cursor') from None
@@ -425,7 +433,9 @@ def _snapshot(cfg, previous=None, t0=None):
     previous = previous or {}
     old = previous.get('marks', {})
     state = dict(v=1, marks=dict(old), runs={}, tasks={}, bots={}, pending=[],
-                 captain_pending={}, compression_pending=[])
+                 captain_pending={}, compression_pending=[],
+                 mana=dict(previous.get('mana', {})),
+                 mana_versions=dict(previous.get('mana_versions', {})))
     marks, events, tasks, task_keys = state['marks'], [], {}, {}
     home = Path(cfg['hermes_home'])
     captain = cfg['captain'] if cfg['captain'] != 'auto' else ''
@@ -462,7 +472,12 @@ def _snapshot(cfg, previous=None, t0=None):
                     **{key: {_opt_in_text(k): _opt_in_text(v) for k, v in cfg[key].items()}
                        for key in ('classes', 'regions', 'stage_regions')},
                     show_titles=cfg['show_titles'], source='live', mock=False,
-                    config_revision=_hash([cfg, captain]))
+                    config_revision=_hash([cfg, captain, 'mana-ledger-v1']))
+    if previous and 'mana' not in previous:
+        # Legacy cursors cannot reconstruct yesterday's evolving usage totals.
+        # The revision change makes the production client rebase before accepting
+        # any events, rather than guessing what it has already charged.
+        return dict(meta=meta(), tasks=[], bots=[], events=[], cursor=_cursor(previous))
     path = home / 'kanban.db'
     try:
         path.stat()
@@ -603,19 +618,15 @@ def _snapshot(cfg, previous=None, t0=None):
                 messages = s.execute(f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages WHERE session_id=? AND rowid>? AND rowid<=?' +
                                      (' AND timestamp>=?' if t0 is not None else '') + ' ORDER BY rowid',
                                      (sid, lower, message_hi) + ((t0,) if t0 is not None else ()))
-                usage = share = None
+                usage = None
                 if s.execute("SELECT 1 FROM sqlite_master WHERE name='session_model_usage'").fetchone():
                     usage = s.execute('SELECT sum(input_tokens+output_tokens) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
-                if usage:
-                    # Real session total, minus tokens Hermes already attributed to messages, spread
-                    # over the remaining messages in proportion to their size.
-                    known, guess = s.execute(
-                        "SELECT coalesce(sum(CASE WHEN token_count>0 THEN token_count END),0),"
-                        "coalesce(sum(CASE WHEN coalesce(token_count,0)<=0 AND role='assistant' "
-                        "THEN (coalesce(length(messages.content),0)+coalesce(length(messages.tool_calls),0)+3)/4 END),0) "
-                        "FROM messages WHERE session_id=? AND rowid<=?", (sid, message_hi)).fetchone()
-                    if guess > 0 and usage > known:
-                        share = (usage - known) / guess
+                # A cursor carries only hashed session IDs and numeric totals. Never
+                # reallocate already delivered message events when usage grows.
+                ledger = previous.get('mana', {}).get(source)
+                accounted = ledger if ledger is not None else 0
+                charged = 0
+                last_stamp = r['started_at']
                 for m in messages:
                     base = dict(t=m['timestamp'], task=tid, bot=prof)
                     sub = _hash(sid)[:6] if r['parent_session_id'] else None
@@ -647,14 +658,33 @@ def _snapshot(cfg, previous=None, t0=None):
                             emit(source, f'{m["seq"]}:hurt', dict(base, kind='hurt', code=int(fail.group(1))))
                         if passed:
                             emit(source, f'{m["seq"]}:tests', dict(base, kind='tests', passed=int(passed.group(1) or passed.group(2))))
-                    if m['role'] == 'assistant' and m['token_count']:
-                        emit(source, f'{m["seq"]}:mana', dict(base, kind='mana', tokens=m['token_count']))
-                    elif m['role'] == 'assistant' and not m['token_count'] and m['chars']:
-                        guess = -(-m['chars'] // 4)  # chars/4, rounded up
-                        emit(source, f'{m["seq"]}:mana', dict(
-                            base, kind='mana', estimated=True,
-                            tokens=max(1, round(guess * share)) if share else guess,
-                            basis='usage' if share else 'chars'))
+                    if m['role'] in ('assistant', 'tool'):
+                        last_stamp = max(last_stamp, m['timestamp'])
+                        if m['token_count'] and m['token_count'] > 0:
+                            charged += m['token_count']
+                            emit(source, f'{m["seq"]}:mana', dict(base, kind='mana', tokens=m['token_count']))
+                        elif not usage and m['chars']:
+                            guess = -(-m['chars'] // 4)
+                            charged += guess
+                            emit(source, f'{m["seq"]}:mana', dict(
+                                base, kind='mana', estimated=True, tokens=guess, basis='chars'))
+                if usage:
+                    # Append a signed reconciliation, never mutate an existing ID.
+                    # Negative deltas refund an earlier chars estimate when delayed
+                    # authoritative usage is smaller; clients retain these numeric
+                    # events in the ordinary append/dedup/replay stream.
+                    delta = usage - accounted - charged
+                    if delta:
+                        version = previous.get('mana_versions', {}).get(source, 0) + 1
+                        state['mana_versions'][source] = version
+                        emit(source, f'usage:{version}:{message_hi}:{accounted}:{usage}',
+                             dict(t=last_stamp if charged or not ledger else time.time(),
+                                  task=tid, bot=prof, kind='mana', tokens=delta,
+                                  estimated=True, basis='usage', correction=True))
+                    accounted = usage
+                else:
+                    accounted += charged
+                state['mana'][source] = accounted
                 if s.execute("SELECT 1 FROM sqlite_master WHERE name='session_model_usage'").fetchone():
                     tok = s.execute('SELECT coalesce(sum(input_tokens+output_tokens),0) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
                     tasks[tid]['tokens'] = tasks[tid].get('tokens', 0) + tok

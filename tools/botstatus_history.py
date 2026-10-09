@@ -5,8 +5,8 @@ The bot-status file written by Hermes is only ever opened for reading. Whenever 
 profile's status changes, one small JSON line is appended to a history file that
 lives in Hermes Quest's own data directory (default: <hermes_home>/hermes-quest/).
 Only an allowlist is stored: sequence, timestamp, profile ID, one of four status
-enums and, for failover, the two profile IDs. Reasons, account names, usage and
-tokens from the source file are never copied.
+enums and, for failover, the two profile IDs and a numeric comment identity.
+Reasons, account names, usage and tokens from the source file are never copied.
 
 Run once (cron):   python3 tools/botstatus_history.py [--config config.json]
 The dashboard plugin runs the same sample_once() every ~30 s while it is up.
@@ -26,6 +26,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import sys
 import time
 
@@ -47,6 +48,36 @@ STATE = 'state.json'
 LOCK = '.lock'
 MAX_STATUS_BYTES = 1024 * 1024
 MAX_BATCH = 500
+MAX_CONFIG_BYTES = MAX_STATUS_BYTES
+MAX_STATE_BYTES = MAX_STATUS_BYTES
+REASSIGN_RE = re.compile(r'^\[reassign-done\]\s+([\w-]{1,64})\s+->\s+([\w-]{1,64})\b')
+
+
+def _read_regular(path, cap, tail=False):
+    """Bounded nonblocking read; never open a source for writing or read a device."""
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError('not a regular file')
+        skipped = max(0, info.st_size - cap) if tail else 0
+        if not tail and info.st_size > cap:
+            raise ValueError('file too large')
+        if skipped:
+            os.lseek(fd, skipped, os.SEEK_SET)
+        chunks, remaining = [], cap if tail else cap + 1
+        while remaining:
+            chunk = os.read(fd, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b''.join(chunks)
+        if not tail and len(data) > cap:
+            raise ValueError('file too large')
+        return data, bool(skipped)
+    finally:
+        os.close(fd)
 
 
 def resolve_settings(cfg=None, env=None):
@@ -76,8 +107,7 @@ def load_settings(config_path=None, env=None):
     cfg = {}
     path = config_path or env.get('HERMES_QUEST_CONFIG')
     if path:
-        with open(os.path.expanduser(str(path)), encoding='utf-8') as f:
-            cfg = json.load(f)
+        cfg = json.loads(_read_regular(os.path.expanduser(str(path)), MAX_CONFIG_BYTES)[0])
     return resolve_settings(cfg, env)
 
 
@@ -93,7 +123,10 @@ def _lock(settings, shared, wait):
         return None
     path = Path(settings['history_dir']) / LOCK
     try:
-        fd = os.open(path, os.O_RDONLY if shared else os.O_RDWR | os.O_CREAT, 0o600)
+        fd = os.open(path, (os.O_RDONLY if shared else os.O_RDWR | os.O_CREAT) | os.O_NONBLOCK, 0o600)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            os.close(fd)
+            return None
     except OSError:
         return None
     deadline = time.monotonic() + wait
@@ -133,58 +166,54 @@ def _record(raw, known=None):
         to = raw.get('to')
         if not isinstance(to, str) or not PROFILE_RE.fullmatch(to) or to == profile:
             return None
-        return dict(seq=seq, ts=float(ts), type='failover', profile=profile, to=to)
+        rec = dict(seq=seq, ts=float(ts), type='failover', profile=profile, to=to)
+        cid = raw.get('comment_id')
+        if cid is not None:
+            if isinstance(cid, bool) or not isinstance(cid, int) or not 1 <= cid <= 2 ** 53:
+                return None
+            rec['comment_id'] = cid
+        return rec
     return None
 
 
-def read_records(settings):
-    """All valid records, oldest first, deduplicated by seq. Never writes."""
-    cap = settings['history_max_bytes'] * 2 + 65536
-    fd = _lock(settings, True, 0.5)
+def _read_records_unlocked(settings):
+    """Caller owns the lock; only newline-terminated records are committed."""
+    cap = settings['history_max_bytes'] * 2 + MAX_BATCH * 512 + 65536
     seen = {}
-    try:
-        for path in _files(settings):
+    for path in _files(settings):
+        try:
+            data, skipped = _read_regular(path, cap, tail=True)
+        except (OSError, ValueError):
+            continue
+        lines = data.split(b'\n')[:-1]
+        if skipped:
+            lines = lines[1:]
+        for line in lines:
             try:
-                with open(path, 'rb') as f:
-                    size = os.fstat(f.fileno()).st_size
-                    if size > cap:
-                        f.seek(size - cap)
-                    data = f.read(cap)
-            except OSError:
+                rec = _record(json.loads(line))
+            except (ValueError, RecursionError):
                 continue
-            lines = data.split(b'\n')
-            if size > cap:
-                lines = lines[1:]  # first line is a partial one
-            for line in lines:
-                try:
-                    rec = _record(json.loads(line))
-                except (ValueError, RecursionError):
-                    continue
-                if rec:
-                    seen.setdefault(rec['seq'], rec)
+            if rec:
+                seen.setdefault(rec['seq'], rec)
+    return [seen[k] for k in sorted(seen)]
+
+
+def read_records(settings):
+    """All valid committed records, oldest first. Never writes."""
+    fd = _lock(settings, True, 0.5)
+    if fd is None and fcntl is not None and (Path(settings['history_dir']) / LOCK).exists():
+        return []
+    try:
+        return _read_records_unlocked(settings)
     finally:
         _unlock(fd)
-    return [seen[k] for k in sorted(seen)]
 
 
 def read_status(path):
     """{profile: status} from the bot-status file, or None. Opens read-only."""
     try:
-        fd = os.open(path, os.O_RDONLY)
-    except OSError:
-        return None
-    try:
-        data = b''
-        while len(data) <= MAX_STATUS_BYTES:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            data += chunk
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
-    if len(data) > MAX_STATUS_BYTES:
+        data, _ = _read_regular(path, MAX_STATUS_BYTES)
+    except (OSError, ValueError):
         return None
     try:
         bots = json.loads(data).get('bots')
@@ -201,21 +230,26 @@ def read_status(path):
 
 
 def _load_state(settings):
-    directory = Path(settings['history_dir'])
+    """Reconcile a checkpoint with newer committed lines under the writer's lock."""
+    state = dict(last={}, seq=0, comment=None)
     try:
-        raw = json.loads((directory / STATE).read_text(encoding='utf-8'))
+        raw = json.loads(_read_regular(Path(settings['history_dir']) / STATE, MAX_STATE_BYTES)[0])
         last, seq, comment = raw['last'], raw['seq'], raw['comment']
         if raw.get('v') == 1 and isinstance(last, dict) and isinstance(seq, int) and not isinstance(seq, bool) \
-                and (comment is None or (isinstance(comment, int) and not isinstance(comment, bool))) \
+                and 0 <= seq <= 2 ** 53 \
+                and (comment is None or (isinstance(comment, int) and not isinstance(comment, bool)
+                                         and 0 <= comment <= 2 ** 53)) \
                 and all(isinstance(k, str) and PROFILE_RE.fullmatch(k) and v in STATUSES for k, v in last.items()):
-            return dict(last=dict(last), seq=seq, comment=comment)
+            state = dict(last=dict(last), seq=seq, comment=comment)
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
         pass
-    state = dict(last={}, seq=0, comment=None)  # rebuild from the history itself
-    for rec in read_records(settings):
+    checkpoint = state['seq']
+    for rec in _read_records_unlocked(settings):
         state['seq'] = max(state['seq'], rec['seq'])
-        if rec['type'] == 'status':
+        if rec['seq'] > checkpoint and rec['type'] == 'status':
             state['last'][rec['profile']] = rec['status']
+        if rec.get('comment_id') is not None:
+            state['comment'] = max(state['comment'] or 0, rec['comment_id'])
     return state
 
 
@@ -225,12 +259,46 @@ def _save_state(settings, state):
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, 'w', encoding='utf-8') as f:
         json.dump(dict(v=1, last=state['last'], seq=state['seq'], comment=state['comment']), f, separators=(',', ':'))
+        f.flush()
+        os.fsync(f.fileno())
     os.replace(tmp, directory / STATE)
+    _sync_directory(directory)
+
+
+def _sync_directory(directory):
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _repair_tail(settings):
+    path = Path(settings['history_dir']) / FILE
+    try:
+        data, skipped = _read_regular(path, settings['history_max_bytes'] * 2 + 65536, tail=True)
+    except FileNotFoundError:
+        return
+    if not data or data.endswith(b'\n'):
+        return
+    end = data.rfind(b'\n') + 1
+    # Refuse an oversized torn suffix rather than truncate unseen committed data.
+    fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+    try:
+        size = os.fstat(fd).st_size
+        if skipped and not end:
+            # A line longer than the bounded reader cannot be a valid history line.
+            raise ValueError('oversized unterminated history line')
+        os.ftruncate(fd, size - len(data) + end)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _failovers(settings, state, known):
-    """New [failover] comments as (ts, from, to). Reads kanban.db read-only,
-    prefix of the body only; only validated profile IDs ever leave this function."""
+    """New automatic failovers and committed Captain reassignments.
+    Return (comment ID, optional safe record); the caller checkpoints consumed rows.
+    Reads kanban.db read-only, and never returns comment text."""
     path = Path(settings['kanban_db'])
     if not path.exists():
         return []
@@ -242,20 +310,26 @@ def _failovers(settings, state, known):
             state['comment'] = db.execute('SELECT coalesce(max(id),0) FROM task_comments').fetchone()[0]
             return []
         rows = db.execute("SELECT id,created_at,substr(body,1,400) FROM task_comments WHERE id>? AND "
-                          "substr(body,1,10)='[failover]' ORDER BY id LIMIT 200", (state['comment'],)).fetchall()
+                          "(substr(body,1,10)='[failover]' OR substr(body,1,15)='[reassign-done]') "
+                          "ORDER BY id LIMIT 200", (state['comment'],)).fetchall()
     except sqlite3.Error:
         return []
     finally:
         if db is not None:
             db.close()
-    found = {}
+    found = []
     for cid, created, body in rows:
-        state['comment'] = max(state['comment'], cid)
-        match = FAILOVER_RE.match(body or '')
+        if isinstance(cid, bool) or not isinstance(cid, int) or not 1 <= cid <= 2 ** 53:
+            continue
+        match = FAILOVER_RE.match(body or '') or REASSIGN_RE.match(body or '')
+        rec = None
         if match and match[1] != match[2] and match[1] in known and match[2] in known \
-                and isinstance(created, (int, float)):
-            found.setdefault((match[1], match[2]), float(created))  # one record per pair per sample
-    return sorted((ts, a, b) for (a, b), ts in found.items())
+                and isinstance(created, (int, float)) and not isinstance(created, bool) \
+                and math.isfinite(created) and created > 0:
+            rec = dict(v=1, ts=float(created), type='failover', profile=match[1],
+                       to=match[2], comment_id=cid)
+        found.append((cid, rec))
+    return found
 
 
 def _rotate(settings):
@@ -293,33 +367,58 @@ def sample_once(settings, now=None):
         return dict(state='busy', written=0)
     try:
         state = _load_state(settings)
+        recovered = dict(last=dict(state['last']), seq=state['seq'], comment=state['comment'])
         pending = []  # (ts, record without seq)
         for name in sorted(status):
             new, since = status[name]
             old = state['last'].get(name)
             if old == new:
                 continue
-            state['last'][name] = new
             if old is None and new == 'active':
+                state['last'][name] = new
                 continue  # first sight of a healthy bot is a baseline, not an event
+            if len(pending) >= MAX_BATCH:
+                continue  # checkpoint only transitions we actually append
             ts = float(since) if isinstance(since, (int, float)) and not isinstance(since, bool) \
                 and math.isfinite(since) and now - 86400 <= since <= now else now
             pending.append(dict(v=1, ts=round(ts, 3), type='status', profile=name, status=new, prev=old))
-        for ts, a, b in _failovers(settings, state, set(status) | set(state['last'])):
-            pending.append(dict(v=1, ts=round(min(ts, now), 3), type='failover', profile=a, to=b))
-        pending = pending[:MAX_BATCH]
+        for cid, rec in _failovers(settings, state, set(status) | set(state['last'])):
+            if rec is not None:
+                if len(pending) >= MAX_BATCH:
+                    break  # never advance past an uncommitted comment
+                rec['ts'] = round(min(rec['ts'], now), 3)
+                pending.append(rec)
+            state['comment'] = cid
         lines = []
         for rec in pending:
             state['seq'] = max(state['seq'] + 1, int(now * 1000))
             lines.append(json.dumps(dict(rec, seq=state['seq']), separators=(',', ':')))
         if lines:
+            _repair_tail(settings)
+            base = directory / FILE
+            if base.exists() and base.stat().st_size >= settings['history_max_bytes']:
+                # Rotation may discard recovered-but-uncheckpointed lines. Commit
+                # their state first, never the still-unwritten pending batch.
+                _save_state(settings, recovered)
             _rotate(settings)
-            wfd = os.open(directory / FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+            wfd = os.open(directory / FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK, 0o600)
             try:
-                os.write(wfd, ('\n'.join(lines) + '\n').encode('utf-8'))
+                if not stat.S_ISREG(os.fstat(wfd).st_mode):
+                    raise ValueError('not a regular history file')
+                data = memoryview(('\n'.join(lines) + '\n').encode('utf-8'))
+                while data:
+                    count = os.write(wfd, data)
+                    if count <= 0:
+                        raise OSError('history write made no progress')
+                    data = data[count:]
+                os.fsync(wfd)
             finally:
                 os.close(wfd)
-        _save_state(settings, state)  # after the append: a crash can duplicate, never lose
+            _sync_directory(directory)
+            for rec in pending:
+                if rec['type'] == 'status':
+                    state['last'][rec['profile']] = rec['status']
+        _save_state(settings, state)  # recovery replays durable lines beyond this checkpoint
         return dict(state='ok', written=len(lines))
     finally:
         _unlock(fd)

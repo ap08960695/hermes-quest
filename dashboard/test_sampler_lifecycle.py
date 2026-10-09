@@ -128,6 +128,37 @@ def probe(name):
                 assert stop.is_set(), "host lifespan failed to signal shutdown"
                 assert not old.is_alive(), "host lifespan left sampler alive"
                 assert api._sampler["thread"] is None
+        elif name == "exit_teardown":
+            import atexit
+            with patch.object(api, "_history_settings", side_effect=benign):
+                api._ensure_sampler()
+                old, stop = api._sampler["thread"], api._sampler["stop"]
+                # Registered before the API hook, so LIFO executes our assertion
+                # after its teardown on ordinary isolated-host process exit.
+                def verify_exit():
+                    if not stop.is_set() or old.is_alive():
+                        os._exit(70)
+                atexit.unregister(api._stop_sampler)
+                atexit.register(verify_exit)
+                # Registering only when already present would mask the baseline;
+                # inspect the module's hook by re-importing, then use its worker.
+                fresh = load_api()
+                fresh._sampler = api._sampler
+        elif name == "real_history_lifespan":
+            source = home / "bot-status.json"
+            source.write_text(json.dumps({"bots": {"dev": {"status": "limited"}}}))
+            with patch.object(api, "_extract", return_value={"events": []}):
+                app = FastAPI()
+                app.include_router(api.router, prefix="/api/plugins/hermes-quest")
+                with TestClient(app) as client:
+                    assert client.get("/api/plugins/hermes-quest/events").status_code == 200
+                    history = home / "hermes-quest" / "botstatus-history.jsonl"
+                    assert wait_for(history.exists), "real sample never committed"
+                    old, stop = api._sampler["thread"], api._sampler["stop"]
+                assert stop.is_set() and not old.is_alive(), "real writer survived ASGI teardown"
+                before = (history.read_bytes(), history.stat().st_mtime_ns)
+                assert not any(t.name == "hermes-quest-botstatus" for t in threading.enumerate())
+                assert (history.read_bytes(), history.stat().st_mtime_ns) == before
         elif name == "slow_config":
             entered, release, responded = threading.Event(), threading.Event(), threading.Event()
             def settings(*args):
@@ -223,6 +254,8 @@ class SamplerLifecycleTests(unittest.TestCase):
     def test_disable_signals_existing_worker(self): self.run_probe("disabled")
     def test_start_during_stop_does_not_overlap(self): self.run_probe("stop_start_race")
     def test_included_router_shutdown(self): self.run_probe("lifespan")
+    def test_real_history_writer_stops_on_asgi_shutdown(self): self.run_probe("real_history_lifespan")
+    def test_request_only_host_process_exit_teardown(self): self.run_probe("exit_teardown")
     def test_slow_config_does_not_block_request(self): self.run_probe("slow_config")
     @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO required")
     def test_config_fifo_does_not_block_request(self): self.run_probe("fifo_config")

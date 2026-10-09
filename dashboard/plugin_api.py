@@ -7,6 +7,7 @@ legacy module-level argv handling and mutable globals cannot affect the host.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import atexit
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -110,8 +111,8 @@ def _sample_loop(module, settings, stop):
 
 
 def _sampler_worker(root, env, stop):
-    # Configuration I/O is off the request path. Until the history reader rejects
-    # special files, a stalled worker stays owned and cannot overlap a replacement.
+    # Configuration I/O is off the request path and rejects oversized / special
+    # files. A stalled worker stays owned until exit, never overlapping replacement.
     try:
         module, settings = _history_settings(root, env)
         if not stop.is_set():
@@ -136,6 +137,11 @@ def _stop_sampler() -> None:
         # A concurrent ensure may already have replaced a terminated worker.
         if _sampler["thread"] is thread and (thread is None or not thread.is_alive()):
             _sampler.update(key=None, thread=None, stop=None, state="idle")
+
+
+# Included routers receive ASGI teardown. Isolated request-only hosts that do
+# not dispatch lifespan still stop their worker on ordinary process shutdown.
+atexit.register(_stop_sampler)
 
 
 def _ensure_sampler() -> str:

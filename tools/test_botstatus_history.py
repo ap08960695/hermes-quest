@@ -296,8 +296,8 @@ class EstimatedManaTests(unittest.TestCase):
         self.s.commit()
         result = extract.build_replay(self.cfg, 12)
         estimated = [m for m in self.mana(result) if m.get('estimated')]
-        # Assistant turns only: the tool result is not counted; setUp's patch call has a real count.
-        self.assertEqual(len(estimated), 2)
+        # Each assistant / result message contributes its numeric size once.
+        self.assertEqual(len(estimated), 3)
         by = sorted(m['tokens'] for m in estimated)
         self.assertIn(19, by)  # 76 chars -> 19 tokens
         for m in estimated:
@@ -305,20 +305,18 @@ class EstimatedManaTests(unittest.TestCase):
             self.assertIs(m['estimated'], True)
             self.assertEqual(set(m) - {'t', 'task', 'bot', 'kind', 'tokens', 'estimated', 'basis', 'id'}, set())
         self.assertNotIn(marker, json.dumps(result))
-        c = self.s.execute("SELECT coalesce(length(content),0)+coalesce(length(tool_calls),0) FROM messages WHERE role='assistant' AND token_count IS NULL ORDER BY id").fetchall()
+        c = self.s.execute("SELECT coalesce(length(content),0)+coalesce(length(tool_calls),0) FROM messages WHERE role IN ('assistant','tool') AND token_count IS NULL ORDER BY id").fetchall()
         self.assertEqual(sorted(-(-r[0] // 4) for r in c if r[0]), by)
 
-    def test_session_usage_is_spread_by_size_and_marked(self):
-        # setUp: usage total 120, one message already carries 42 -> the rest share 78.
+    def test_session_usage_is_authoritative_and_marked(self):
+        # Real counts stay immutable; session remainder is one numeric adjustment.
         self.message('assistant', content='a' * 40)
         self.message('assistant', content='b' * 120)
         self.s.commit()
         mana = [m for m in self.mana(extract.build_replay(self.cfg, 12)) if m.get('estimated')]
         self.assertEqual({m['basis'] for m in mana}, {'usage'})
-        total = sum(m['tokens'] for m in mana)
-        self.assertLessEqual(abs(total - 78), len(mana))  # rounding only
-        small, large = sorted(m['tokens'] for m in mana)[:2][0], max(m['tokens'] for m in mana)
-        self.assertGreater(large, small * 2)
+        self.assertEqual(sum(m['tokens'] for m in mana), 78)
+        self.assertTrue(all(m['correction'] for m in mana))
 
     def test_empty_messages_and_zero_counts_emit_nothing_and_are_incremental(self):
         self.s.execute('DROP TABLE session_model_usage')
