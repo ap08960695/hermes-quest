@@ -307,6 +307,26 @@ async function runLiveStale(browser,base) {
       await page.click('#menu-toggle');await page.click('#group-overview > summary');
       check((await page.locator('#live-detail').textContent()).includes('Last successful update'),'Overview lacks stale detail');
       await page.click('#menu-toggle');await poll('ok');
+      // Mixed error kinds (F1): once stale, a different failure kind keeps the warning + last update and never announces "resumed".
+      for(const seqn of [[422,503],[401,'network'],[422,503,500,'network']]){
+        await poll('ok');
+        for(const failure of seqn){
+          await poll(failure);v=await view();
+          check(v.issues==='Live paused · not updating'&&/^Last update \d\d:\d\d · /.test(v.note||''),'mixed '+seqn+' dropped warning at '+failure+': '+JSON.stringify(v));
+          check(!/resumed/i.test(v.announce),'resumed announced on failed poll after '+failure+': '+v.announce);
+          check(v.menuClosed&&v.fits&&!v.overflow,'mixed layout at '+width);
+        }
+        await poll('ok');v=await view();
+        check(!v.issues&&!v.note&&v.announce==='Live updates resumed.','200 did not resume after '+seqn+': '+JSON.stringify(v));
+      }
+      // 4xx -> failure -> 200, and a fresh transient run after recovery is quiet for 1-2 failures, stale on the 3rd.
+      await poll(404);await poll(503);v=await view();
+      check(v.issues==='Live paused · not updating'&&!/resumed/i.test(v.announce),'4xx->503 lost warning: '+JSON.stringify(v));
+      await poll('ok');await poll(503);v=await view();
+      check(v.issues==='Offline'&&!v.note,'fresh transient 1 not quiet: '+JSON.stringify(v));
+      await poll(500);v=await view();check(v.issues==='Offline'&&!v.note,'fresh transient 2 not quiet');
+      await poll('network');v=await view();check(/^Live paused/.test(v.issues||'')&&!!v.note,'fresh transient 3 not stale');
+      await poll('ok');
       // Hidden-tab behaviour is unchanged: no poll and no scheduling while hidden.
       const hidden=await page.evaluate(async()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
         clearTimeout(pollTimer);pollTimer=null;const f=pollFailures;await pollEvents();return {f,after:pollFailures,timer:pollTimer};});

@@ -43,7 +43,7 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
 
   // Transient failures stay "Offline" until the third consecutive one.
   for (const failure of [503, 'network', 500]) {
-    run('pollFailures = 0');
+    run('pollFailures = 0; pollStale = false');
     assert.equal((await poll(failure)).state, 'offline', 'failure 1');
     assert.equal((await poll(failure)).state, 'offline', 'failure 2');
     last = await poll(failure);
@@ -64,9 +64,45 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
     assert.equal((await poll('ok')).state, 'online');
   }
 
+  // Mixed error kinds: once the warning is up, a different failure kind must neither drop it nor change the
+  // last-update time, and "resumed" is only for a real success (F1: 200 -> 422 -> 503 used to fall back to Offline).
+  const announce = () => run("document.querySelector('#live-announce').textContent");
+  for (const sequence of [[422, 503], [401, 'network'], [422, 503, 500, 'network', 404], [503, 503, 503, 422, 503, 'network']]) {
+    run('pollFailures = 0; pollStale = false');
+    await poll('ok');
+    const lastOk = run('lastPollOk');
+    let stale = false;
+    for (const failure of sequence) {
+      last = await poll(failure);
+      const client = typeof failure === 'number' && failure >= 400 && failure < 500;
+      stale = stale || client || run('pollFailures') >= 3;
+      assert.equal(last.state, stale ? 'stale' : 'offline', `after ${failure} in ${sequence}`);
+      if (stale) {
+        assert.equal(run('lastPollOk'), lastOk, 'last good time must not move on failure');
+        assert(/^Live paused · not updating · last update \d\d:\d\d · /.test(last.text), last.text);
+        assert(!/resumed/.test(announce()), 'resumed announced on a failed poll: ' + announce());
+      }
+    }
+    assert.equal(last.state, 'stale');
+    assert.equal((await poll('ok')).state, 'online');
+    assert.equal(announce(), 'Live updates resumed.');
+    // After the success, transient failures start a fresh count: 1-2 quiet, 3rd stale.
+    assert.equal((await poll(503)).state, 'offline');
+    assert.equal((await poll(500)).state, 'offline');
+    assert.equal((await poll('network')).state, 'stale');
+    await poll('ok');
+  }
+  // 4xx -> failure -> 200: warning persists through the failure, one 200 clears it.
+  run('pollFailures = 0; pollStale = false');
+  assert.equal((await poll(404)).state, 'stale');
+  assert.equal((await poll(503)).state, 'stale');
+  assert.equal((await poll(401)).extra.reason, 'sign-in needed');
+  assert.equal((await poll('ok')).state, 'online');
+  assert.equal(run('pollStale'), false);
+
   // Nothing internal leaks: no payload, cursor, URL, status text or API path.
   for (const failure of [422, 401, 'network', 503]) {
-    run('pollFailures = 5');
+    run('pollFailures = 5; pollStale = false');
     last = await poll(failure);
     const shown = JSON.stringify(last);
     for (const bad of ['CANARY', 'cursor', 'events?', '/api/', 'http', 'HTTP ', 'c' + seq + ' ']) assert(!shown.includes(bad), `leaked ${bad} in ${shown}`);
@@ -74,14 +110,14 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
   await poll('ok');
 
   // A live view that never succeeded says so instead of inventing a time.
-  run('lastPollOk = null; pollFailures = 0');
+  run('lastPollOk = null; pollFailures = 0; pollStale = false');
   last = await poll(422);
   assert.match(last.text, /no update yet/);
   assert.equal(last.extra.updated, null);
   await poll('ok');
 
   // Failure handling never touches the scene, playhead, speed, camera or cursor.
-  run('pollFailures = 0');
+  run('pollFailures = 0; pollStale = false');
   const cursorBefore = run('cursor');
   await poll(422); await poll('network'); await poll(503);
   assert.equal(run('cursor'), cursorBefore, 'cursor must not advance on failure');

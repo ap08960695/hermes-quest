@@ -313,7 +313,7 @@
     // Polite announcement on the transitions only, so repeated failed polls never re-announce.
     const say=$('#live-announce');
     if(say&&state==='stale'&&was!=='stale')say.textContent='Live paused. Not updating. '+(staleInfo.updated?'Last update '+staleInfo.updated+'. ':'')+'Reason: '+staleInfo.reason+'.';
-    else if(say&&was==='stale'&&state!=='stale')say.textContent='Live updates resumed.';
+    else if(say&&was==='stale'&&(state==='online'||state==='snapshot'))say.textContent='Live updates resumed.'; // only a real successful poll; never on another failure
     else if(say&&state!=='stale')say.textContent='';
     if(was==='stale'||state==='stale')bounds();
     if(overviewData)overview(overviewData);

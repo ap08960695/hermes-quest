@@ -48,7 +48,7 @@ const eventKeys = new Set();
 const HISTORY_LIMIT = 2000, METADATA_LIMIT = 256, TRANSPORT_MS = 35000;
 let checkpoint = null, pollBusy = false, privacyPending = false;
 // Live health: consecutive failed polls and the last time a fetch fully succeeded (ms). UI-only; never read by the scene.
-let pollFailures = 0, lastPollOk = null;
+let pollFailures = 0, lastPollOk = null, pollStale = false;
 const cloneState = v => JSON.parse(JSON.stringify(v));
 class HistoryExpired extends Error {}
 class IdentityChanged extends HistoryExpired {}
@@ -248,7 +248,9 @@ function mergeDelta(delta) {
 function pollFailed(e) {
   pollFailures++;
   const status = Number.isInteger(e?.status) ? e.status : 0, client = status >= 400 && status < 500;
-  if (pollFailures < 3 && !client) { connection('Offline · retrying in 10s', 'offline'); return; }
+  // Once the warning is up it stays up (with the latest reason) until a poll really succeeds: a different failure kind must not downgrade it.
+  if (!pollStale && pollFailures < 3 && !client) { connection('Offline · retrying in 10s', 'offline'); return; }
+  pollStale = true;
   const reason = status === 401 || status === 403 ? 'sign-in needed' : client ? 'server rejected' : status >= 500 ? 'server error'
     : e?.name === 'TypeError' || e?.message === 'Transport timeout' ? 'offline' : 'update failed';
   const updated = lastPollOk === null ? null : new Date(lastPollOk).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
@@ -287,7 +289,7 @@ async function pollEvents() {
       else if (animate) loadReplay(replay, {t: playhead, keys: pending});
       else { loadReplay(replay); reset(playhead); }
     }
-    pollFailures = 0; lastPollOk = Date.now();
+    pollFailures = 0; pollStale = false; lastPollOk = Date.now();
     connection(delta.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', delta.state === 'legacy-fallback' ? 'snapshot' : 'online');
   } catch (e) { pollFailed(e); }
   finally {
@@ -324,7 +326,7 @@ async function boot() {
   if (UI) UI.mode(D.meta.source === 'demo' ? 'DEMO' : liveFeed ? 'LIVE' : 'REPLAY');
   ui();
   if (liveFeed) {
-    goLive(); pollFailures = 0; lastPollOk = Date.now();
+    goLive(); pollFailures = 0; pollStale = false; lastPollOk = Date.now();
     connection(D.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', D.state === 'legacy-fallback' ? 'snapshot' : 'online');
     if (!document.hidden) pollTimer = setTimeout(pollEvents, 10000);
   } else { reset(D.meta.from_); connection('Replay file', 'file'); }
