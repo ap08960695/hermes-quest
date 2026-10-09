@@ -363,6 +363,10 @@ def _hash(value):
 
 
 def _session_key(cfg):
+    return _session_key_state(cfg)[0]
+
+
+def _session_key_state(cfg):
     """Read only: the API owns provisioning; absent/unsafe keys close identity."""
     directory = Path(cfg.get('history_dir') or Path(cfg['hermes_home']) / 'hermes-quest').expanduser()
     fd = directory_fd = None
@@ -373,11 +377,13 @@ def _session_key(cfg):
         info = os.fstat(fd)
         if (not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) != 0o600
                 or info.st_uid != os.getuid() or info.st_size != 32):
-            return None
+            return None, 'key_unsafe'
         key = os.read(fd, 33)
-        return key if len(key) == 32 else None
+        return (key, None) if len(key) == 32 else (None, 'key_unsafe')
+    except FileNotFoundError:
+        return None, 'key_missing'
     except (OSError, AttributeError):
-        return None
+        return None, 'key_unsafe'
     finally:
         if fd is not None:
             os.close(fd)
@@ -578,7 +584,8 @@ def _bot(prof, cfg, captain, entity_type='profile', availability=None, commenter
 def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     previous = previous or {}
     hours = window_hours if window_hours is not None else previous.get('window_hours', 12)
-    session_key = _session_key(cfg)
+    session_key, key_reason = _session_key_state(cfg)
+    session_data = dict(status='available' if session_key else 'unavailable', reason=key_reason)
     identity = _session_digest(session_key, '', 'identity-epoch')[:20] if session_key else None
     if previous and (previous.get('identity') != identity or 'identity' not in previous):
         # One authoritative window reset. The client checks config_revision before
@@ -640,7 +647,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         # Legacy cursors cannot reconstruct yesterday's evolving usage totals.
         # The revision change makes the production client rebase before accepting
         # any events, rather than guessing what it has already charged.
-        return dict(meta=meta(), tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous))
+        return dict(meta=meta(), session_data=session_data, tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous))
     path = home / 'kanban.db'
     try:
         path.stat()
@@ -649,7 +656,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
             raise  # A broken configured source is not an absent database.
         # No board means no live observations. Preserve an existing cursor so a
         # temporarily absent source cannot acknowledge rows or duplicate recovery.
-        return dict(meta=meta(), tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous or state))
+        return dict(meta=meta(), session_data=session_data, tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous or state))
     def emit(source, seq, event):
         event['id'] = 'e_' + _hash([source, seq])
         if t0 is None or event['t'] >= t0:
@@ -1064,7 +1071,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     state['delivered'] = sorted((delivered | {task_keys[t['id']] for t in changed_tasks}) & set(state['tasks']))
     events = safe(events)
     events.sort(key=lambda e: (e['t'], e['id']))
-    return dict(meta=meta(), tasks=changed_tasks, bots=changed_bots,
+    return dict(meta=meta(), session_data=session_data, tasks=changed_tasks, bots=changed_bots,
                 sessions=safe(list(session_entities.values())), events=events, cursor=_cursor(state))
 
 

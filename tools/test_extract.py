@@ -775,6 +775,7 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.assertEqual(len(delta['events']), len({e['id'] for e in delta['events']}))
         self.assertEqual(extract.collect_since(self.cfg, delta['cursor']),
                          dict(meta=delta['meta'], events=[], tasks=[], bots=[],
+                              session_data={'status': 'available', 'reason': None},
                               sessions=delta['sessions'], cursor=delta['cursor']))
         # Reusing the same cursor gives the same delta (retry-safe).
         self.assertEqual(extract.collect_since(self.cfg, initial['cursor']), delta)

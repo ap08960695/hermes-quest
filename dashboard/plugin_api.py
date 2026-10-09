@@ -87,7 +87,7 @@ print(json.dumps(payload, ensure_ascii=False, allow_nan=False))
 
 
 def _extract(mode: str, value: str, show_profile_names: bool = False) -> dict:
-    _ensure_session_key()  # plugin state only, before the read-only subprocess
+    provision_failure = _ensure_session_key()  # plugin state only, before the read-only subprocess
     try:
         result = subprocess.run(
             [sys.executable, "-c", _EXTRACT, str(ROOT / "tools" / "extract.py"), mode, value,
@@ -98,6 +98,10 @@ def _extract(mode: str, value: str, show_profile_names: bool = False) -> dict:
         payload = json.loads(result.stdout)
         if not isinstance(payload, dict):
             raise ValueError("Invalid extractor payload")
+        # The read-only extractor is authoritative about the key it actually used.
+        # Provisioning diagnostics are additive, never identity/cursor inputs.
+        if provision_failure and payload.get('session_data', {}).get('status') == 'unavailable':
+            payload['session_data']['reason'] = provision_failure
         return payload
     except (OSError, subprocess.SubprocessError, ValueError):
         # Do not expose stderr: it can contain private paths, DB details, or data.
@@ -114,7 +118,7 @@ def _history_settings(root=None, env=None):
     return module, module.load_settings(env.get("HERMES_QUEST_CONFIG") or None, env=env)
 
 
-def _ensure_session_key() -> None:
+def _ensure_session_key() -> str | None:
     """Publish one complete private key; never replace an existing (even bad) key.
 
     Lock the state directory across processes. O_EXCL staging plus rename prevents
@@ -124,12 +128,12 @@ def _ensure_session_key() -> None:
     directory_fd = fd = None
     temporary = None
     if fcntl is None:
-        return
+        return 'key_provision_failed'
     try:
         _, settings = _history_settings()
         directory = Path(settings['history_dir'])
         if directory.resolve().is_relative_to(ROOT):
-            return  # private state must never be provisioned inside the checkout
+            return 'key_provision_failed'  # private state must never be provisioned inside the checkout
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
         fcntl.flock(directory_fd, fcntl.LOCK_EX)
@@ -155,7 +159,7 @@ def _ensure_session_key() -> None:
         temporary = None
         os.fsync(directory_fd)
     except (OSError, ValueError, TypeError, AttributeError):
-        pass  # never log the key or private paths; read-only extractor fails closed
+        return 'key_provision_failed'  # never log the key or private paths
     finally:
         if fd is not None:
             os.close(fd)

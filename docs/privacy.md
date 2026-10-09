@@ -70,6 +70,8 @@ tool/mana/summon/compression events and their ledgers are suppressed, rather tha
 falling back to a guessable hash. Repair permissions/ownership or restore a private
 backup; an intentional key replacement changes identity, not authentication.
 
+Both `/replay` and `/events` include top-level `session_data: {"status": "available", "reason": null}` when the private key is usable, or `{"status": "unavailable", "reason": "key_missing" | "key_unsafe" | "key_provision_failed"}` when it is missing, rejected by the reader, or could not be provisioned. This additive machine-readable diagnostic contains no key, path or raw session ID; HTTP 200 and board data remain usable, bot availability still reflects its own observations, refs stay null and session-derived events/ledgers stay suppressed while unavailable. An empty activity list is therefore not proof of inactivity. The field itself does not change `config_revision` or cursor encoding/state; the existing identity reset on key loss/restoration still applies. Older clients may ignore the diagnostic; displaying a degraded-state warning is a separate renderer change.
+
 The identity scheme and a keyed epoch tag participate in `config_revision`. Legacy
 JSON/compact cursors still decode, but pre-HMAC cursors, key rotation or key
 loss/restoration reset the retained replay window once. Old pending/ledger hashes
