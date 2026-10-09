@@ -27,16 +27,15 @@
   }
   function control(selector,id,label,state='normal') {paint($(selector),iconImage(id,state),label+' '+state);}
   function number(selector,text,label) {paint($(selector),numericImage(text),label+': '+text);}
+  const visible=el=>el&&!el.hidden&&getComputedStyle(el).display!=='none'&&(!el.getClientRects||el.getClientRects().length>0);
   function bounds() {
-    reserved=['#hud','#tag','#camp','#chron','#quest','#help','#clock','#scrub'].map($).filter(el=>el&&!el.hidden&&getComputedStyle(el).display!=='none')
-      .map(el=>el.getBoundingClientRect()).map(r=>({left:r.left-4,top:r.top-4,right:r.right+4,bottom:r.bottom+4}));
-    const fixed=['#hud','#tag','#help','#clock','#scrub'].map(s=>$(s).getBoundingClientRect());
+    const fixed=['#focus-bar','#menu','#quest'].map($).filter(visible).map(el=>el.getBoundingClientRect());
+    reserved=fixed.map(r=>({left:r.left-4,top:r.top-4,right:r.right+4,bottom:r.bottom+4}));
     const outer=fixed.filter((r,i)=>!fixed.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
     budget=Math.max(0,innerWidth*innerHeight*(innerWidth<=760||innerHeight<=500?.25:.2)-outer.reduce((n,r)=>n+r.width*r.height,0));
   }
   function resize() {
-    grid=Math.ceil(root.devicePixelRatio||1);
-    const hud=$('#hud');document.documentElement.style.setProperty('--hud-height',hud.getBoundingClientRect().height+'px');bounds();
+    grid=Math.ceil(root.devicePixelRatio||1);bounds();
   }
   function clear() {bounds();drawn=[];slot=0;used=0;}
   function flush() {for(let i=slot;i<slots.length;i++)slots[i].hidden=true;}
@@ -103,8 +102,13 @@
       c.setAttribute('aria-hidden','true');row.append(c);accessible.textContent=meanings+' — Detail font unavailable';row.setAttribute('role','status');
     }
   }
-  function close() {$('#quest').hidden=true;bounds();}
+  let returnFocus=null;
+  function close() {
+    const wasOpen=!$('#quest').hidden;$('#quest').hidden=true;bounds();
+    if(wasOpen)(visible(returnFocus)?returnFocus:$('#menu-toggle')).focus();
+  }
   function detail(lines,label='Details') {
+    if($('#quest').hidden)returnFocus=document.activeElement;
     const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);
     const button=document.createElement('button');button.className='close';button.setAttribute('aria-label','Close');
     button.append(iconImage('close').cloneNode(true)); // Canvas pixels do not clone; paint explicitly below.
@@ -112,18 +116,78 @@
     const content=document.createElement('div');content.className='detail-content';el.append(content);
     for(const text of lines)line(content,text);bounds();button.focus();
   }
+  const groups=['playback','overview','world','settings'], preferenceKey='quest-menu-v1';
+  let overviewKey='', overviewData=null, lastFeed=[], lastCamps=[], allFeed=false, allCamps=false;
+  let connectionState='loading', connectionText='Loading…', sourceMode='Loading';
+  function savePreference() {
+    const value={menu:!$('#menu').hidden,groups:Object.fromEntries(groups.map(id=>[id,!!$('#group-'+id).open]))};
+    try {root.localStorage.setItem(preferenceKey,JSON.stringify(value));} catch (_) { /* Storage is optional. */ }
+  }
+  function menu(open,restoreFocus=false) {
+    $('#menu').hidden=!open;$('#menu-toggle').setAttribute('aria-expanded',String(open));
+    $('#menu-toggle').setAttribute('aria-label',open?'Close menu':'Menu');
+    savePreference();bounds();
+    if(!open&&restoreFocus)$('#menu-toggle').focus();
+    if(open&&overviewData)overview(overviewData);
+  }
+  function button(parent,label,action) {
+    const b=document.createElement('button');b.className='text-button';b.textContent=label;b.setAttribute('aria-label',label);b.onclick=action;parent.append(b);return b;
+  }
+  function itemList(selector,rows,empty,all=false) {
+    const el=$(selector);el.replaceChildren();
+    if(!rows.length){const p=document.createElement('p');p.textContent=empty;el.append(p);return;}
+    for(const row of rows.slice(0,all?rows.length:3)){
+      const entry=document.createElement('div');entry.className='item-summary';const text=document.createElement('span');
+      text.textContent=row.summary;entry.append(text);button(entry,'Details',row.details);el.append(entry);
+    }
+  }
+  function overview(data) {
+    overviewData=data;
+    const issueCount=data.blocked+data.errors.length;
+    const badge=$('#issues');badge.hidden=!issueCount&&connectionState!=='offline'&&connectionState!=='snapshot';
+    const label=[data.blocked?data.blocked+' blocked':null,data.errors.length?data.errors.length+' issues':null,
+      connectionState==='offline'?'Offline':connectionState==='snapshot'?'Snapshot':null].filter(Boolean).join(' · ');
+    badge.textContent=label;badge.setAttribute('aria-label',label||'No observed issues');
+    badge.onclick=()=>detail([data.blocked+' tasks blocked',...data.errors,
+      ...(connectionState==='offline'||connectionState==='snapshot'?[connectionText]:[]),
+      ...data.tasks.filter(t=>t.blocked).map(t=>t.summary),'Open Overview for permitted task details.'],'Issues');
+    $('#overview-summary').textContent=data.summary;
+    if($('#menu').hidden||!$('#group-overview').open)return;
+    const key=JSON.stringify([data.summary,data.tasks.map(t=>[t.key,t.summary]),data.heroes.map(h=>[h.key,h.summary])]);
+    if(key===overviewKey)return;overviewKey=key;
+    itemList('#tasks-list',data.tasks,data.empty);itemList('#heroes-list',data.heroes,'No heroes in this replay range');
+    $('#tasks-all').onclick=()=>{detail(['Tasks in the loaded replay range and retained history'],'All tasks');itemList('#quest .detail-content',overviewData.tasks,overviewData.empty,true);};
+    $('#heroes-all').onclick=()=>{detail(['Heroes in the loaded replay range and retained history'],'All heroes');itemList('#quest .detail-content',overviewData.heroes,'No heroes in this replay range',true);};
+  }
+  function playback(text) {$('#playback-summary').textContent=text;}
+  function mode(text) {
+    sourceMode=text;
+    const connectionLabel={loading:'Loading',online:'Connected',snapshot:'Snapshot',offline:'Offline',file:'Replay'}[connectionState]||'Unknown';
+    $('#mode').textContent=text+(text==='DEMO'&&connectionState==='file'?'':' · '+connectionLabel);
+    $('#mode').setAttribute('aria-label',text+' data source · '+connectionLabel);
+  }
   function privacy() {
-    epoch++;T.clearCache();numbers.clear();feedKey='';campKey='';close();$('#quest').replaceChildren();
+    epoch++;T.clearCache();numbers.clear();feedKey='';campKey='';overviewKey='';overviewData=null;lastFeed=[];lastCamps=[];
+    close();$('#quest').replaceChildren();$('#tasks-list').replaceChildren();$('#heroes-list').replaceChildren();
+    $('#overview-summary').textContent='Loading activity…';$('#issues').hidden=true;$('#issues').onclick=null;
+    $('#tasks-all').onclick=$('#heroes-all').onclick=null;
     $('#feed').replaceChildren();$('#camps').replaceChildren();clear();flush();
   }
   function drawer(which) {
-    const el=$('#'+which), open=el.hidden;$('#camp').hidden=true;$('#chron').hidden=true;el.hidden=!open;bounds();return open;
+    const el=$('#'+which), open=el.hidden;menu(true);$('#group-overview').open=true;
+    el.hidden=!open;savePreference();bounds();return open;
   }
   let feedKey='',campKey='';
   function feed(entries) {
-    if($('#chron').hidden)return;
-    const key=JSON.stringify(entries);if(key===feedKey)return;feedKey=key;const el=$('#feed');el.replaceChildren();
-    for(const f of entries.slice(0,40))line(el,f.text);
+    lastFeed=entries;if($('#chron').hidden)return;
+    const filter=$('#feed-filter').value||'all',issue=f=>f.issue===true||/⛓|💀|💥|Blocked|Failed|Unavailable/i.test(f.text);
+    const selected=entries.filter(f=>filter==='all'||(filter==='issues'?issue(f):!issue(f)));
+    const key=JSON.stringify([selected,allFeed,filter]);if(key===feedKey)return;feedKey=key;const el=$('#feed');el.replaceChildren();
+    const shown=selected.slice(0,allFeed?selected.length:5);
+    if(!shown.length)line(el,'No activity matching this filter in retained history');
+    for(const f of shown){const row=document.createElement('section');el.append(row);line(row,f.text);
+      button(row,'Details',()=>detail([f.detailText||f.text,'Activity from the current retained replay history'],'Activity details'));}
+    $('#feed-all').textContent=allFeed?'Show latest activity':'View all activity';
   }
   function campaignCount(parent,value) {
     const text=plain(value), match=/^(\d+)\/(\d+)(?:\s+(?:quests|เควส))?(?:\s*(?:·\s*)?⚔\uFE0F?\s*(\d+))?$/.exec(text);
@@ -138,15 +202,18 @@
     paint(row,im,text.replace(/เควส/g,'quests').split(symbolPattern).map(part=>symbol(part)?.[1]||part).join(' '));
   }
   function camps(rows) {
-    if($('#camp').hidden)return;
-    const key=JSON.stringify(rows);if(key===campKey)return;campKey=key;const el=$('#camps');el.replaceChildren();
-    for(const r of rows.slice(0,8)) {
+    lastCamps=rows;if($('#camp').hidden)return;
+    const key=JSON.stringify([rows,allCamps]);if(key===campKey)return;campKey=key;const el=$('#camps');el.replaceChildren();
+    if(!rows.length)line(el,'No campaigns in this replay range');
+    for(const r of rows.slice(0,allCamps?rows.length:3)) {
       const section=document.createElement('section');section.className='campaign';el.append(section);
       line(section,r.title);campaignCount(section,r.count);
       const pips=document.createElement('div');pips.className='pips';section.append(pips);
       for(const p of r.stages){const c=document.createElement('canvas');c.width=c.height=36;c.setAttribute('role','img');c.setAttribute('aria-label',p.id+' '+p.state);c.getContext('2d').drawImage(iconImage(p.id,p.state),0,0);pips.append(c);}
       if(r.blocked)line(section,r.blocked);
+      button(section,'Details',()=>detail([r.title,r.count,...r.stages.map(p=>p.id+' '+p.state),r.blocked||'No blocked tasks observed'],'Campaign details'));
     }
+    $('#camps-all').textContent=allCamps?'Show recent campaigns':'View all campaigns';
   }
   function resources(values,ledger={}) {
     const el=$('#mana');
@@ -168,7 +235,18 @@
       paint(box.querySelector('.percentage'),numericImage(n+'%'),label);box.querySelector('b').style.width=n+'%';
     }
   }
-  function status(text,state) {control('#connection',({online:'connected',file:'snapshot'})[state]||state,text,state==='offline'?'alert':'normal');}
+  function status(text,state) {
+    connectionState=state;connectionText=text;mode(sourceMode);
+    control('#connection',({online:'connected',file:'snapshot'})[state]||state,text,state==='offline'?'alert':'normal');
+    $('#connection').title=text;
+    $('#connection').onclick=()=>detail([sourceMode+' data source',connectionText,
+      'Playback and live-follow are separate from connection status.','Live updates poll about every 10 seconds while this browser page is visible.'],'Connection details');
+    if(overviewData)overview(overviewData);
+    else if(state==='offline'||state==='snapshot'){
+      $('#issues').hidden=false;$('#issues').textContent=state==='offline'?'Offline':'Snapshot';
+      $('#issues').setAttribute('aria-label',text);$('#issues').onclick=$('#connection').onclick;
+    }
+  }
   function legend() {
     const labels={'play':'Play','pause':'Pause','live-follow':'Follow live','speed':'Speed 30 / 120 / 600','clock':'Replay time','scrub-start':'History start','scrub-end':'Latest','world':'Map','calm':'Reduce motion and flashes','quests':'Quests','log':'Log','close':'Close','info':'Help','demo':'Simulated data','connected':'Connected','offline':'Disconnected','snapshot':'History snapshot','loading':'Loading','mana-claude':'Claude resources','mana-codex':'Codex resources','mana-gemini':'Gemini resources','heart':'Hero HP unavailable','mana':'Simulated mana, not a real quota','level':'Effect level from effort, not EXP','coin':'Completed quests','plan':'Plan','build':'Build','test':'Test','review':'Review','deploy':'Deploy','verify':'Verify results','chain':'Blocked or waiting for a dependency','sleep':'Rest','sword':'Attack from work activity','crit':'Critical attack effect','read':'Read','search':'Search','vision':'View image','write':'Write','memory':'Memory','message':'Message','delegate':'Delegate','commit':'Commit work','push':'Push work','merge':'Merge work','compress':'Compress context'};
     detail([], 'Icon help');const content=$('#quest .detail-content');
@@ -184,10 +262,29 @@
     control('#world','world','Map');control('#calm','calm','Reduce effects');control('#quests','quests','Quests');control('#log','log','Log');
     control('#help','info','Help');control('#live','live-follow','Follow live');
     for(const id of ['camp','chron']){const b=$('#'+id+'-close');paint(b,iconImage('close'),'Close');b.onclick=()=>{$('#'+id).hidden=true;bounds();};}
-    $('#help').onclick=legend;
-    document.addEventListener('keydown',e=>{if(e.key==='Escape'){close();$('#camp').hidden=true;$('#chron').hidden=true;bounds();}});
+    $('#help').onclick=legend;$('#world-help').onclick=legend;
+    $('#menu-toggle').onclick=()=>menu($('#menu').hidden,!$('#menu').hidden);
+    $('#hide-panels').onclick=()=>menu(false,true);
+    $('#feed-filter').onchange=()=>feed(lastFeed);
+    $('#feed-all').onclick=()=>{allFeed=!allFeed;feed(lastFeed);};
+    $('#camps-all').onclick=()=>{allCamps=!allCamps;camps(lastCamps);};
+    let saved={};try {saved=JSON.parse(root.localStorage.getItem(preferenceKey))||{};} catch (_) { /* Default canvas-first. */ }
+    for(const id of groups){const group=$('#group-'+id);group.open=saved.groups?.[id]===true;
+      group.ontoggle=()=>{savePreference();bounds();if(overviewData)overview(overviewData);};}
+    menu(saved.menu===true);
+    document.addEventListener('keydown',e=>{
+      if(e.key==='Escape'){
+        if(!$('#quest').hidden)close();else menu(false,true);
+        e.preventDefault();bounds();
+      } else if(e.key==='Tab'&&!$('#quest').hidden&&$('#quest').querySelectorAll){
+        const targets=Array.from($('#quest').querySelectorAll('button,input,select,a[href],[tabindex="0"]')).filter(visible);
+        const first=targets[0],last=targets[targets.length-1];
+        if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+        else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+      }
+    });
     addEventListener('resize',resize);resize();
   }
-  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,control,number,resources,status,detail,close,privacy,drawer,feed,camps,plain,
+  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
     diagnostics:()=>({grid,epoch,reserved,drawn})};
 })(window);

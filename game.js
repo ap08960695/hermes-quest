@@ -307,7 +307,7 @@ async function boot() {
   for (const p of W.props || []) if (!BLD[p.img]) BLD[p.img] = await img(`assets/px/${p.src || 'buildings'}/${p.img}.png`);
   if (window.NPCS) await NPCS.load(W, D, img);                      // M4 villagers (npcs.js)
   MONMETA = await fetch('assets/sprites/monsters.json').then(r => r.ok ? r.json() : null).catch(() => null);
-  if (UI) UI.control('#mode',D.meta.source === 'demo' || !liveFeed ? 'demo' : 'connected','Data source');
+  if (UI) UI.mode(D.meta.source === 'demo' ? 'DEMO' : liveFeed ? 'LIVE' : 'REPLAY');
   ui();
   if (liveFeed) {
     goLive();
@@ -1270,7 +1270,20 @@ function say(html, t, key, minGap = 0) {
   S.feed.unshift({t, html}); S.feed.length = Math.min(S.feed.length, 60); S.feedDirty = true;
 }
 function renderFeed() {
-  if(UI)UI.feed(S.feed.map(f=>({text:fmt(f.t)+' '+UI.plain(f.html)})));
+  if(!UI||$('#chron').hidden||$('#menu').hidden||!$('#group-overview').open)return;
+  UI.feed(S.feed.map(f=>{
+    const detailText=fmt(f.t)+' '+UI.plain(f.html);
+    let text=UI.plain(f.html).replace(/ — .*$/u,'');
+    if(/^💬|^🐦‍⬛ Captain:/.test(text))text='💬 Message; open Details';
+    else if(/^💀/.test(text))text='💀 Work stopped; open Details';
+    else if(/^🌀/.test(text))text='🌀 Quest handoff; open Details';
+    else if(/^🦊/.test(text))text='🦊 Subagent summoned; open Details';
+    if(D.meta.show_titles!==true){
+      for(const t of D.tasks)text=text.split(t.id).join('Task details hidden');
+      for(const b of D.bots)text=text.split(b.id).join('Hero');
+    }
+    return {text:fmt(f.t)+' '+text,detailText};
+  }));
   S.feedDirty=false;
 }
 function renderCamps() {
@@ -1282,6 +1295,30 @@ function renderCamps() {
       stages:STAGES.map(st=>{const group=live.filter(t=>t.stage===st);return {id:st.toLowerCase(),state:group.some(t=>t.state==='fight')?'selected':group.length&&group.every(t=>t.state==='done')?'normal':'disabled'};})};
   });UI.camps(rows);
 }
+const TASK_STATES={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Waiting for dependencies',done:'Complete',failed:'Failed'};
+function renderOverview() {
+  const states=Object.values(S.tasks),blocked=states.filter(t=>t.state==='blocked'||t.chained).length;
+  const working=states.filter(t=>t.state==='fight').length,waiting=states.filter(t=>['quest','caged'].includes(t.state)).length;
+  const completed=states.filter(t=>t.state==='done').length;
+  const permitted=D.meta.show_titles===true,failures=new Map();
+  for(const e of D.events){
+    if(e.t>S.t)break;
+    if(!e.task)continue;
+    if(e.kind==='run_start'||e.kind==='completed')failures.delete(e.task);
+    else if(e.kind==='run_end'&&['timed_out','crashed','gave_up'].includes(e.outcome))failures.set(e.task,({timed_out:'Run timed out',crashed:'Worker stopped unexpectedly',gave_up:'Worker stopped work'})[e.outcome]);
+  }
+  const tasks=D.tasks.map(meta=>{
+    const t=S.tasks[meta.id]||meta, state=TASK_STATES[t.state]||'Not started in selected range';
+    return {key:meta.id,blocked:t.state==='blocked'||!!t.chained,
+      summary:(permitted?meta.title||'Untitled task':'Task details hidden')+' · '+state+(t.stage?' · '+(STAGE_TH[t.stage]||'Unknown stage'):'')+(t.bot?' · Assigned to: '+(permitted?D.bots.find(b=>b.id===t.bot)?.name||'Hero':'Hero'):''),
+      details:()=>{const current=D.tasks.find(row=>row.id===meta.id);if(current)quest(S.tasks[meta.id]||current);else UI.detail(['This task is no longer in retained history'],'Task details');}};
+  }).sort((a,b)=>Number(b.blocked)-Number(a.blocked));
+  const heroes=Object.values(S.heroes).map(h=>({key:h.bot,
+    summary:(permitted?h.name:'Hero')+' · '+heroStatus(h),
+    details:()=>{const current=S.heroes[h.bot];if(current)UI.detail(heroDetails(current),'Hero');else UI.detail(['This hero is no longer in retained history'],'Hero details');}}));
+  UI.overview({tasks,heroes,blocked,errors:[...Object.keys(S.diagnostics||{}),...failures.values(),...states.filter(t=>t.state==='failed').map(()=> 'A task failed')],
+    empty:'No tasks in this replay range',summary:D.tasks.length?working+' working · '+waiting+' waiting · '+blocked+' blocked · '+completed+' complete'+(!working&&!blocked?' · No active work':''):'No tasks in this replay range'});
+}
 let hudT=0;
 function hud(dt) {
   if(!UI || privacyPending)return;
@@ -1292,10 +1329,11 @@ function hud(dt) {
   $('#play').setAttribute('aria-pressed',String(!S.play));$('#live').setAttribute('aria-pressed',String(following));
   $('#scrub').value=Math.max(0,Math.min(1000,Math.round((S.t-D.meta.from_)/Math.max(1,D.meta.to-D.meta.from_)*1000)));
   $('#scrub').setAttribute('aria-valuetext',fmt(S.t));
-  renderFeed();renderCamps();UI.resources(S.mana,S.tokenNetByWallet);
+  renderFeed();renderCamps();UI.resources(S.mana,S.tokenNetByWallet);renderOverview();
+  UI.playback((S.play?'Playing':'Paused')+' · Live-follow '+(following?'on':'off')+' · '+fmt(S.t)+' · Range '+fmt(D.meta.from_)+' - '+fmt(D.meta.to));
 }
 function ui() {
-  if(UI)UI.init();resize();addEventListener('resize',resize);
+  resize();addEventListener('resize',resize);
   document.addEventListener('visibilitychange',visibility);
   $('#speeds').onclick=()=>{following=false;const speeds=[30,120,600];S.speed=speeds[(speeds.indexOf(S.speed)+1)%speeds.length];hudT=1;hud(0);};
   $('#play').onclick=()=>{following=false;S.play=!S.play;hudT=1;hud(0);};
@@ -1338,19 +1376,24 @@ function click(e) {
 function quest(t) {
   if(privacyPending)return;
   const h=t.bot&&S.heroes[t.bot], elapsed=t.runStart?Math.round((S.t-t.runStart)/60):0;
-  const states={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Waiting for dependencies',done:'Complete'};
-  if(UI)UI.detail([t.id,D.meta.show_titles===true?t.title:t.id,
-    'Assigned to: '+(h?h.name+' ('+h.bot+')':'-'),
-    'Stage: '+(STAGE_TH[t.stage]||'Unknown')+' · Status: '+(states[t.state]||'Unknown'),
-    'Time: '+elapsed+' / '+Math.round((t.max_rt||1800)/60)+' minutes',
-    'Campaign: '+t.campaign,'Latest note: '+(D.meta.show_titles===true?t.note||'-':'-'),
+  if(UI)UI.detail(['Task ID: '+t.id,D.meta.show_titles===true?t.title:'Task details hidden',
+    'Assigned to: '+(h?h.name+' ('+h.bot+')':'Not provided'),
+    'Stage: '+(STAGE_TH[t.stage]||'Unknown')+' · Status: '+(TASK_STATES[t.state]||'Not started in selected range'),
+    ...(t.runStart?['Run elapsed: '+elapsed+' minutes']:[]),
+    ...(Number.isFinite(t.max_rt)?['Run time limit: '+Math.round(t.max_rt/60)+' minutes']:[]),
+    'Campaign: '+(t.campaign||'Not provided'),'Latest note: '+(D.meta.show_titles===true?t.note||'Not provided':'Task details hidden'),
     [t.moa?'MoA':'',t.mock?'Demo':'',t.chained?'Blocked':''].join(' ')],'Quest');
 }
+function heroStatus(h) {
+  return restLocked(h)?(h.rest.phase==='moving'?'Walking to rest':'Resting'):h.task?'Working':h.rest.state==='active-unobserved'?'Status unobserved':'Active';
+}
 function heroDetails(h) {
-  const ledger = S.tokenNetByBot[h.bot];
-  const status = restLocked(h) ? (h.rest.phase === 'moving' ? 'Walking to rest' : 'Resting') : h.task ? 'Working' : h.rest.state === 'active-unobserved' ? 'Status unobserved' : 'Active';
-  return [h.name,h.bot,'Class: '+h.cls,'Model: '+h.model,'Effort: '+h.effort,status,
-    'Rest reason: '+(REST_REASON[h.rest.why] || 'None'),
+  const ledger = S.tokenNetByBot[h.bot],source=D.bots.find(b=>b.id===h.bot),current=h.task&&S.tasks[h.task];
+  return [D.meta.show_titles===true?h.name:'Hero details hidden','Hero ID: '+h.bot,
+    'Game class: '+h.cls,'Model: '+(source?.model||'Not provided'),'Effort: '+(source?.effort||'Not provided'),heroStatus(h),
+    'Scene region: '+(W.regions[h.region]?.label||'Unknown'),
+    'Current task: '+(current?(D.meta.show_titles===true?current.title:'Task details hidden'):'No current task in selected range'),
+    'Rest reason: '+(REST_REASON[h.rest.why] || (h.rest.why?'Unknown':'None')),
     ...(h.rest.state === 'transferred' ? ['Switch signal only; quest ownership is unchanged'] : []),
     'Used tokens: '+(ledger ? Math.max(0,ledger.net).toLocaleString('en-GB') : 'Unknown (no usage events)'),
     'Signed token balance: '+(ledger?.net ?? 'Unknown'),
@@ -1360,4 +1403,5 @@ function heroDetails(h) {
     'Historical usage may differ until reload (backend limitations)',
     ...Object.keys(S.diagnostics).filter(key=>key.startsWith('Rest ')),h.bubble?.text||'-'];
 }
+if(UI){UI.init();UI.status('Loading activity…','loading');}
 boot();

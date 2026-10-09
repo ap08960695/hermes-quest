@@ -38,7 +38,7 @@ const server=http.createServer((req,res)=>{
               emojiShaped:shaped.some(t=>/\p{Extended_Pictographic}/u.test(t))};
           });
           assert.equal(labels.icons,5);assert(labels.accessibleClipped);assert.equal(labels.emojiShaped,false);
-          for(const meaning of ['กระแทก','ข้อความ','สภา','นำทาง','มอนสเตอร์'])assert(labels.text.includes(meaning));
+          for(const meaning of ['Impact or command failure','Message','Council advice','Navigate','New monster'])assert(labels.text.includes(meaning));
           if(out&&zoom===1)await page.screenshot({path:path.join(out,engine+'-'+width+'x'+height+'-feed.png')});
           const counters=await page.evaluate(async()=>{
             UIPanels.drawer('camp');const results=[];
@@ -64,8 +64,32 @@ const server=http.createServer((req,res)=>{
             return {pendingGone,cachedGone,
               legend:document.querySelector('#quest').textContent,overflow:document.documentElement.scrollWidth>innerWidth+1};
           });
-          assert(privacy.pendingGone&&privacy.cachedGone);assert(privacy.legend.includes('ย่อบริบท'));assert.equal(privacy.overflow,false);assert.deepEqual(errors,[]);
-          records.push({engine,browser:browser.version(),width,height,dpr:2,zoom,labels,counters,privacy,errors});
+          assert(privacy.pendingGone&&privacy.cachedGone);assert(privacy.legend.includes('Compress context'));assert.equal(privacy.overflow,false);assert.deepEqual(errors,[]);
+          const menuProof=await page.evaluate(async()=>{
+            const data=structuredClone(D);data.meta.show_titles=false;
+            data.tasks.forEach(t=>{t.title='MENU_INVENTORY_PRIVATE';t.note='MENU_INVENTORY_PRIVATE';});
+            data.events.forEach(e=>{e.note='MENU_INVENTORY_PRIVATE';});
+            loadReplay(data,null,data.meta.from_);S.play=false;hudT=1;hud(0);
+            UIPanels.menu(true);document.querySelector('#group-overview').open=true;
+            await new Promise(r=>setTimeout(r,100));hudT=1;hud(0);
+            const summary=document.querySelector('#tasks-list').textContent;
+            document.querySelector('#tasks-list button').click();await new Promise(r=>setTimeout(r,100));
+            const detail=document.querySelector('#quest').textContent;
+            UIPanels.close();document.querySelector('#group-settings').open=true;
+            await new Promise(r=>setTimeout(r,100));
+            return {summary,detail,canary:JSON.stringify(D).includes('MENU_INVENTORY_PRIVATE')||JSON.stringify(S).includes('MENU_INVENTORY_PRIVATE')||document.body.textContent.includes('MENU_INVENTORY_PRIVATE'),
+              preference:JSON.parse(localStorage.getItem('quest-menu-v1'))};
+          });
+          assert.equal(menuProof.canary,false);assert(menuProof.summary.includes('Task details hidden'));assert(menuProof.detail.includes('Task details hidden'));
+          assert(!/Next step|HP:|EXP:/.test(menuProof.detail));assert.deepEqual(Object.keys(menuProof.preference).sort(),['groups','menu']);
+          assert(Object.values(menuProof.preference.groups).every(v=>typeof v==='boolean'));
+          await page.reload();await page.waitForFunction(()=>typeof loop.last==='number');
+          assert(await page.locator('#menu').isVisible());assert(await page.locator('#group-settings').evaluate(el=>el.open));
+          await page.addInitScript(()=>{Storage.prototype.getItem=Storage.prototype.setItem=()=>{throw Error('Synthetic storage unavailable');};});
+          await page.reload();await page.waitForFunction(()=>typeof loop.last==='number');
+          assert(await page.locator('#menu').isHidden());await page.click('#menu-toggle');assert(await page.locator('#menu').isVisible());
+          assert.deepEqual(errors,[]);
+          records.push({engine,browser:browser.version(),width,height,dpr:2,zoom,labels,counters,privacy,menuProof,errors});
           await page.close();
         }
       } finally {await browser.close();}
