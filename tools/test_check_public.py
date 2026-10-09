@@ -9,10 +9,30 @@ import unittest
 
 import check_public as guard
 
+EXTENDED_SIGNATURES = (
+    *('/' + root + '/fictional/private' for root in ('Users', 'root', 'mnt')),
+    guard.WINDOWS + 'Users\\Fictional\\private',
+    'd:' + '\\' + 'private\\fictional',
+    guard.WINDOWS + '\\Users\\\\Fictional',
+    *('-----' + 'BEGIN ' + kind + 'PRIVATE KEY-----\nFictionalOnly\n-----'
+      + 'END ' + kind + 'PRIVATE KEY-----'
+      for kind in ('', 'RSA ', 'EC ', 'OPENSSH ', 'ENCRYPTED ')),
+    '-----' + 'BEGIN PRIVATE KEY-----',
+    *('xox' + kind + '-FictionalOnly123-456' for kind in ('b', 'p', 'a', 's', 'r')),
+    'AI' + 'za' + 'FictionalOnly_123-456',
+    *('fictional.' + suffix for suffix in ('local', 'internal', 'lan')),
+    'https://nested.fictional.' + 'LOCAL' + ':443/path',
+)
+FORBIDDEN_TEST_PATHS = tuple(
+    prefix + path for prefix in ('', 'docs/', 'pkg/nested/')
+    for path in ('RUNBOOK.md', 'HANDOFF.md', '.claude/config.json',
+                 'data/replay.json', 'preview/demo.gif', 'assets/raw/demo.png',
+                 '.env', 'deploy.pem', 'client.key'))
+
 
 class PublicGuardTests(unittest.TestCase):
     def test_private_signatures_in_json_and_markdown(self):
-        samples = [
+        samples = [*EXTENDED_SIGNATURES,
             guard.HOME + 'operator/private', guard.MEDIA + 'Volume/private',
             '~/' + '.hermes/profiles/demo', 'orchestra' + '-captain',
             '172' + '.22.27.224', '10' + '.147.1.22',
@@ -42,8 +62,36 @@ class PublicGuardTests(unittest.TestCase):
     def test_safe_public_references(self):
         text = ('https://github.com/NousResearch/hermes-agent '
                 'demo@example.test demo@users.noreply.github.com '
-                'http://127.0.0.1:8765/ 0.0.0.0 ./qa-out')
+                'http://127.0.0.1:8765/ 0.0.0.0 ./qa-out '
+                'Users/demo root/demo mnt/demo C:relative/path ./assets/local '
+                'public.local.example.test internal.example.test lan.example.test '
+                'xox AIza -----BEGIN CERTIFICATE----- '
+                r'\d:\d\d:\d\d')
         self.assertFalse(guard.scan_text('README.md', text))
+
+    def test_forbidden_path_segments_not_substrings(self):
+        for path in FORBIDDEN_TEST_PATHS:
+            with self.subTest(path=path):
+                self.assertTrue(guard.forbidden_path(path))
+        for path in ('assets/rawish/demo.png', 'docs/preview-guide/demo.gif',
+                     'metadata/replay.json', 'data/replay.json.example',
+                     '.env.example', 'docs/deploy.pem.example', 'keynote.md',
+                     'docs/assets/rawish', 'docs/notpreview/file'):
+            with self.subTest(path=path):
+                self.assertFalse(guard.forbidden_path(path))
+
+    def test_existing_fake_private_key_is_exact_and_file_scoped(self):
+        source = (Path(__file__).parent / 'test_extract.py').read_text()
+        found = set()
+        for match in guard.RULES['private-key'].finditer(source):
+            value = match.group()
+            digest = guard.hashlib.sha256(value.encode()).hexdigest()
+            found.add(digest)
+            self.assertFalse(guard.scan_text('tools/test_extract.py', value))
+            self.assertTrue(guard.scan_text('new.py', value))
+            changed = value.replace('KEY-----', 'KEY-----Changed', 1)
+            self.assertTrue(guard.scan_text('tools/test_extract.py', changed))
+        self.assertEqual(found, guard.PRIVATE_KEY_FIXTURES['tools/test_extract.py'])
 
     def test_git_tracked_json_markdown_binary_symlink_and_missing(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -154,17 +202,46 @@ class HistoryGuardTests(unittest.TestCase):
         self.assertNotIn('FictionalOnly123', output.getvalue())
 
     def test_all_forbidden_paths_in_old_tree(self):
-        for path in ('RUNBOOK.md', 'HANDOFF.md', '.claude/config.json',
-                     'data/replay.json', 'preview/demo.gif', 'assets/raw/demo.png',
-                     'docs/RUNBOOK.md', 'docs/.claude/config.json'):
+        for path in FORBIDDEN_TEST_PATHS:
             self.put(path, 'synthetic')
         self.commit()
+        self.assertEqual({p for p, _, rule in guard.scan_repository(self.root)[1]
+                          if rule == 'private-file'}, set(FORBIDDEN_TEST_PATHS))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(guard.main(['--root', str(self.root)]), 1)
         self.git('rm', '-r', '.')
         self.put('safe.md', 'synthetic')
         self.commit()
         self.assertFalse(guard.scan_repository(self.root)[1])
         self.assertEqual(sum(rule == 'private-file' for _, _, rule
-                             in guard.scan_history(self.root)[1]), 8)
+                             in guard.scan_history(self.root)[1]), len(FORBIDDEN_TEST_PATHS))
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(guard.main(['--root', str(self.root), '--history']), 1)
+
+    def test_extended_signatures_in_tracked_and_deleted_blobs(self):
+        for index, value in enumerate(EXTENDED_SIGNATURES):
+            self.put(f'leaks/{index}.txt', value)
+        self.commit()
+        expected = {f'leaks/{i}.txt' for i in range(len(EXTENDED_SIGNATURES))}
+        self.assertEqual({p for p, _, _ in guard.scan_repository(self.root)[1]}, expected)
+        self.git('rm', '-r', 'leaks')
+        self.put('safe.md', 'synthetic')
+        self.commit()
+        self.assertFalse(guard.scan_repository(self.root)[1])
+        findings = guard.scan_history(self.root)[1]
+        self.assertEqual(len({p for p, _, _ in findings}), len(EXTENDED_SIGNATURES))
+        self.assertEqual({rule for _, _, rule in findings},
+                         {'local-path', 'private-key', 'internal-host', 'token'})
+
+    def test_safe_nested_paths_pass_both_modes(self):
+        for path in ('docs/preview-guide/demo.gif', 'docs/assets/rawish/demo.png',
+                     'config/.env.example', 'docs/deploy.pem.example',
+                     'metadata/replay.json', 'data/replay.json.example'):
+            self.put(path, 'synthetic')
+        self.commit()
+        for flags in ([], ['--history']):
+            with self.subTest(flags=flags), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(guard.main(['--root', str(self.root), *flags]), 0)
 
     def test_blob_alias_cannot_reuse_fixture_exemption(self):
         value = guard.HOME + 'Jane'

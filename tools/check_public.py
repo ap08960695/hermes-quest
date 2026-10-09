@@ -16,7 +16,12 @@ import zlib
 
 # Assemble signatures so the guard itself contains no private reference.
 RULES = {
-    'local-path': re.compile(r'/(?:home|media)/[^\s\'"`|<>),;]*'),
+    'local-path': re.compile(r'/(?:home|media|Users|root|mnt)/[^\s\'"`|<>),;]*'
+                             r'|(?<![\w\\])[A-Za-z]:\\+[^\s\'"`|<>),;]*'),
+    'private-key': re.compile(r'-----BEGIN (?P<kind>(?:[A-Z0-9]+ )*PRIVATE KEY)-----'
+                              r'(?:.*?-----END (?P=kind)-----)?', re.S),
+    'internal-host': re.compile(r'\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?[.])+'
+                                r'(?:local|internal|lan)\b(?![\w.-])', re.I),
     'profile-path': re.compile(r'~/' + r'\.hermes/profiles\b', re.I),
     'operator': re.compile('|'.join(('orchestra' + '-captain', 'ap089' + '60695', 'Phaisit' + '-Big')), re.I),
     'network': re.compile(r'\b(?:172[.]22[.]|(?:\d{1,3}[.]){3}\d{1,3}\b)'),
@@ -29,6 +34,7 @@ RULES = {
         r'\bgh[pousr]_[A-Za-z0-9_]+' r'|\bgithub_pat_[A-Za-z0-9_]+'
         r'|\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]+'
         r'|\bAKIA[A-Z0-9]{16}\b|\beyJ[\w-]*[.]eyJ[\w-]*[.][\w-]+'
+        r'|\bxox[a-z]+-[A-Za-z0-9-]+|\bAIza[A-Za-z0-9_-]+'
         r'|\bBearer\s+[A-Za-z0-9._-]{10,}', re.I),
 }
 
@@ -36,20 +42,27 @@ RULES = {
 # Escape-built roots keep the policy itself from being a fixture exemption.
 HOME = '/' + 'home/'
 MEDIA = '/' + 'media/'
+WINDOWS = 'C:' + '\\'
 FIXTURES = {
     'tools/test_extract.py': {
         HOME + suffix for suffix in (
             '', 'Jane', 'Jane\\', '{a}', '{a}\\', 'demo/customer.txt', 'fake')
     } | {MEDIA + suffix for suffix in ('', 'Fake/demo.json', 'fake/private-campaign', 'fake')}
       | {'192' + '.0.2.1', '192' + '.0.2.42', 'Bearer ' + 'fictionalValue',
-         'ey' + 'Jfake.eyJdemo.signature'},
-    'dashboard/test_live_contract.py': {HOME + '{a}'},
+         'ey' + 'Jfake.eyJdemo.signature', 'api' + '.internal'}
+      | {WINDOWS + suffix for suffix in ('Users\\Jane', 'Users\\Jane\\',
+                                         'Users\\{a}', 'Users\\Fake\\customer.txt')}
+      | {WINDOWS + '\\Users\\\\Jane'},
+    'dashboard/test_live_contract.py': {HOME + '{a}', WINDOWS + 'Users\\{a}'},
 }
 # Exact hashes of pre-existing fake credential fixtures; no pattern-wide exemption.
 TOKEN_FIXTURES = {'tools/test_extract.py': {
     'b1d8f2ce350edc0128d78a9c7f1c6f954bdff24e5eab432899e788a65f7b3154',
     '33ce96b1a9f758b219cbf4e587f18afe44e015fae4343efe2033a3a265f1822b',
     '9accac3b538ed2c3a61ff6778e8269af2cdbac84d542cc7e5b2b2235bd6df170',
+}}
+PRIVATE_KEY_FIXTURES = {'tools/test_extract.py': {
+    'c6bd9404d564496a52ebca6b14206bc939b0093e85a9095d48f3b4e91f83c5b7',
 }}
 
 FORBIDDEN = ('data/replay.json', 'preview/', 'assets/raw/', '.claude/', 'RUNBOOK.md', 'HANDOFF.md')
@@ -60,14 +73,20 @@ PUBLIC_IDENTITY = ('ap089' + '60695 <17912262+ap089' +
 
 
 def forbidden_path(path):
-    return (any(path == p or (p.endswith('/') and path.startswith(p)) for p in FORBIDDEN)
-            or any(p in {'RUNBOOK.md', 'HANDOFF.md', '.claude'} for p in Path(path).parts))
+    parts = Path(path).parts
+    for forbidden in FORBIDDEN:
+        sequence = tuple(forbidden.rstrip('/').split('/'))
+        if any(parts[i:i + len(sequence)] == sequence for i in range(len(parts))):
+            return True
+    return any(p == '.env' or p.endswith(('.pem', '.key')) for p in parts)
 
 
 def permitted(path, rule, value):
     if value in FIXTURES.get(path, set()):
         return True
     if rule == 'token' and hashlib.sha256(value.encode()).hexdigest() in TOKEN_FIXTURES.get(path, set()):
+        return True
+    if rule == 'private-key' and hashlib.sha256(value.encode()).hexdigest() in PRIVATE_KEY_FIXTURES.get(path, set()):
         return True
     if rule == 'network':
         try:
