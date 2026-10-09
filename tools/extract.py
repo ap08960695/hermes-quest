@@ -626,7 +626,8 @@ def _snapshot(cfg, previous=None, t0=None):
                 ledger = previous.get('mana', {}).get(source)
                 accounted = ledger if ledger is not None else 0
                 charged = 0
-                last_stamp = r['started_at']
+                last_stamp = s.execute('SELECT coalesce(max(timestamp),?) FROM messages WHERE session_id=? AND rowid<=?',
+                                       (r['started_at'], sid, message_hi)).fetchone()[0]
                 for m in messages:
                     base = dict(t=m['timestamp'], task=tid, bot=prof)
                     sub = _hash(sid)[:6] if r['parent_session_id'] else None
@@ -678,7 +679,7 @@ def _snapshot(cfg, previous=None, t0=None):
                         version = previous.get('mana_versions', {}).get(source, 0) + 1
                         state['mana_versions'][source] = version
                         emit(source, f'usage:{version}:{message_hi}:{accounted}:{usage}',
-                             dict(t=last_stamp if charged or not ledger else time.time(),
+                             dict(t=last_stamp,
                                   task=tid, bot=prof, kind='mana', tokens=delta,
                                   estimated=True, basis='usage', correction=True))
                     accounted = usage

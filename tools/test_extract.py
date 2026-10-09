@@ -752,7 +752,10 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.s.execute('UPDATE session_model_usage SET output_tokens=30')
         self.s.commit()
         delta = extract.collect_since(self.cfg, initial['cursor'])
-        self.assertCountEqual([e['kind'] for e in delta['events']], ['heartbeat', 'heartbeat', 'comment', 'run_end', 'tool', 'mana', 'hurt', 'tests'])
+        self.assertCountEqual([e['kind'] for e in delta['events']], ['heartbeat', 'heartbeat', 'comment', 'run_end', 'tool', 'mana', 'mana', 'hurt', 'tests'])
+        mana = [e for e in delta['events'] if e['kind'] == 'mana']
+        self.assertCountEqual([e['tokens'] for e in mana], [15, -5])
+        self.assertEqual(sum(e['tokens'] for e in initial['events'] + delta['events'] if e['kind'] == 'mana'), 130)
         self.assertEqual(delta['tasks'][0]['status'], 'done')
         self.assertEqual(delta['tasks'][0]['tokens'], 130)
         self.assertEqual(delta['bots'], [])

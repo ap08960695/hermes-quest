@@ -41,6 +41,7 @@ class ManaAccountingTests(unittest.TestCase):
 
     def advance(self, live, cursor):
         delta = extract.collect_since(self.cfg, cursor)
+        self.assertEqual(extract.collect_since(self.cfg, cursor), delta, 'same cursor must be retry-safe')
         # The production client retains immutable IDs, never replaces old mana.
         for e in self.mana(delta):
             self.assertNotIn(e['id'], live)
@@ -121,6 +122,18 @@ class ManaAccountingTests(unittest.TestCase):
         self.f.message('assistant', content='b' * 120, token_count=70)
         self.usage(200)
         self.advance(live, cursor)
+
+    def test_legacy_cursor_requires_revision_rebase_without_new_charges(self):
+        self.f.message('assistant', content='abcd')
+        self.usage(100)
+        first = self.replay()
+        legacy = extract._decode(first['cursor'])
+        legacy.pop('mana', None)
+        legacy.pop('mana_versions', None)
+        delta = extract.collect_since(self.cfg, extract._cursor(legacy))
+        self.assertEqual(delta['events'], [])
+        self.assertNotEqual(delta['meta']['config_revision'], extract._hash([self.cfg, 'planner-demo']))
+        self.assertEqual(self.total(self.replay()), 100)
 
     def test_usage_allocation_rounding_never_exceeds_total(self):
         for _ in range(7):
