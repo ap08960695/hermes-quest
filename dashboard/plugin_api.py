@@ -6,6 +6,7 @@ legacy module-level argv handling and mutable globals cannot affect the host.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -17,7 +18,17 @@ import types
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
 
-router = APIRouter()
+@asynccontextmanager
+async def _lifespan(app):
+    try:
+        yield
+    finally:
+        # Joining is bounded and must not block the host's event loop.
+        import asyncio
+        await asyncio.to_thread(_stop_sampler)
+
+
+router = APIRouter(lifespan=_lifespan)
 ROOT = Path(__file__).resolve().parent.parent
 EXTRACT_TIMEOUT = 30
 _sampler = {"lock": threading.Lock(), "key": None, "thread": None, "stop": None, "state": "idle"}
@@ -76,13 +87,14 @@ def _extract(mode: str, value: str) -> dict:
         raise HTTPException(status_code=503, detail="Quest data is unavailable") from None
 
 
-def _history_settings():
-    """Load tools/botstatus_history.py from source (no bytecode, no sys.path change) + its settings."""
-    source = ROOT / "tools" / "botstatus_history.py"
+def _history_settings(root=None, env=None):
+    """Load history settings without changing the host's imports."""
+    env = os.environ if env is None else env
+    source = (ROOT if root is None else root) / "tools" / "botstatus_history.py"
     module = types.ModuleType("hermes_quest_botstatus_history")
     module.__file__ = str(source)
     exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), module.__dict__)
-    return module, module.load_settings(os.environ.get("HERMES_QUEST_CONFIG") or None)
+    return module, module.load_settings(env.get("HERMES_QUEST_CONFIG") or None, env=env)
 
 
 def _sample_loop(module, settings, stop):
@@ -97,40 +109,67 @@ def _sample_loop(module, settings, stop):
         stop.wait(period)
 
 
+def _sampler_worker(root, env, stop):
+    # Configuration I/O is off the request path. Until the history reader rejects
+    # special files, a stalled worker stays owned and cannot overlap a replacement.
+    try:
+        module, settings = _history_settings(root, env)
+        if not stop.is_set():
+            _sample_loop(module, settings, stop)
+    except Exception:  # noqa: BLE001 -- optional sampler must not affect API availability
+        with _sampler["lock"]:
+            if _sampler["stop"] is stop and not stop.is_set():
+                _sampler["state"] = "unavailable"
+
+
 def _stop_sampler() -> None:
     with _sampler["lock"]:
         stop, thread = _sampler["stop"], _sampler["thread"]
-        _sampler.update(key=None, thread=None, stop=None, state="idle")
-    if stop is not None:
-        stop.set()
+        if stop is not None:
+            stop.set()
+            _sampler["state"] = "stopping"
+    # Do not hold the lock while joining: the worker can publish a load failure.
     if thread is not None:
         thread.join(timeout=5)
+    with _sampler["lock"]:
+        # A timed-out worker remains owned; it must never overlap a replacement.
+        # A concurrent ensure may already have replaced a terminated worker.
+        if _sampler["thread"] is thread and (thread is None or not thread.is_alive()):
+            _sampler.update(key=None, thread=None, stop=None, state="idle")
 
 
 def _ensure_sampler() -> str:
-    """Start the ~30 s sampler (daemon thread) on the first API call; idempotent per
-    (checkout, config). HERMES_QUEST_SAMPLER=off disables it (run the one-shot CLI from cron)."""
-    if os.environ.get("HERMES_QUEST_SAMPLER", "").lower() in {"0", "off", "false", "no"}:
-        return "disabled"
-    key = (str(ROOT), os.environ.get("HERMES_QUEST_CONFIG", ""), os.environ.get("HERMES_HOME", ""))
+    """Start at most one worker, with atomic ownership of loading and sampling.
+
+    Replacement is nonblocking: signal the previous worker and retry on a later
+    request only after it has exited. Disabled mode also stops existing sampling.
+    """
+    env = os.environ.copy()
+    root = ROOT
+    disabled = env.get("HERMES_QUEST_SAMPLER", "").lower() in {"0", "off", "false", "no"}
+    key = (str(root), env.get("HERMES_QUEST_CONFIG", ""), env.get("HERMES_HOME", ""))
     with _sampler["lock"]:
-        thread = _sampler["thread"]
-        if _sampler["key"] == key and (_sampler["state"] == "unavailable" or (thread and thread.is_alive())):
+        thread, stop = _sampler["thread"], _sampler["stop"]
+        if thread is not None and thread.is_alive():
+            if disabled or _sampler["key"] != key or stop.is_set():
+                stop.set()
+                _sampler["state"] = "stopping"
+                return "disabled" if disabled else "stopping"
             return _sampler["state"]
-    _stop_sampler()  # configuration changed (tests, reload): replace the old sampler
-    with _sampler["lock"]:
-        _sampler["key"] = key
-        try:
-            module, settings = _history_settings()
-        except (OSError, ValueError, SyntaxError):
-            _sampler["state"] = "unavailable"  # older checkout or bad config: replay still works
+        if disabled:
+            _sampler.update(key=None, thread=None, stop=None, state="idle")
+            return "disabled"
+        if _sampler["key"] == key and _sampler["state"] == "unavailable":
             return "unavailable"
         stop = threading.Event()
-        thread = threading.Thread(target=_sample_loop, args=(module, settings, stop),
+        thread = threading.Thread(target=_sampler_worker, args=(root, env, stop),
                                   name="hermes-quest-botstatus", daemon=True)
-        _sampler.update(thread=thread, stop=stop, state="running")
-        thread.start()
-        return "running"
+        _sampler.update(key=key, thread=thread, stop=stop, state="running")
+        try:
+            thread.start()
+        except RuntimeError:
+            _sampler.update(thread=None, stop=None, state="unavailable")
+        return _sampler["state"]
 
 
 @router.get("/replay")

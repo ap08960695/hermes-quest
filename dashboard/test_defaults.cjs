@@ -109,19 +109,33 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
     };
     exec('python3',['tools/mock.py']);
     const original=fs.readFileSync(path.join(dir,'data/demo.json'));
-    let r=exec(process.execPath,['tools/backtest.js']); assert(/\nPASS\s*$/.test(r.stdout));
-    assert.strictEqual(JSON.parse(r.stdout.match(/^\{[\s\S]*?^\}/m)[0]).replay_events,709); // M4 adds a separate NPC result object.
+    assert.deepStrictEqual(JSON.parse(original), demo, 'shipped demo must match the seeded generator');
+    const generated = JSON.parse(original), expectedEvents = generated.events.length;
+    assert(expectedEvents > 0, 'default fixture must exercise replay events');
+    for (const kind of ['mana', 'pause', 'resume', 'failover']) {
+      assert(generated.events.some(e => e.kind === kind), 'C1 demo missing ' + kind);
+    }
+    const backtest = args => {
+      const r = exec(process.execPath, ['tools/backtest.js', ...args]);
+      assert(/\nPASS\s*$/.test(r.stdout), 'all motion/action/social/NPC gates must pass');
+      // C1 intentionally adds mana/status events and seeded draws; 709 was the
+      // pre-C1 fixture. Verify the selected source, not a frozen campaign size.
+      // M4 adds a separate NPC result object after this replay result.
+      assert.strictEqual(JSON.parse(r.stdout.match(/^\{[\s\S]*?^\}/m)[0]).replay_events, expectedEvents);
+      return r.stdout;
+    };
+    const firstBacktest = backtest([]);
     fs.writeFileSync(path.join(dir,'data/replay.json'),'SYNTHETIC POISON NOT JSON');
     exec('python3',['tools/mock.py']);
     assert.deepStrictEqual(fs.readFileSync(path.join(dir,'data/demo.json')),original);
     assert.strictEqual(fs.readFileSync(path.join(dir,'data/replay.json'),'utf8'),'SYNTHETIC POISON NOT JSON');
-    exec(process.execPath,['tools/backtest.js']);
-    exec(process.execPath,['tools/backtest.js','--data','data/demo.json']);
+    assert.strictEqual(backtest([]), firstBacktest, 'poisoned replay must not affect default backtest');
+    assert.strictEqual(backtest(['--data','data/demo.json']), firstBacktest, 'explicit demo must match default');
     exec(process.execPath,['tools/backtest.js','--data','data/replay.json'],1);
     exec(process.execPath,['tools/backtest.js','--data','missing.json'],1);
     exec(process.execPath,['tools/backtest.js','--data'],2);
     fs.unlinkSync(path.join(dir,'data/demo.json'));
     exec(process.execPath,['tools/backtest.js'],1); // Never fall back to live.
   } finally { fs.rmSync(dir,{recursive:true,force:true}); }
-  console.log('PASS: standalone demo-only boot, explicit file/live selection, pseudonymous Captain clean migration, fresh CLI709 unchanged gate, poisoned replay ignored, deterministic mock and fail-closed missing sources');
+  console.log('PASS: standalone demo-only boot, explicit file/live selection, pseudonymous Captain clean migration, fresh CLI fixture-matched unchanged gate, poisoned replay ignored, deterministic mock and fail-closed missing sources');
 })().catch(e => {console.error(e); process.exitCode=1});
