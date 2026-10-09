@@ -113,6 +113,16 @@ function showInspection(id) {
   inspect.bot = id; inspect.session = null; inspect.choices = null; inspect.follow = true; inspect.key = '';
   renderInspection(); followCharacter(1); $('#character-close').focus();
 }
+function inspectionFrame(bodyWidth, bodyHeight) {
+  const bar=$('#focus-bar').getBoundingClientRect();
+  let left=8,top=innerWidth/2-bodyWidth/2<bar.right?bar.bottom+8:8;
+  // A wide attack pose in a short landscape viewport can fit beside the
+  // status chip, but not underneath it. Reframe the camera, never the actor.
+  if(innerHeight-top-bodyHeight-24<62 && innerWidth-16-bar.right>=bodyWidth){
+    left=bar.right+8;top=8;
+  }
+  return {left,right:innerWidth-8,top};
+}
 function renderInspection() {
   const card = $('#character-card'); if (!card) return;
   if (privacyPending || inspect.revision !== (D.meta.config_revision ?? null)) {
@@ -123,10 +133,10 @@ function renderInspection() {
   if (!$('#quest').hidden || !$('#menu').hidden) { clearInspection(); return; }
   card.hidden = false;
   card.style.width = innerWidth <= 760 ? 'calc(100vw - 16px)' : '280px';
-  const selectedPick=inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot),bar=$('#focus-bar').getBoundingClientRect();
+  const selectedPick=inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
   const bodyHeight=selectedPick?(selectedPick.world.bottom-selectedPick.world.top)*cam.zi:70*cam.zi;
   const bodyWidth=selectedPick?(selectedPick.world.right-selectedPick.world.left)*cam.zi:48*cam.zi;
-  const safeTop=innerWidth/2-bodyWidth/2<bar.right?bar.bottom+8:8;
+  const safeTop=inspectionFrame(bodyWidth,bodyHeight).top;
   card.style.maxHeight = Math.max(62,Math.min(innerWidth <= 760 ? 160 : 240,innerHeight*.28,innerHeight-safeTop-bodyHeight-24))+'px';
   const h = S.heroes[inspect.bot], s = selectedSession(), rows = characterSessions(inspect.bot), b = D.bots.find(b => b.id === inspect.bot);
   if (inspect.bot && !h) inspect.follow = false;
@@ -159,10 +169,10 @@ function followCharacter(dt) {
   if (!inspect.follow || !inspect.bot) return;
   const h = S.heroes[inspect.bot]; if (!h || privacyPending) {inspect.follow=false;return;}
   const pick = inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
-  const card = $('#character-card').getBoundingClientRect(), bar = $('#focus-bar').getBoundingClientRect();
+  const card = $('#character-card').getBoundingClientRect();
   const box = pick?.world ? {...pick.world} : {left:h.x-24,right:h.x+24,top:h.y-70,bottom:h.y};
   if(pick?.anchor){const dx=h.x-pick.anchor[0],dy=h.y-pick.anchor[1];box.left+=dx;box.right+=dx;box.top+=dy;box.bottom+=dy;}
-  const top=innerWidth/2-(box.right-box.left)*cam.zi/2<bar.right?bar.bottom+8:8,bottom=card.top-8,left=8,right=innerWidth-8;
+  const {top,left,right}=inspectionFrame((box.right-box.left)*cam.zi,(box.bottom-box.top)*cam.zi),bottom=card.top-8;
   const targetX = (left+right)/2, targetY = (top+bottom)/2;
   cam.tx=(box.left+box.right)/2-(targetX-innerWidth/2)/cam.zi;
   cam.ty=(box.top+box.bottom)/2-(targetY-innerHeight/2)/cam.zi;
