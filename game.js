@@ -837,7 +837,7 @@ function draw() {
   if (UI) UI.clear();
   cx.imageSmoothingEnabled = false;
   cx.fillStyle = '#0b1220'; cx.fillRect(0, 0, cv.width, cv.height);
-  if (privacyPending) return;
+  if (privacyPending) { if(UI)UI.flush(); return; }
   if (BG) cx.drawImage(BG, v.ox, v.oy, W.size[0] * v.Z, W.size[1] * v.Z);
   const ents = [...(W.layered ? W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
     ...(Object.values(S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
@@ -855,6 +855,7 @@ function draw() {
   for(const group of groups.values())group.slice(0,3).forEach((f,i)=>
     fxDraw(v,{...f,y:f.y-i*18/v.Z*DPR,text:i===2&&group.length>3?'+'+compact(group.length-2):f.text}));
   for (const [k, r] of Object.entries(W.regions)) banner(v, k, r);
+  if(UI)UI.flush();
   vignette();
 }
 const SHADOWS = new Map(), FLASH = new Map();
