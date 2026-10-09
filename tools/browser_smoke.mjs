@@ -630,8 +630,8 @@ async function runHeroInspect(browser,base,vp) {
           cam.zi=zoom;Object.assign(S.heroes.child,{atk:pose==='attack'?.2:-1,sleep:pose==='rest',down:0});
           draw();renderInspection();followCharacter(1);draw();renderInspection();followCharacter(1);draw();
           const p=inspect.picks.find(p=>p.type==='hero'&&p.id==='child'),c=$('#character-card').getBoundingClientRect(),b=$('#focus-bar').getBoundingClientRect();
-          const overlapsBar=p.body.left<b.right&&p.body.right>b.left&&p.body.top<b.bottom&&p.body.bottom>b.top;
-          results.push({zoom,pose,body:p.body,card:c.toJSON(),bar:b.toJSON(),clear:!overlapsBar&&p.body.top>=8&&p.body.left>=8&&p.body.right<=innerWidth-8&&c.top-p.body.bottom>=8,hit:p.hit.right-p.hit.left>=44&&p.hit.bottom-p.hit.top>=44});
+          const clearance=r=>Math.max(r.left-p.body.right,p.body.left-r.right,r.top-p.body.bottom,p.body.top-r.bottom);
+          results.push({zoom,pose,body:p.body,card:c.toJSON(),bar:b.toJSON(),clear:clearance(b)>=8&&clearance(c)>=8&&p.body.top>=8&&p.body.bottom<=innerHeight-8&&p.body.left>=8&&p.body.right<=innerWidth-8,hit:p.hit.right-p.hit.left>=44&&p.hit.bottom-p.hit.top>=44});
         }
         return results;
       }finally{Object.assign(S,saved.state);Object.assign(cam,saved.camera);inspect.key='';draw();renderInspection();followCharacter(1);draw();}
@@ -704,11 +704,12 @@ async function runHeroInspect(browser,base,vp) {
     });
     check(links.count===3&&links.more==='+2'&&links.dom.includes('+2')&&links.rows===5,'direct parent/child lines cap at three with +N and complete child list');
     const liveParent=await page.evaluate(()=>{
-      showInspection('child');mergeDelta({events:[],tasks:[],bots:[],sessions:[{...D.sessions[1],parent_session_ref:'99999999999999999999'}],cursor:'synthetic-lineage-update'});
+      const saved=D.sessions.slice();
+      showInspection('child');mergeDelta({events:[],tasks:[],bots:[],sessions:saved.map(s=>s.bot==='child'?{...s,parent_session_ref:'99999999999999999999'}:s),cursor:'synthetic-lineage-update'});
       renderInspection();const result=$('#character-content').textContent;
-      mergeDelta({events:[],tasks:[],bots:[],sessions:[{...D.sessions.find(s=>s.bot==='child'),parent_session_ref:'11111111111111111111'}],cursor:'synthetic-lineage-restore'});return result;
+      mergeDelta({events:[],tasks:[],bots:[],sessions:saved,cursor:'synthetic-lineage-restore'});return result;
     });
-    check(liveParent.includes('Parent unknown'),'live session metadata upserts refresh parent without inferring');
+    check(liveParent.includes('Parent unknown'),'live session replacement refreshes parent without inferring');
     await page.evaluate(()=>{showInspection('child');delete S.heroes.child;renderInspection();});
     check((await page.locator('#character-content').innerText()).includes('Character unavailable')&&await page.evaluate(()=>!inspect.follow&&!S.heroes.child),'eviction stops follow without recreating character');
     // A moving monster must use the painted position, never its route destination.
@@ -724,6 +725,115 @@ async function runHeroInspect(browser,base,vp) {
   }finally{await ctx.close();}
 }
 
+// Transition regressions F1–F4: real polls, authoritative inventories and
+// native painted bounds. Keep these independent of the normal happy-path flow.
+async function runInspectionRegressions(browser,base,vp) {
+  const ctx=await browser.newContext({viewport:vp}),page=await ctx.newPage(),errors=[],checks=[],results={};
+  page.on('pageerror',e=>errors.push(e.message));
+  const check=(ok,label)=>checks.push({ok:!!ok,label});
+  const setup=()=>page.evaluate(()=>{
+    cancelAnimationFrame(raf);raf=null;clearTimeout(pollTimer);UI.menu(false);UI.close();
+    const b=D.bots[0];
+    loadReplay({meta:{...D.meta,from_:0,to:100,generated:100,show_titles:false,show_profile_names:true,config_revision:'named'},cursor:'initial',events:[],tasks:[],
+      bots:['root','child','orphan'].map((id,i)=>({...b,id,cls:'commander',display_name:['PRIVATE_PROFILE','Child','Orphan'][i],profile_name:'PRIVATE_PROFILE',pet_name:'PRIVATE_PET'})),
+      sessions:[{bot:'root',session_ref:'11111111111111111111',parent_session_ref:null,is_subagent:false},
+        {bot:'child',session_ref:'22222222222222222222',parent_session_ref:'11111111111111111111',is_subagent:true},
+        {bot:'orphan',session_ref:'33333333333333333333',parent_session_ref:'99999999999999999999',is_subagent:true}]},null,100);
+    S.play=false;UI.status('Replay file','file');
+    Object.values(S.heroes).forEach((h,i)=>Object.assign(h,{x:1000+i*150,y:700,path:[],atk:-1,down:0,sleep:false,effort:'medium',fam:[]}));
+    Object.assign(cam,{x:1000,y:670,tx:1000,ty:670,zi:1});draw();return structuredClone(D);
+  });
+  const privacy=()=>page.evaluate(()=>({dom:document.documentElement.outerHTML.includes('PRIVATE_PROFILE')||document.documentElement.outerHTML.includes('PRIVATE_PET'),
+    heading:$('#character-heading').textContent,content:$('#character-content').textContent,hidden:$('#character-card').hidden,
+    focus:document.activeElement.id||document.activeElement.tagName,data:/PRIVATE_PROFILE|PRIVATE_PET/.test(JSON.stringify([D,S])),pending:privacyPending}));
+  try {
+    await page.goto(base);await page.waitForFunction(()=>typeof S!=='undefined'&&Object.keys(S.heroes).length&&Object.keys(SPRV).length);
+    for (const outcome of ['success','failure']) {
+      const snapshot=await setup();await page.evaluate(()=>{showInspection('root');$('#character-close').focus();});
+      const closed=structuredClone(snapshot);closed.meta.show_profile_names=false;closed.cursor='closed';
+      closed.bots.forEach(b=>{delete b.display_name;delete b.profile_name;delete b.pet_name;});
+      let release,entered,failReplay=outcome==='failure';const gate=new Promise(r=>release=r),arrival=new Promise(r=>entered=r),requests=[];
+      await page.route('**/api/plugins/hermes-quest/**',async route=>{
+        const event=new URL(route.request().url()).pathname.endsWith('/events');requests.push(event?'events':'replay');
+        if(event)return route.fulfill({json:{events:[],tasks:[],bots:[],sessions:[],meta:{show_profile_names:false},cursor:'change'}});
+        entered();await gate;
+        return failReplay?route.fulfill({status:503,json:{error:'unavailable'}}):route.fulfill({json:closed});
+      });
+      const poll=page.evaluate(async()=>{await pollEvents();clearTimeout(pollTimer);});await arrival;
+      const inFlight=await privacy();
+      const bitmap=await page.evaluate(()=>{const d=cx.getImageData(0,0,cv.width,cv.height).data;return !d.some(v=>v);});
+      check(!inFlight.dom&&!inFlight.data&&!inFlight.content&&inFlight.hidden&&bitmap,'F1 '+outcome+': purge DOM/data/canvas before rebase completes');
+      check(inFlight.focus==='stage','F4 '+outcome+': passive close returns owned focus to canvas');
+      release();await poll;const after=await privacy();
+      check(!after.dom&&!after.data&&!after.content&&after.hidden,'F1 '+outcome+': no name remains after successful or failed rebase');
+      check(requests.join(',')==='events,replay','F1 '+outcome+': production identity migration requests authoritative replay');
+      let recovered=null;
+      if(outcome==='failure'){
+        failReplay=false;await page.evaluate(async()=>{await pollEvents();clearTimeout(pollTimer);});recovered=await privacy();
+        check(!recovered.pending&&!recovered.dom&&!recovered.data&&requests.join(',')==='events,replay,events,replay','F1: failed rebase retries authoritatively even without a config revision change');
+      }
+      results[outcome]={inFlight,after,recovered,bitmap,requests};await page.unroute('**/api/plugins/hermes-quest/**');
+    }
+    await setup();
+    check(await page.evaluate(()=>{showInspection('root');$('#menu-toggle').focus();clearInspection();return document.activeElement.id==='menu-toggle';}),'F4: passive close does not steal unrelated control focus');
+    const inventory=await setup();await page.evaluate(()=>{showInspection('child');inspect.session='22222222222222222222';});
+    const pollSessions=async sessions=>{
+      await page.route('**/api/plugins/hermes-quest/events?*',route=>route.fulfill({json:{events:[],tasks:[],bots:[],sessions,cursor:'sessions'}}));
+      await page.evaluate(async()=>{await pollEvents();clearTimeout(pollTimer);renderInspection();});await page.unroute('**/api/plugins/hermes-quest/events?*');
+      return page.evaluate(()=>({count:D.sessions.length,selected:inspect.session,parent:parentLabel(selectedSession()),text:$('#character-content').textContent}));
+    };
+    const ancestor=await pollSessions(inventory.sessions.slice(1));
+    check(ancestor.count===2&&ancestor.parent==='Parent unknown','F2: removed ancestor disappears through production poll');
+    const update=await pollSessions([{...inventory.sessions[0],bot:'orphan'},inventory.sessions[1]]);
+    check(update.parent==='Parent: Orphan','F2: retained ref updates its owning character');
+    const omitted=await pollSessions([inventory.sessions[0]]);
+    check(omitted.count===1&&omitted.selected===null&&omitted.parent==='Parent unknown','F2: removed selected session is invalidated');
+    const empty=await pollSessions([]);check(empty.count===0&&empty.parent==='Parent unknown','F2: empty snapshot removes all old sessions');
+    results.sessions={ancestor,update,omitted,empty};
+    await setup();await page.evaluate(()=>showInspection('child'));
+    results.framing=await page.evaluate(()=>{
+      const clear=(a,b)=>Math.max(b.left-a.right,a.left-b.right,b.top-a.bottom,a.top-b.bottom)>=8;
+      const rows=[];
+      for(const stale of [false,true])for(const zoom of [1,3,4])for(const pose of ['standing','attack','rest']){
+        if(stale)pollFailed({status:422});else UI.status('Replay file','file');
+        cam.zi=zoom;Object.assign(S.heroes.child,{atk:pose==='attack'?.2:-1,sleep:pose==='rest',down:0});
+        for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}
+        draw();const p=inspect.picks.find(p=>p.type==='hero'&&p.id==='child'),c=$('#character-card').getBoundingClientRect(),bar=$('#focus-bar').getBoundingClientRect();
+        rows.push({stale,zoom,actualZoom:cam.zi,pose,body:p?.body,card:c.toJSON(),bar:bar.toJSON(),
+          clear:!!p&&clear(p.body,c)&&clear(p.body,bar)&&p.body.left>=8&&p.body.top>=8&&p.body.right<=innerWidth-8&&p.body.bottom<=innerHeight-8,
+          warning:!stale||(!$('#issues').hidden&&!$('#live-note').hidden&&$('#issues').textContent.includes('Live paused')),
+          zoomDisclosed:cam.zi===zoom||$('#character-content').textContent.includes('Zoom adjusted to fit this screen.')});
+      }
+      return rows;
+    });
+    for(const r of results.framing)check(r.clear&&r.warning&&r.zoomDisclosed,`F3: ${r.pose} zoom ${r.zoom} stale ${r.stale} clears card/warning/viewport by 8 px`);
+    await page.screenshot({path:path.join(outDir,`${browserName}-${vp.name}-regression-follow.png`)});
+    // Captain contract: fit is temporary camera state, never replay state.
+    await page.setViewportSize({width:375,height:667});
+    const fitted=await page.evaluate(async()=>{
+      await new Promise(requestAnimationFrame);UI.status('Replay file','file');cam.zi=4;
+      Object.assign(S.heroes.child,{atk:.2,sleep:false});
+      const before=JSON.stringify([S,D.events,following,cursor]);
+      for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}
+      return {zoom:cam.zi,chosen:inspect.zoom,notice:$('#character-content').textContent.includes('Zoom adjusted to fit this screen.'),unchanged:before===JSON.stringify([S,D.events,following,cursor])};
+    });
+    check(fitted.zoom<4&&fitted.chosen===4&&fitted.notice&&fitted.unchanged,'F3: disclosed fit keeps playhead/speed/events/hero position unchanged');
+    const poseRestored=await page.evaluate(()=>{S.heroes.child.atk=-1;for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}const zoom=cam.zi;S.heroes.child.atk=.2;for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}return zoom;});
+    check(poseRestored===4,'F3: smaller pose restores chosen zoom on the same screen');
+    await page.setViewportSize({width:1280,height:800});
+    const restored=await page.evaluate(async()=>{await new Promise(requestAnimationFrame);for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}return {zoom:cam.zi,fit:inspect.fit};});
+    check(restored.zoom===4&&!restored.fit,'F3: resize that fits again restores chosen zoom');
+    await page.setViewportSize({width:375,height:667});
+    const dismissed=await page.evaluate(async()=>{await new Promise(requestAnimationFrame);for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}const fitted=cam.zi;clearInspection(true);return {fitted,zoom:cam.zi,follow:inspect.follow};});
+    check(dismissed.fitted<4&&dismissed.zoom===4&&!dismissed.follow,'F3: closing follow restores chosen zoom');
+    results.zoomRestoration={fitted,poseRestored,restored,dismissed};
+    check(errors.length===0,'no page errors');
+    fs.writeFileSync(path.join(outDir,`${browserName}-${vp.name}-inspection-regressions.json`),JSON.stringify({checks,results,errors},null,2));
+    const failed=checks.filter(c=>!c.ok);if(failed.length)throw Error(failed.map(c=>c.label).join('; '));
+    console.log('PASS '+browserName+' '+vp.name+' inspection transitions ('+checks.length+' checks)');
+  } finally {await ctx.close();}
+}
+
 fs.mkdirSync(outDir, {recursive: true});
 // Regenerate the deterministic synthetic demo exactly as documented (never reads live data).
 execFileSync('python3', [path.join('tools', 'mock.py')], {cwd: root, stdio: 'inherit'});
@@ -733,7 +843,7 @@ console.log(`serving ${root} at ${base} (${browserName})`);
 const browser = await playwright[browserName].launch();
 console.log(`${browserName} ${browser.version()}`);
 let failed = 0;
-for (const vp of args.includes('--inspect-only')?[]:VIEWPORTS) {
+for (const vp of args.includes('--inspect-only')||args.includes('--regressions-only')?[]:VIEWPORTS) {
   const r = await runViewport(browser, base, vp);
   for (const s of r.steps) console.log(`  [${r.viewport}] ${s}`);
   if (r.problems.length) {
@@ -742,8 +852,9 @@ for (const vp of args.includes('--inspect-only')?[]:VIEWPORTS) {
     for (const p of [...new Set(r.problems)]) console.log(`  - ${p}`);
   } else console.log(`PASS ${browserName} ${r.viewport}`);
 }
-for(const vp of VIEWPORTS){try{await runHeroInspect(browser,base,vp);}catch(e){failed++;console.log('FAIL hero inspection '+vp.name+': '+e.stack);}}
-if(!args.includes('--inspect-only')) {
+if(!args.includes('--regressions-only'))for(const vp of VIEWPORTS){try{await runHeroInspect(browser,base,vp);}catch(e){failed++;console.log('FAIL hero inspection '+vp.name+': '+e.stack);}}
+for(const vp of VIEWPORTS){try{await runInspectionRegressions(browser,base,vp);}catch(e){failed++;console.log('FAIL inspection transitions '+vp.name+': '+e.stack);}}
+if(!args.includes('--inspect-only')&&!args.includes('--regressions-only')) {
 try {await runSceneTruth(browser,base);} catch(e){failed++;console.log('FAIL scene truth: '+e.stack);}
 try {await runLoadStates(browser,base);} catch(e){failed++;console.log('FAIL load states: '+e.message);}
 try {await runRetention(browser,base);} catch(e){failed++;console.log('FAIL retention dialogs: '+e.message);}

@@ -34,7 +34,7 @@ const S = {t: 0, i: 0, speed: 120, play: true, heroes: {}, tasks: {}, fx: [], fe
 const cam = {x: 1000, y: 700, tx: 1000, ty: 700, zi: 1};
 
 // Page-local presentation only. Never part of a replay checkpoint or live cursor.
-const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null};
+const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null, fit: false, zoom: null, fittedZoom: null};
 const ALPHA_BOXES = new WeakMap();
 function spriteBox(im, sx, sy, w, h) {
   let boxes = ALPHA_BOXES.get(im); if (!boxes) { boxes = new Map(); ALPHA_BOXES.set(im, boxes); }
@@ -67,16 +67,23 @@ function characterName(id) {
   return D.meta.show_profile_names === true && b ? b.display_name || b.profile_name || b.pet_name || 'Hero' :
     'Hero '+Math.max(1,D.bots.findIndex(b => b.id === id)+1);
 }
+function redactCharacterNames() {
+  for (const b of D.bots) {
+    if (D.meta.show_profile_names === false) b.name = b.id;
+    delete b.display_name; delete b.profile_name; delete b.pet_name;
+  }
+}
 const validSessionRef = ref => typeof ref === 'string' && /^[a-f0-9]{20}$/.test(ref);
 function characterSessions(id) {
   return (D.sessions || []).filter(s => s.bot === id && validSessionRef(s.session_ref) &&
     (!Number.isFinite(s.started_at) || s.started_at <= S.t));
 }
-function syncInspectionSessions(delta = null) {
-  const rows=new Map((D.sessions||[]).filter(s=>s&&validSessionRef(s.session_ref)).map(s=>[s.session_ref,s]));
-  for(const s of delta||[])if(s&&validSessionRef(s.session_ref)){rows.delete(s.session_ref);rows.set(s.session_ref,s);}
-  // Presentation metadata stays finite just like the replay's entity inventory.
-  D.sessions=[...rows.values()].slice(-(HISTORY_LIMIT+METADATA_LIMIT));
+function syncInspectionSessions(rows = D.sessions) {
+  // A supplied inventory is authoritative, including an empty one; absence preserves it.
+  D.sessions=[...new Map((rows||[]).filter(s=>s&&typeof s.bot==='string'&&validSessionRef(s.session_ref)&&
+    (s.parent_session_ref == null || validSessionRef(s.parent_session_ref)))
+    .map(s=>[s.session_ref,s])).values()].slice(-(HISTORY_LIMIT+METADATA_LIMIT));
+  if (inspect.session && !characterSessions(inspect.bot).some(s=>s.session_ref===inspect.session)) inspect.session=null;
 }
 function selectedSession() {
   const rows = characterSessions(inspect.bot);
@@ -96,10 +103,17 @@ function observedTasks(id) {
     return (D.meta.show_titles === true ? t.title || 'Untitled task' : 'Task details hidden')+' · '+status;
   });
 }
+function stopInspectionFollow() {
+  if (inspect.zoom !== null && cam.zi === inspect.fittedZoom) cam.zi=inspect.zoom;
+  inspect.follow=inspect.fit=false;inspect.zoom=inspect.fittedZoom=null;
+}
 function clearInspection(restore = false) {
-  inspect.bot = inspect.session = inspect.choices = null; inspect.follow = false; inspect.key = '';
-  const card = $('#character-card'); if (card) { card.hidden = true; $('#character-content').replaceChildren?.(); }
-  if (restore) cv.focus();
+  const card = $('#character-card'), owns = card?.contains?.(document.activeElement);
+  stopInspectionFollow();
+  inspect.bot = inspect.session = inspect.choices = null; inspect.key = '';
+  if (card) { card.hidden = true; $('#character-heading').textContent = 'Character'; $('#character-content').replaceChildren?.(); }
+  resetInspectionLayout();
+  if (restore || owns) cv.focus?.();
 }
 function cardButton(parent, label, fn) {
   const b = document.createElement('button'); b.className = 'text-button'; b.style.width = '100%';
@@ -113,15 +127,36 @@ function showInspection(id) {
   inspect.bot = id; inspect.session = null; inspect.choices = null; inspect.follow = true; inspect.key = '';
   renderInspection(); followCharacter(1); $('#character-close').focus();
 }
+function resetInspectionLayout() {
+  const bar=$('#focus-bar'), card=$('#character-card');
+  if (bar?.style) { bar.style.width=''; bar.classList.remove?.('inspection-side'); }
+  if (card?.style) { card.style.left='8px'; card.style.width=innerWidth<=760?'calc(100vw - 16px)':'280px'; }
+}
 function inspectionFrame(bodyWidth, bodyHeight) {
   const bar=$('#focus-bar').getBoundingClientRect();
-  let left=8,top=innerWidth/2-bodyWidth/2<bar.right?bar.bottom+8:8;
+  let left=10,top=innerWidth/2-bodyWidth/2<bar.right+10?bar.bottom+10:10;
   // A wide attack pose in a short landscape viewport can fit beside the
   // status chip, but not underneath it. Reframe the camera, never the actor.
-  if(innerHeight-top-bodyHeight-24<62 && innerWidth-16-bar.right>=bodyWidth){
-    left=bar.right+8;top=8;
+  if(innerHeight-top-bodyHeight-24<62 && innerWidth-20-bar.right>=bodyWidth){
+    left=bar.right+10;top=10;
   }
-  return {left,right:innerWidth-8,top};
+  return {left,right:innerWidth-10,top,bottom:innerHeight-10};
+}
+function layoutInspection(bodyWidth, bodyHeight) {
+  resetInspectionLayout();
+  const card=$('#character-card'), bar=$('#focus-bar');
+  const frame=inspectionFrame(bodyWidth,bodyHeight);
+  const room=innerHeight-frame.top-bodyHeight-24;
+  // If a bottom sheet cannot fit, reserve a side column for BOTH warning and
+  // card. Keep the complete sprite at the chosen scale whenever it can fit.
+  const sideWidth=Math.min(280,innerWidth-bodyWidth-36);
+  if (room<62 && sideWidth>=96 && bodyHeight<=innerHeight-20) {
+    card.style.width=bar.style.width=sideWidth+'px';bar.classList.add('inspection-side');
+    card.style.maxHeight=Math.max(62,Math.min(innerWidth<=760?160:240,innerHeight-bar.getBoundingClientRect().bottom-16))+'px';
+    return {left:sideWidth+24,right:innerWidth-10,top:10,bottom:innerHeight-10};
+  }
+  card.style.maxHeight=Math.max(62,Math.min(innerWidth<=760?160:240,innerHeight*.28,room))+'px';
+  return {...frame,bottom:card.getBoundingClientRect().top-10};
 }
 function renderInspection() {
   const card = $('#character-card'); if (!card) return;
@@ -132,22 +167,27 @@ function renderInspection() {
   // Modal/Menu surfaces own focus and space while open. Never overlap them.
   if (!$('#quest').hidden || !$('#menu').hidden) { clearInspection(); return; }
   card.hidden = false;
-  card.style.width = innerWidth <= 760 ? 'calc(100vw - 16px)' : '280px';
   const selectedPick=inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
-  const bodyHeight=selectedPick?(selectedPick.world.bottom-selectedPick.world.top)*cam.zi:70*cam.zi;
-  const bodyWidth=selectedPick?(selectedPick.world.right-selectedPick.world.left)*cam.zi:48*cam.zi;
-  const safeTop=inspectionFrame(bodyWidth,bodyHeight).top;
-  card.style.maxHeight = Math.max(62,Math.min(innerWidth <= 760 ? 160 : 240,innerHeight*.28,innerHeight-safeTop-bodyHeight-24))+'px';
+  const height=selectedPick?selectedPick.world.bottom-selectedPick.world.top:70;
+  const width=selectedPick?selectedPick.world.right-selectedPick.world.left:48;
+  // A sprite wider than the viewport itself cannot be framed by translation.
+  // Disclose that camera fit explicitly, rather than silently scaling the actor.
+  if (inspect.follow) {
+    if (inspect.zoom===null || cam.zi!==inspect.fittedZoom) inspect.zoom=cam.zi;
+    cam.zi=Math.min(inspect.zoom,(innerWidth-20)/width,(innerHeight-20)/height);
+    inspect.fittedZoom=cam.zi;inspect.fit=cam.zi<inspect.zoom;
+  }
+  layoutInspection(width*cam.zi,height*cam.zi);
   const h = S.heroes[inspect.bot], s = selectedSession(), rows = characterSessions(inspect.bot), b = D.bots.find(b => b.id === inspect.bot);
-  if (inspect.bot && !h) inspect.follow = false;
+  if (inspect.bot && !h) stopInspectionFollow();
   const lines = inspect.choices ? [] : !h ? ['Character unavailable','Follow off'] : [
     D.meta.show_profile_names === true ? 'Profile: '+(b?.profile_name || 'Unknown')+' · Pet: '+(b?.pet_name || 'Unknown') : 'Profile and pet names hidden',
     rows.length > 1 && !s ? 'Choose a session to inspect its parent' : parentLabel(s),
     ...(observedTasks(inspect.bot).length ? observedTasks(inspect.bot) : ['No observed task']),
-    'Follow '+(inspect.follow ? 'on' : 'off')];
+    'Follow '+(inspect.follow ? 'on' : 'off'),...(inspect.fit?['Zoom adjusted to fit this screen.']:[])];
   const heading = inspect.choices ? 'Choose character' : characterName(inspect.bot);
   const children=s?(D.sessions||[]).filter(row=>row.parent_session_ref===s.session_ref&&validSessionRef(row.session_ref)):[];
-  const key = JSON.stringify([heading,lines,rows.map(s=>s.session_ref),inspect.session,inspect.choices,children.map(c=>c.session_ref)]);
+  const key = JSON.stringify([heading,lines,rows.map(s=>[s.session_ref,parentLabel(s)]),inspect.session,inspect.choices,children.map(c=>[c.session_ref,characterName(c.bot)])]);
   if (key === inspect.key) return; inspect.key = key;
   const content = $('#character-content'), active = document.activeElement, owns = content.contains(active);
   $('#character-heading').textContent = heading; content.replaceChildren();
@@ -164,15 +204,15 @@ function renderInspection() {
       else {inspect.bot=child.bot;inspect.session=child.session_ref;inspect.follow=false;inspect.key='';renderInspection();}
     }));}
   if (owns) $('#character-close').focus();
+  layoutInspection(width*cam.zi,height*cam.zi);
 }
 function followCharacter(dt) {
   if (!inspect.follow || !inspect.bot) return;
-  const h = S.heroes[inspect.bot]; if (!h || privacyPending) {inspect.follow=false;return;}
+  const h = S.heroes[inspect.bot]; if (!h || privacyPending) {stopInspectionFollow();return;}
   const pick = inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
-  const card = $('#character-card').getBoundingClientRect();
   const box = pick?.world ? {...pick.world} : {left:h.x-24,right:h.x+24,top:h.y-70,bottom:h.y};
   if(pick?.anchor){const dx=h.x-pick.anchor[0],dy=h.y-pick.anchor[1];box.left+=dx;box.right+=dx;box.top+=dy;box.bottom+=dy;}
-  const {top,left,right}=inspectionFrame((box.right-box.left)*cam.zi,(box.bottom-box.top)*cam.zi),bottom=card.top-8;
+  const {top,left,right,bottom}=layoutInspection((box.right-box.left)*cam.zi,(box.bottom-box.top)*cam.zi);
   const targetX = (left+right)/2, targetY = (top+bottom)/2;
   cam.tx=(box.left+box.right)/2-(targetX-innerWidth/2)/cam.zi;
   cam.ty=(box.top+box.bottom)/2-(targetY-innerHeight/2)/cam.zi;
@@ -191,9 +231,12 @@ function inspectionLinks(v) {
     (p.session_ref===s.parent_session_ref || p.parent_session_ref===s.session_ref));
   const ids=[...new Set(refs.map(p=>p.bot))].filter(id=>id!==inspect.bot);
   const visible=ids.map(id=>inspect.picks.find(p=>p.type==='hero'&&p.id===id)).filter(Boolean);
-  const card=$('#character-card').getBoundingClientRect();
+  const card=$('#character-card').getBoundingClientRect(),side=$('#focus-bar').classList.contains('inspection-side');
   const point=p=>P(v,(p.world.left+p.world.right)/2,p.world.bottom);
-  cx.save();cx.beginPath();cx.rect(0,0,cv.width,Math.max(0,card.top-8)*DPR);cx.clip();
+  cx.save();cx.beginPath();
+  if(side)cx.rect((card.right+8)*DPR,0,Math.max(0,innerWidth-card.right-8)*DPR,cv.height);
+  else cx.rect(0,0,cv.width,Math.max(0,card.top-8)*DPR);
+  cx.clip();
   cx.strokeStyle='rgba(232,223,198,.25)';cx.lineWidth=DPR;
   for(const p of visible.slice(0,3)){const a=point(selected),b=point(p);cx.beginPath();cx.moveTo(...a);cx.lineTo(...b);cx.stroke();}
   cx.restore();
@@ -235,6 +278,7 @@ function normalizeData() {
   D.bots = D.bots.map(normalizeBot);
   // Metadata is opt-in. Sanitize before state, accessible DOM or bitmap caches.
   if (D.meta.show_titles !== true) redactText();
+  if (D.meta.show_profile_names !== true) redactCharacterNames();
 }
 function archiveSnapshots(payload) {
   const at = payload.meta?.as_of;
@@ -378,9 +422,10 @@ function mergeDelta(delta) {
     throw new Error('Invalid event response');
   if (delta.events.some(e => !e || !Number.isFinite(e.t)) || [...delta.tasks, ...delta.bots].some(v => !v || !v.id))
     throw new Error('Invalid event data');
+  if (delta.sessions !== undefined && !Array.isArray(delta.sessions)) throw new Error('Invalid session inventory');
   // An identity/config migration needs a clean authoritative snapshot, not an
   // upsert mixing old profile IDs/prose with pseudonyms. Check before mutation.
-  if ((delta.meta?.show_titles !== undefined && delta.meta.show_titles !== D.meta.show_titles) ||
+  if (privacyPending || (delta.meta?.show_titles !== undefined && delta.meta.show_titles !== D.meta.show_titles) ||
       (delta.meta?.show_profile_names !== undefined && delta.meta.show_profile_names !== D.meta.show_profile_names) ||
       (delta.meta?.config_revision !== undefined && delta.meta.config_revision !== D.meta.config_revision) ||
       (delta.meta?.captain !== undefined && delta.meta.captain !== D.meta.captain))
@@ -403,7 +448,7 @@ function mergeDelta(delta) {
     for (const v of delta[field]) { const merged = {...byId.get(v.id), ...v}; byId.delete(v.id); byId.set(v.id, merged); }
     D[field] = [...byId.values()];
   }
-  syncInspectionSessions(Array.isArray(delta.sessions)?delta.sessions:[]);
+  if (delta.sessions !== undefined) syncInspectionSessions(delta.sessions);
   normalizeData(); FRIENDS = null;
   if (delta.session_data) D.session_data = {...delta.session_data};
   if (Number.isFinite(delta.meta?.as_of)) D.meta.as_of = delta.meta.as_of;
@@ -455,9 +500,12 @@ async function pollEvents() {
       if (e instanceof IdentityChanged) {
         clearInspection();
         privacyPending = true;
+        D.meta.show_profile_names = false;
+        redactCharacterNames();
         redactText(); checkpoint = null;
         Object.assign(S, emptyState());
         if (UI) UI.privacy();
+        cx.clearRect?.(0,0,cv.width,cv.height);
       }
       const replay = await json(`${API}replay?hours=12`);
       if (replay.cursor === undefined) throw new Error('Missing replay cursor');
@@ -1717,12 +1765,12 @@ function ui() {
     if(e.button!==0)return;
     if (!pointers.size) { moved = 0; dragging=false;pinching=false;start={x:e.clientX,y:e.clientY,time:performance.now()}; }
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY}); cv.setPointerCapture(e.pointerId);
-    if (pointers.size === 2) { pinch = {distance: distance(), zoom: cam.zi}; pinching=true;moved = 10; }
+    if (pointers.size === 2) { pinch = {distance: distance(), zoom: inspect.zoom??cam.zi}; pinching=true;moved = 10; }
   };
   cv.onpointermove = e => {
     const prev = pointers.get(e.pointerId); if (!prev) return;
     pointers.set(e.pointerId, {x: e.clientX, y: e.clientY});
-    if (pinching) { if (pinch&&pointers.size>1) cam.zi = Math.max(1, Math.min(4, pinch.zoom * distance() / Math.max(1, pinch.distance))); return; }
+    if (pinching) { if (pinch&&pointers.size>1) {cam.zi = Math.max(1, Math.min(4, pinch.zoom * distance() / Math.max(1, pinch.distance)));inspect.fittedZoom=null;} return; }
     moved=Math.max(moved,Math.hypot(e.clientX-start.x,e.clientY-start.y));
     if(moved<=8&&!dragging)return;
     const v = view(), dx = (e.clientX - (dragging?prev.x:start.x)) * DPR / v.z, dy = (e.clientY - (dragging?prev.y:start.y)) * DPR / v.z;
@@ -1731,7 +1779,7 @@ function ui() {
   cv.onpointerup = e => { const was = pointers.delete(e.pointerId); pinch = null;
     if(was&&!pointers.size&&start&&Math.max(moved,Math.hypot(e.clientX-start.x,e.clientY-start.y))<=8&&performance.now()-start.time<=500)click(e); };
   cv.onpointercancel = cv.onlostpointercapture = e => { pointers.delete(e.pointerId); pinch = null; moved = 10; };
-  cv.onwheel = e => { e.preventDefault(); cam.zi = Math.max(1, Math.min(4, cam.zi + (e.deltaY < 0 ? 1 : -1))); };
+  cv.onwheel = e => { e.preventDefault(); cam.zi = Math.max(1, Math.min(4, (inspect.zoom??cam.zi) + (e.deltaY < 0 ? 1 : -1)));inspect.fittedZoom=null; };
 }
 function click(e) {
   if(privacyPending)return;
