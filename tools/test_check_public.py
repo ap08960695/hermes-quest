@@ -9,6 +9,28 @@ import unittest
 
 import check_public as guard
 
+# Build independently of the scanner's accepted pattern.
+RELEASE_REPOSITORY = 'https://' + 'github' + '.com/' + 'ap089' + '60695/hermes-quest'
+RELEASE_URLS = tuple(RELEASE_REPOSITORY + suffix for suffix in (
+    '.git', '/releases/tag/v0.1.0', '/compare/v0.1.0...HEAD'))
+REJECTED_RELEASE_URLS = (
+    *(url + suffix for url in RELEASE_URLS
+      for suffix in ('/extra', '.evil', '?redirect=evil', '#fragment', '%2Fextra', '@evil')),
+    *(prefix + url for url in RELEASE_URLS
+      for prefix in ('x', 'https://evil.invalid/', '//', 'https://')),
+    RELEASE_REPOSITORY + '-lookalike.git',
+    RELEASE_REPOSITORY + '/other.git',
+    RELEASE_REPOSITORY + '/releases/tag/v0.1.1',
+    RELEASE_REPOSITORY + '/compare/v0.1.0...evil',
+    RELEASE_REPOSITORY + '/compare/v0.1.0...HEAD-extra',
+    RELEASE_URLS[0].replace('hermes-quest', 'other-repository'),
+    RELEASE_URLS[0].replace('ap089' + '60695', 'fictional-owner'),
+    RELEASE_URLS[0].replace('github' + '.com', 'github' + '.com.evil.invalid'),
+    RELEASE_URLS[0].replace('https:', 'http:'),
+    RELEASE_URLS[0].replace('https:', 'HTTPS:'),
+    RELEASE_URLS[0].replace('github', 'github' + '.com' + '@' + 'evil.invalid/github'),
+)
+
 EXTENDED_SIGNATURES = (
     *('/' + root + '/fictional/private' for root in ('Users', 'root', 'mnt')),
     guard.WINDOWS + 'Users\\Fictional\\private',
@@ -79,6 +101,27 @@ class PublicGuardTests(unittest.TestCase):
                      'docs/assets/rawish', 'docs/notpreview/file'):
             with self.subTest(path=path):
                 self.assertFalse(guard.forbidden_path(path))
+
+    def test_release_urls_are_exact_contextual_spans(self):
+        for path in ('README.md', 'CHANGELOG.md'):
+            for url in RELEASE_URLS:
+                for template in ('{}', 'git clone {} target', '[release]({})',
+                                 '[version]: {}\n', '<{}>', '`{}`', '"{}"', "'{}'"):
+                    with self.subTest(path=path, url=url, template=template):
+                        self.assertFalse(guard.scan_text(path, template.format(url)))
+                for extra, expected in (('ap089' + '60695', 'operator'),
+                                        ('gh auth ' + 'token --user fictional', 'github-account'),
+                                        ('Bearer ' + 'FictionalOnly123', 'token')):
+                    text = url + '\n' + extra
+                    self.assertEqual(guard.scan_text(path, text), [(path, 2, expected)])
+            for url in REJECTED_RELEASE_URLS:
+                with self.subTest(path=path, rejected=url):
+                    self.assertTrue(guard.scan_text(path, url))
+        for path in ('docs/README.md', 'docs/CHANGELOG.md', 'readme.md',
+                     'README.md.bak', 'new.py', 'tools/test_extract.py', 'commit:synthetic'):
+            for url in RELEASE_URLS:
+                with self.subTest(path=path, url=url):
+                    self.assertTrue(guard.scan_text(path, url))
 
     def test_existing_fake_private_key_is_exact_and_file_scoped(self):
         source = (Path(__file__).parent / 'test_extract.py').read_text()
@@ -252,6 +295,52 @@ class HistoryGuardTests(unittest.TestCase):
         self.git('rm', 'new alias\nfile.py')
         self.commit()
         self.assertTrue(guard.scan_history(self.root)[1])
+
+    def test_release_documentation_passes_tree_and_history(self):
+        text = '\n'.join(('git clone ' + RELEASE_URLS[0] + ' target',
+                          '[0.1.0](' + RELEASE_URLS[1] + ')',
+                          '[Unreleased]: ' + RELEASE_URLS[2]))
+        for path in ('README.md', 'CHANGELOG.md'):
+            self.put(path, text)
+        self.commit()
+        for flags in ([], ['--history']):
+            with self.subTest(flags=flags), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(guard.main(['--root', str(self.root), *flags]), 0)
+        self.git('rm', 'README.md', 'CHANGELOG.md')
+        self.put('safe.md', 'synthetic')
+        self.commit()
+        self.assertFalse(guard.scan_history(self.root)[1])
+
+    def test_release_url_spoofs_and_nearby_accounts_in_deleted_documentation(self):
+        for url in REJECTED_RELEASE_URLS:
+            # Each historical root document receives a different rejected URL.
+            self.put('README.md', url)
+            self.put('CHANGELOG.md', RELEASE_URLS[0] + '\n' + 'ap089' + '60695')
+            self.commit()
+            findings = guard.scan_repository(self.root)[1]
+            self.assertEqual({path for path, _, _ in findings}, {'README.md', 'CHANGELOG.md'})
+        self.git('rm', 'README.md', 'CHANGELOG.md')
+        self.put('safe.md', 'synthetic')
+        self.commit()
+        self.assertFalse(guard.scan_repository(self.root)[1])
+        findings = guard.scan_history(self.root)[1]
+        self.assertEqual(len({label for label, _, _ in findings}), len(REJECTED_RELEASE_URLS) + 1)
+
+    def test_release_url_blob_aliases_and_messages_remain_rejected(self):
+        for index, url in enumerate(RELEASE_URLS):
+            self.put('README.md', url)
+            self.put('CHANGELOG.md', url)
+            self.put(f'docs/alias-{index}.md', url)
+            self.commit(url)
+        self.assertEqual({path for path, _, _ in guard.scan_repository(self.root)[1]},
+                         {f'docs/alias-{index}.md' for index in range(len(RELEASE_URLS))})
+        self.git('rm', '-r', 'docs')
+        self.commit()
+        self.assertFalse(guard.scan_repository(self.root)[1])
+        findings = guard.scan_history(self.root)[1]
+        self.assertEqual(len({label for label, _, _ in findings if label.startswith('blob:')}), 3)
+        self.assertEqual(len({label for label, _, _ in findings if label.startswith('commit:')}), 3)
+        self.assertEqual({rule for _, _, rule in findings}, {'operator', 'github-account'})
 
     def test_path_itself_is_scanned_without_leaking_filename(self):
         name = 'space\n' + 'orchestra' + '-captain/file.txt'

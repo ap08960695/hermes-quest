@@ -67,6 +67,14 @@ PRIVATE_KEY_FIXTURES = {'tools/test_extract.py': {
 
 FORBIDDEN = ('data/replay.json', 'preview/', 'assets/raw/', '.claude/', 'RUNBOOK.md', 'HANDOFF.md')
 
+# Release documentation only: exact public destinations, not an account exemption.
+# Adding future release versions requires an explicit policy update.
+PUBLIC_DOCUMENTATION_URLS = re.compile(
+    r'''(?<![^\s'"`<(\[])'''
+    + re.escape('https://github.com/' + 'ap089' + '60695/hermes-quest')
+    + r'(?:[.]git|/releases/tag/v0[.]1[.]0|/compare/v0[.]1[.]0[.][.][.]HEAD)'
+    + r'''(?=$|[\s'"`>)\]])''')
+
 # The explicitly approved public Git identity, only in author/committer headers.
 PUBLIC_IDENTITY = ('ap089' + '60695 <17912262+ap089' +
                    '60695@users.noreply.github.com>')
@@ -103,8 +111,16 @@ def permitted(path, rule, value):
 
 def scan_text(path, text):
     findings = []
+    public_spans = ([match.span() for match in PUBLIC_DOCUMENTATION_URLS.finditer(text)]
+                    if path in {'README.md', 'CHANGELOG.md'} else [])
     for rule, pattern in RULES.items():
         for match in pattern.finditer(text):
+            # Exempt only account signatures wholly inside a validated URL;
+            # keep every other rule and nearby occurrence independently scanned.
+            if rule in {'operator', 'github-account'} and any(
+                    start <= match.start() and match.end() <= end
+                    for start, end in public_spans):
+                continue
             if not permitted(path, rule, match.group()):
                 findings.append((path, text.count('\n', 0, match.start()) + 1, rule))
     return findings
