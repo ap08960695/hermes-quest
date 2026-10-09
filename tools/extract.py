@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import sqlite3
 import time
+import types
 import unicodedata
 import zlib
 
@@ -67,7 +68,25 @@ def load_config(path=None):
     for key in ('classes', 'regions', 'stages', 'stage_regions'):
         if not isinstance(cfg[key], dict):
             raise ValueError(f'{key} must be an object')
+    history = _history_module()
+    if history:
+        history.resolve_settings(cfg)  # botstatus_path/history_* are validated with the rest
     return cfg
+
+
+def _history_module():
+    """tools/botstatus_history.py loaded by path (this file may itself be imported by path,
+    with no sys.path entry). Absent file -> None: pause/resume/failover simply do not exist.
+    Called only from functions, never at import. Executed from source so no bytecode is written."""
+    path = Path(__file__).resolve().with_name('botstatus_history.py')
+    try:
+        source = path.read_text(encoding='utf-8')
+    except OSError:
+        return None
+    module = types.ModuleType('hermes_quest_botstatus_history')
+    module.__file__ = str(path)
+    exec(compile(source, str(path), 'exec'), module.__dict__)
+    return module
 
 
 def _normalize_text(value):
@@ -243,7 +262,10 @@ TEXT_ENUMS = {
     'kind': {'created', 'assigned', 'claimed', 'spawned', 'heartbeat', 'completed', 'failed',
              'blocked', 'unblocked', 'reassigned', 'promoted', 'scheduled', 'linked', 'unlinked',
              'comment', 'run_start', 'run_end', 'summon', 'tool', 'hurt', 'tests', 'mana', 'compress',
-             'captain', 'review_requested', 'changes_requested', 'dependency_wait', 'wake', 'moa'},
+             'captain', 'review_requested', 'changes_requested', 'dependency_wait', 'wake', 'moa',
+             'pause', 'resume', 'failover'},
+    'why': {'limited', 'waiting-start', 'unavailable'},   # pause cause / the cause a resume ended
+    'basis': {'chars', 'usage'},                          # how an estimated mana figure was derived
     'outcome': {'', 'completed', 'failed', 'interrupted', 'timed_out', 'blocked', 'review', 'success'},
     'tool': set(UTIL) | set(CAP_ACT) | {'terminal', 'patch', 'write_file', 'tool', 'delegate_task',
                                       'vision_analyze', 'web_extract', 'execute_code'},
@@ -304,7 +326,12 @@ def _tool_calls_sql(captain=False, json1=True):
 
 
 def _message_columns(captain=False, json1=True):
+    # chars is a number only: the size of what the model wrote/received in this message
+    # (content + tool-call arguments / tool result), used to estimate mana when Hermes
+    # recorded no token_count (assistant turns only). The prose itself never leaves SQLite.
     return ("session_id,role,tool_name,tool_call_id,timestamp,token_count,"
+            "CASE WHEN role='assistant' THEN coalesce(length(messages.content),0)"
+            "+coalesce(length(messages.tool_calls),0) ELSE 0 END AS chars,"
             "CASE WHEN role='tool' AND tool_name='terminal' THEN content END AS content,"
             + _tool_calls_sql(captain, json1) + " AS tool_calls")
 
@@ -576,6 +603,19 @@ def _snapshot(cfg, previous=None, t0=None):
                 messages = s.execute(f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages WHERE session_id=? AND rowid>? AND rowid<=?' +
                                      (' AND timestamp>=?' if t0 is not None else '') + ' ORDER BY rowid',
                                      (sid, lower, message_hi) + ((t0,) if t0 is not None else ()))
+                usage = share = None
+                if s.execute("SELECT 1 FROM sqlite_master WHERE name='session_model_usage'").fetchone():
+                    usage = s.execute('SELECT sum(input_tokens+output_tokens) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
+                if usage:
+                    # Real session total, minus tokens Hermes already attributed to messages, spread
+                    # over the remaining messages in proportion to their size.
+                    known, guess = s.execute(
+                        "SELECT coalesce(sum(CASE WHEN token_count>0 THEN token_count END),0),"
+                        "coalesce(sum(CASE WHEN coalesce(token_count,0)<=0 AND role='assistant' "
+                        "THEN (coalesce(length(messages.content),0)+coalesce(length(messages.tool_calls),0)+3)/4 END),0) "
+                        "FROM messages WHERE session_id=? AND rowid<=?", (sid, message_hi)).fetchone()
+                    if guess > 0 and usage > known:
+                        share = (usage - known) / guess
                 for m in messages:
                     base = dict(t=m['timestamp'], task=tid, bot=prof)
                     sub = _hash(sid)[:6] if r['parent_session_id'] else None
@@ -609,6 +649,12 @@ def _snapshot(cfg, previous=None, t0=None):
                             emit(source, f'{m["seq"]}:tests', dict(base, kind='tests', passed=int(passed.group(1) or passed.group(2))))
                     if m['role'] == 'assistant' and m['token_count']:
                         emit(source, f'{m["seq"]}:mana', dict(base, kind='mana', tokens=m['token_count']))
+                    elif m['role'] == 'assistant' and not m['token_count'] and m['chars']:
+                        guess = -(-m['chars'] // 4)  # chars/4, rounded up
+                        emit(source, f'{m["seq"]}:mana', dict(
+                            base, kind='mana', estimated=True,
+                            tokens=max(1, round(guess * share)) if share else guess,
+                            basis='usage' if share else 'chars'))
                 if s.execute("SELECT 1 FROM sqlite_master WHERE name='session_model_usage'").fetchone():
                     tok = s.execute('SELECT coalesce(sum(input_tokens+output_tokens),0) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
                     tasks[tid]['tokens'] = tasks[tid].get('tokens', 0) + tok
@@ -695,8 +741,27 @@ def _snapshot(cfg, previous=None, t0=None):
                     compression(dict(source=source, seq=f'{stat.st_ino}:{start}', session=_hash([prof, match[2]]),
                                      t=stamp, before=int(match[3]), after=int(match[4])))
             marks[source] = [stat.st_ino, f.tell()]
+    history = _history_module()
+    if history:
+        settings = history.resolve_settings(cfg)
+        seen = old.get('botstatus-history', 0)
+        records = history.read_records(settings)  # read-only; absent/damaged history -> []
+        marks['botstatus-history'] = max([seen] + [r['seq'] for r in records])
+        for r in records:
+            if r['seq'] <= seen:
+                continue
+            if r['type'] == 'failover':
+                event = dict(t=r['ts'], kind='failover', bot=r['profile'], other=r['to'])
+            elif r['status'] != 'active':
+                event = dict(t=r['ts'], kind='pause', bot=r['profile'], why=r['status'])
+            elif r['prev'] not in (None, 'active'):
+                event = dict(t=r['ts'], kind='resume', bot=r['profile'], why=r['prev'])
+            else:
+                continue
+            emit('botstatus-history', r['seq'], event)
     bot_ids = set(profiles) | {t['bot'] for t in tasks.values() if t['bot']} | ({captain} if captain else set())
     bot_ids |= {e[key] for e in events for key in ('bot', 'author') if e.get(key)}
+    bot_ids |= {e['other'] for e in events if e['kind'] == 'failover'}
     bots = [_bot(p, cfg, captain) for p in sorted(bot_ids) if re.fullmatch(r'[\w-]+', p)]
     tasks = [safe(t) for t in tasks.values()]
     bots = safe(bots)
@@ -704,7 +769,8 @@ def _snapshot(cfg, previous=None, t0=None):
     state['bots'] = {b['id']: _hash(b)[:16] for b in bots}
     changed_tasks = [t for t in tasks if previous.get('tasks', {}).get(task_keys[t['id']]) != state['tasks'][task_keys[t['id']]]]
     changed_bots = [b for b in bots if previous.get('bots', {}).get(b['id']) != state['bots'][b['id']]]
-    referenced = {e['task'] for e in events} | {e['other'] for e in events if e.get('other')}
+    # Bot-level events (pause/resume/failover) have no task; failover's `other` is a bot.
+    referenced = {e['task'] for e in events if e.get('task')} | {e['other'] for e in events if e.get('other') and e.get('task')}
     # Older v1 cursors lack delivery tracking: resend first-referenced snapshots
     # rather than assume every fingerprint was actually delivered to the client.
     delivered = set(previous.get('delivered', []))

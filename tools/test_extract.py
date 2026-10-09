@@ -774,7 +774,7 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         conf = self.home / 'profiles' / 'developer-demo' / 'config.yaml'
         conf.write_text('model:\n  default: gemini-demo\nagent:\n  reasoning_effort: low\n')
         delta = extract.collect_since(self.cfg, initial['cursor'])
-        self.assertCountEqual([e['kind'] for e in delta['events']], ['summon', 'tool'])
+        self.assertCountEqual([e['kind'] for e in delta['events']], ['summon', 'tool', 'mana'])
         self.assertEqual(delta['tasks'][0]['parents'], [self.tid])
         self.assertEqual(delta['bots'][0]['model'], 'gemini')
         self.assertEqual(extract.collect_since(self.cfg, delta['cursor'])['events'], [])
@@ -803,8 +803,8 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.add_task('t_abcdefab')
         self.k.commit()
         delta = extract.collect_since(self.cfg, initial['cursor'])
-        self.assertEqual([e['task'] for e in delta['events']], ['t_abcdefab'])
-        self.assertEqual(delta['events'][0]['cat'], 'build')
+        self.assertEqual([e['task'] for e in delta['events']], ['t_abcdefab'] * 2)
+        self.assertEqual(next(e for e in delta['events'] if e['kind'] == 'tool')['cat'], 'build')
         self.assertEqual(extract.collect_since(self.cfg, delta['cursor'])['events'], [])
 
     def test_late_first_user_recovers_earlier_tool_calls(self):
@@ -815,7 +815,7 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.message('user', sid='late', content='work kanban task ' + self.tid)
         self.s.commit()
         delta = extract.collect_since(self.cfg, initial['cursor'])
-        self.assertEqual([e['kind'] for e in delta['events']], ['tool'])
+        self.assertCountEqual([e['kind'] for e in delta['events']], ['tool', 'mana'])
         self.assertEqual(extract.collect_since(self.cfg, delta['cursor'])['events'], [])
 
     def test_captain_create_waits_for_result_without_duplicate(self):

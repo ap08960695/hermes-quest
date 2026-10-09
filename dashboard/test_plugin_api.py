@@ -210,5 +210,98 @@ class QuestAPItests(unittest.TestCase):
             self.assertEqual(self.client.post(PREFIX + path).status_code, 405)
 
 
+class SamplerTests(unittest.TestCase):
+    """The botstatus sampler: starts once per config, read-only on the source, never breaks a request."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name)
+        (self.home / "hermes-quest-root" / "tools").mkdir(parents=True)
+        self.root = self.home / "hermes-quest-root"
+        (self.root / "tools" / "botstatus_history.py").write_text(
+            (Path(api.__file__).resolve().parent.parent / "tools" / "botstatus_history.py").read_text())
+        (self.root / "tools" / "extract.py").write_text(MODERN)
+        self.status = self.home / "bot-status.json"
+        self.config = self.home / "quest.json"
+        self.config.write_text(json.dumps({"hermes_home": str(self.home), "history_sample_seconds": 5}))
+        for patcher in (patch.object(api, "ROOT", self.root),
+                        patch.dict(os.environ, {"HERMES_QUEST_CONFIG": str(self.config), "HERMES_HOME": str(self.home)})):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(api._stop_sampler)
+        app = FastAPI()
+        app.include_router(api.router, prefix=PREFIX)
+        self.client = TestClient(app)
+        self.addCleanup(self.client.close)
+
+    def history(self):
+        path = self.home / "hermes-quest" / "botstatus-history.jsonl"
+        return [json.loads(x) for x in path.read_text().splitlines()] if path.exists() else []
+
+    def wait_for(self, predicate, seconds=5):
+        import time
+        end = time.time() + seconds
+        while time.time() < end and not predicate():
+            time.sleep(0.05)
+        return predicate()
+
+    def test_absent_status_file_is_harmless_and_writes_nothing(self):
+        self.assertEqual(self.client.get(PREFIX + "/replay").status_code, 200)
+        self.assertEqual(api._sampler["state"], "running")
+        import time
+        time.sleep(0.3)
+        self.assertEqual(self.history(), [])
+        self.assertFalse((self.home / "hermes-quest").exists())
+
+    def test_sampler_runs_once_records_changes_and_leaves_status_untouched(self):
+        self.status.write_text(json.dumps({"bots": {"dev": {"status": "active", "reason": "password=Hunter2"}}}))
+        os.utime(self.status, (1_000_000_000, 1_000_000_000))
+        before = (self.status.stat().st_mtime_ns, self.status.read_bytes())
+        count = lambda: sum(t.name == "hermes-quest-botstatus" for t in __import__("threading").enumerate())
+        base = count()
+        self.assertEqual(self.client.get(PREFIX + "/replay").status_code, 200)
+        first = api._sampler["thread"]
+        self.assertEqual(self.client.get(PREFIX + "/events").status_code, 200)
+        self.assertIs(api._sampler["thread"], first)  # one thread, however many requests
+        self.assertEqual(count(), base + 1)
+        self.assertEqual((self.status.stat().st_mtime_ns, self.status.read_bytes()), before)
+        # Drive a status change through the same code path the thread uses.
+        module, settings = api._history_settings()
+        # The thread's first sample (the baseline) must be finished before the status changes.
+        self.assertTrue(self.wait_for(lambda: (self.home / "hermes-quest" / "state.json").exists()))
+        self.status.write_text(json.dumps({"bots": {"dev": {"status": "limited", "reason": "password=Hunter2"}}}))
+        result = module.sample_once(settings)
+        self.assertEqual(result, {"state": "ok", "written": 1})
+        self.assertEqual([r["status"] for r in self.history()], ["limited"])
+        self.assertNotIn("Hunter2", (self.home / "hermes-quest" / "botstatus-history.jsonl").read_text())
+
+    def test_disabled_or_unavailable_sampler_never_fails_requests(self):
+        with patch.dict(os.environ, {"HERMES_QUEST_SAMPLER": "off"}):
+            self.assertEqual(self.client.get(PREFIX + "/replay").status_code, 200)
+            self.assertIsNone(api._sampler["thread"])
+        (self.root / "tools" / "botstatus_history.py").unlink()  # older checkout
+        self.assertEqual(self.client.get(PREFIX + "/replay").status_code, 200)
+        self.assertEqual(api._sampler["state"], "unavailable")
+        self.config.write_text("{bad json")  # unreadable config: still just a replay request
+        self.assertEqual(api._ensure_sampler(), "unavailable")
+
+    def test_sampler_errors_do_not_escape_the_thread(self):
+        module, settings = api._history_settings()
+        calls = []
+        def boom(_):
+            calls.append(1)
+            raise OSError("disk full")
+        module.sample_once = boom
+        stop = __import__("threading").Event()
+        thread = __import__("threading").Thread(target=api._sample_loop, args=(module, settings, stop), daemon=True)
+        thread.start()
+        self.assertTrue(self.wait_for(lambda: calls))
+        self.assertTrue(thread.is_alive())
+        stop.set()
+        thread.join(timeout=5)
+        self.assertFalse(thread.is_alive())
+
+
 if __name__ == "__main__":
     unittest.main()

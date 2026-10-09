@@ -37,7 +37,8 @@ TOOLS = {'PLAN': ['read_file', 'search_files', 'read_file', 'vision_analyze'],
 
 
 def e(t, task, kind, **kw):
-    EV.append(dict(t=t, task=task, kind=kind, mock=True, **kw))
+    # Bot-level events (pause/resume/failover) come from botstatus history and carry no task.
+    EV.append(dict(t=t, kind=kind, mock=True, **({'task': task} if task else {}), **kw))
 
 
 def task(i, title, bot, stage, start, dur, parents=(), moa=False):
@@ -61,6 +62,12 @@ def task(i, title, bot, stage, start, dur, parents=(), moa=False):
         if name in ('patch', 'write_file'):
             ev.update(plus=random.randint(3, 60), minus=random.randint(0, 20))
         e(t, tid, 'tool', **ev)
+        # Mock mana: roughly chars/4 of a turn; the ones marked estimated mirror the
+        # extractor's fallback when Hermes stored no token_count.
+        if random.random() < .5:
+            e(t + 1, tid, 'mana', bot=bot, tokens=random.randint(200, 4000), estimated=True, basis='chars')
+        elif random.random() < .3:
+            e(t + 1, tid, 'mana', bot=bot, tokens=random.randint(200, 4000))
         if cat == 'test' and random.random() < .5:
             e(t + 8, tid, 'tests', bot=bot, passed=random.choice([42, 318, 3486]))
         if random.random() < .06:
@@ -82,11 +89,17 @@ e(t0 + 1200, bd, 'summon', bot=dev, sub='fox001')
 e(t0 + 1500, bd, 'summon', bot=dev, sub='fox002')
 ts = task(3, 'DEMO smoke SIT hotfix', tstg, 'TEST', t0 + 2900, 700, [bd])
 e(t0 + 3550, ts, 'rate_limited', bot=tstg, note='gemini 5h pool empty')
+# Botstatus history (synthetic): park the limited archer, fail its card over to the scout, resume.
+e(t0 + 3552, None, 'pause', bot=tstg, why='limited')
+e(t0 + 3561, None, 'failover', bot=tstg, other=tst)
 e(t0 + 3560, ts, 'comment', author='default', tag='[failover]',
   note=f'[failover] {tstg} limited -> {tst}')
 e(t0 + 3560, ts, 'assigned', bot=tst)
 ts2 = task(4, 'DEMO smoke SIT hotfix (handed off)', tst, 'TEST', t0 + 3600, 600, [bd])
 e(t0 + 9000, ts2, 'wake', bot=tstg, note='gemini pool reset')
+e(t0 + 9001, None, 'resume', bot=tstg, why='limited')
+e(t0 + 12000, None, 'pause', bot=ops, why='waiting-start')
+e(t0 + 12600, None, 'resume', bot=ops, why='waiting-start')
 rv = task(5, 'DEMO review hotfix diff', rev, 'REVIEW', t0 + 4300, 800, [ts2])
 e(t0 + 4320, rv, 'review_requested')
 dp = task(6, 'DEMO deploy the drawbridge', ops, 'DEPLOY', t0 + 5200, 1600, [rv])
@@ -123,7 +136,7 @@ for tk in TASKS:
     for field in ('created', 'started', 'completed'):
         tk[field] += shift
 for event in EV:
-    event['t'] += shifts.get(event['task'], 0)
+    event['t'] += shifts.get(event.get('task'), 0)
 d['tasks'] = TASKS
 d['events'] = sorted(EV, key=lambda x: x['t'])
 for i, event in enumerate(d['events']):

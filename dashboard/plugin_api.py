@@ -11,6 +11,8 @@ import os
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
+import threading
+import types
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse
@@ -18,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse
 router = APIRouter()
 ROOT = Path(__file__).resolve().parent.parent
 EXTRACT_TIMEOUT = 30
+_sampler = {"lock": threading.Lock(), "key": None, "thread": None, "stop": None, "state": "idle"}
 
 # This wrapper imports the extractor by absolute path, with no sys.path changes.
 # It also supports the pre-M3 extractor without ever touching data/replay.json.
@@ -73,8 +76,66 @@ def _extract(mode: str, value: str) -> dict:
         raise HTTPException(status_code=503, detail="Quest data is unavailable") from None
 
 
+def _history_settings():
+    """Load tools/botstatus_history.py from source (no bytecode, no sys.path change) + its settings."""
+    source = ROOT / "tools" / "botstatus_history.py"
+    module = types.ModuleType("hermes_quest_botstatus_history")
+    module.__file__ = str(source)
+    exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), module.__dict__)
+    return module, module.load_settings(os.environ.get("HERMES_QUEST_CONFIG") or None)
+
+
+def _sample_loop(module, settings, stop):
+    # Read-only sampler: bot-status.json is only read; one small JSONL line per status change
+    # goes to Hermes Quest's own data directory. A failure here never reaches a request.
+    period = settings["history_sample_seconds"]
+    while not stop.is_set():
+        try:
+            module.sample_once(settings)
+        except Exception:  # noqa: BLE001
+            pass
+        stop.wait(period)
+
+
+def _stop_sampler() -> None:
+    with _sampler["lock"]:
+        stop, thread = _sampler["stop"], _sampler["thread"]
+        _sampler.update(key=None, thread=None, stop=None, state="idle")
+    if stop is not None:
+        stop.set()
+    if thread is not None:
+        thread.join(timeout=5)
+
+
+def _ensure_sampler() -> str:
+    """Start the ~30 s sampler (daemon thread) on the first API call; idempotent per
+    (checkout, config). HERMES_QUEST_SAMPLER=off disables it (run the one-shot CLI from cron)."""
+    if os.environ.get("HERMES_QUEST_SAMPLER", "").lower() in {"0", "off", "false", "no"}:
+        return "disabled"
+    key = (str(ROOT), os.environ.get("HERMES_QUEST_CONFIG", ""), os.environ.get("HERMES_HOME", ""))
+    with _sampler["lock"]:
+        thread = _sampler["thread"]
+        if _sampler["key"] == key and (_sampler["state"] == "unavailable" or (thread and thread.is_alive())):
+            return _sampler["state"]
+    _stop_sampler()  # configuration changed (tests, reload): replace the old sampler
+    with _sampler["lock"]:
+        _sampler["key"] = key
+        try:
+            module, settings = _history_settings()
+        except (OSError, ValueError, SyntaxError):
+            _sampler["state"] = "unavailable"  # older checkout or bad config: replay still works
+            return "unavailable"
+        stop = threading.Event()
+        thread = threading.Thread(target=_sample_loop, args=(module, settings, stop),
+                                  name="hermes-quest-botstatus", daemon=True)
+        _sampler.update(thread=thread, stop=stop, state="running")
+        thread.start()
+        return "running"
+
+
 @router.get("/replay")
 def replay(hours: float = Query(default=12, gt=0, le=168)):
+    _ensure_sampler()
     return JSONResponse(_extract("replay", str(hours)), headers={"Cache-Control": "no-store"})
 
 
@@ -83,6 +144,7 @@ def events(since: str = Query(default="", max_length=32768)):
     # Query max_length counts characters, not the decoded opaque cursor's bytes.
     if len(since.encode("utf-8")) > 32768:
         raise HTTPException(status_code=422, detail="Cursor exceeds 32 KiB UTF-8")
+    _ensure_sampler()
     return JSONResponse(_extract("events", since), headers={"Cache-Control": "no-store"})
 
 

@@ -67,6 +67,7 @@ class LiveContractTests(unittest.TestCase):
                                                  'PYTHONDONTWRITEBYTECODE': '1'}))
         app = FastAPI()
         app.include_router(api.router, prefix=PREFIX)
+        self.addCleanup(api._stop_sampler)  # the first API call starts the botstatus sampler
         return self.enterContext(TestClient(app))
 
     def get(self, client, route, **params):
