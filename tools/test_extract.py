@@ -421,6 +421,39 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.assertNotIn('/media/', decoded)
         self.assertEqual(extract.collect_since(self.cfg, result['cursor'])['events'], [])
 
+    def test_no_title_path_identifier_note_or_comment_leaks_in_any_payload(self):
+        # Synthetic markers only. Every free-text source row carries a unique marker;
+        # none may reach the snapshot, the delta, or the decoded cursor by default.
+        # With show_titles opted in, harmless words are shown by design, but the
+        # sensitive components (path, identifier, host, IP, workspace) must still not leak.
+        # Paths and the address are assembled so this fixture is not a literal private reference.
+        ip = '.'.join(('10', '9', '8', '7'))
+        media, home = '/' + 'media/', '/' + 'home/'
+        sensitive = ('private-campaign', 'CUST-00012345', 'Zq9Host.internal.test', ip, 'Zq9Workspace')
+        harmless = ('Zq9Title', 'Zq9Comment', 'Zq9Note')
+        self.k.execute('UPDATE tasks SET title=?,workspace_path=?', (
+            f'Zq9Title CUST-00012345 Zq9Host.internal.test {ip}',
+            media + 'Zq9Workspace/private-campaign'))
+        self.k.execute('INSERT INTO task_comments(task_id,author,body,created_at) VALUES(?,?,?,?)',
+                       (self.tid, 'planner-demo', 'Zq9Comment ' + home + 'Zq9Workspace/x', self.now))
+        self.k.execute('INSERT INTO task_events(task_id,kind,payload,created_at) VALUES(?,?,?,?)',
+                       (self.tid, 'heartbeat', json.dumps({'note': 'Zq9Note ' + ip}), self.now))
+        self.k.commit()
+        for show in (False, True):
+            cfg = dict(self.cfg, show_titles=show)
+            replay = extract.build_replay(cfg, 12)
+            self.k.execute('INSERT INTO task_comments(task_id,author,body,created_at) VALUES(?,?,?,?)',
+                           (self.tid, 'planner-demo', 'Zq9Comment', self.now))
+            self.k.commit()
+            delta = extract.collect_since(cfg, replay['cursor'])
+            for payload in (replay, delta):
+                raw = json.dumps({k: v for k, v in payload.items() if k != 'cursor'}, ensure_ascii=False)
+                raw += json.dumps(extract._decode(payload['cursor']), ensure_ascii=False)
+                for marker in sensitive + (() if show else harmless):
+                    with self.subTest(show_titles=show, marker=marker):
+                        self.assertNotIn(marker, raw)
+            self.assertEqual(replay['tasks'][0]['id'], self.tid)
+
     def test_opt_in_label_skeleton_and_whole_text_gate(self):
         import unicodedata
         # Sample from every Unicode P/S/Z/C code point, not an ASCII allowlist.

@@ -10,3 +10,4 @@ __pycache__/
 /RUNBOOK.md
 /HANDOFF.md
 /.claude/
+node_modules/

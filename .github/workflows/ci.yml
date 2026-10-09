@@ -56,3 +56,48 @@ jobs:
       - name: Live-host checks intentionally skipped
         run: |
           printf '%s\n' 'SKIP: live dashboard authentication, installed Hermes plugin, and network/browser deployment checks require an operator host; all repository unit tests run above using synthetic fixtures.'
+
+  browsers:
+    name: browser smoke (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install pinned Playwright (devDependency only)
+        run: npm ci --no-audit --no-fund
+      - name: Resolve Playwright version
+        id: pw
+        run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
+      - name: Cache browser binaries
+        id: browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-${{ matrix.browser }}
+      - name: Install browser and system dependencies
+        if: steps.browser-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Install system dependencies only (browser cached)
+        if: steps.browser-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps ${{ matrix.browser }}
+      - name: Browser smoke (1280x800 and 390x844; demo from tools/mock.py)
+        run: node tools/browser_smoke.mjs ${{ matrix.browser }} --out "$RUNNER_TEMP/smoke-shots"
+      - name: Upload screenshots (CI artifact only, never committed)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-screenshots-${{ matrix.browser }}
+          path: ${{ runner.temp }}/smoke-shots
+          if-no-files-found: warn
+          retention-days: 7
