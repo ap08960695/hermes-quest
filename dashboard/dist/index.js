@@ -13,7 +13,7 @@
       src: API + "/static/index.html?live=1",
       style: {
         display: "block", width: "100%", height: "calc(100dvh - 9rem)",
-        minHeight: "480px", border: 0, borderRadius: "8px", background: "#10121c"
+        minHeight: 0, border: 0, borderRadius: "8px", background: "#10121c"
       },
       referrerPolicy: "same-origin"
     }));
