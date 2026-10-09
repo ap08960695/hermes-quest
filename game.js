@@ -485,12 +485,16 @@ function inPlaza(region, [x, y]) {                // clamp a final standing spot
 }
 function walkTo(h, region, spot) {
   if (h.placement?.region !== region) h.placement = null;
-  // The camp's portal sits inside its plaza, closer to an unrelated road.
-  // Leave via the camp graph node before joining the road; nearest-segment
-  // routing directly from the portal would cut across the edge of the plaza.
+  // Leave a standing yard through its own road node. Its outer slots can be
+  // closer to an unrelated road; projecting onto that road cuts across grass.
   const rest = W.regions[h.rest?.target], center = rest?.spot;
   const inside = center && Math.hypot((h.x-center[0])/PLAZA_RX,(h.y-center[1])/PLAZA_RY) <= 1;
-  const exit = inside && W.graph.pts[rest.node || h.rest.target];
+  const yard = Object.keys(W.regions).find(key => {
+    const r = W.regions[key]; if (!r.plaza) return false;
+    const {center:[x,y],standing:[rx,ry]} = plazaOf(key);
+    return ((h.x-x)/rx)**2 + ((h.y-y)/ry)**2 <= 1;
+  });
+  const exit = inside ? W.graph.pts[rest.node || h.rest.target] : yard && W.graph.pts[plazaOf(yard).node];
   const p = [...(exit ? [exit] : []), ...route(exit || [h.x, h.y], plazaOf(region).node)].map(q => q.slice());
   if (spot) p.push(inPlaza(region, spot));
   h.path = [[h.x, h.y], ...p]; h.region = region;

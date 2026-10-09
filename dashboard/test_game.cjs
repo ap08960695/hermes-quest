@@ -142,11 +142,17 @@ assert.strictEqual(run('S.heroes.b.task'),null);assert.strictEqual(run('S.heroes
 run(`loadReplay({meta:{from_:0,to:100},bots:[],events:[],tasks:Array.from({length:18},(_,i)=>({id:'crowd'+i,stage:'BUILD'}))});reset(0);
   for(const row of D.tasks)spawnMonster(task(row.id),'forge');`);
 assert.strictEqual(run('formation("forge").length'),12);
+assert.strictEqual(run('new Set(Object.values(S.tasks).filter(t=>t.placement.k<12).map(t=>t.x+","+t.y)).size'),12);
 assert.strictEqual(run('new Set(Object.values(S.tasks).map(t=>t.placement.k)).size'),18);
 assert.strictEqual(run('Object.values(S.tasks).filter(t=>t.placement.k>=12).length'),6);
 assert(run(`Object.values(S.tasks).filter(t=>t.placement.k<12).every(t=>{
   const {center:[x,y],standing:[rx,ry]}=plazaOf('forge');return ((t.x-x)/rx)**2+((t.y-y)/ry)**2<=1;})`));
 console.log('PASS scene truth, dated archives, ownership/interrupted queues, unknown/unavailable and 18-task formation');
+// The outer Port slot must exit via Port's own road entry, not the unrelated
+// nearest road north of the enlarged yard. Verify a real walk, not the oracle.
+run(`loadReplay({meta:{from_:0,to:100},bots:[{id:'yard-worker',region:'port',cls:'engineer'}],tasks:[],events:[]});reset(0);
+  const walker=S.heroes['yard-worker'];[walker.x,walker.y]=formation('port')[0];walkTo(walker,'forest',spotOf('forest'));`);
+assert.deepStrictEqual(JSON.parse(run('JSON.stringify(walker.path[1])')),JSON.parse(run('JSON.stringify(W.graph.pts.port_plaza)')));
 // Fake clock exercises the production 35s deadline without waiting in CI.
 // Both stalled headers and stalled JSON bodies must abort and then recover via
 // the scheduled 10s retry with the SAME cursor and no overlapping poll.
