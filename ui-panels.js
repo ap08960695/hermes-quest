@@ -4,7 +4,7 @@
   const $=s=>document.querySelector(s), T=root.UIText, I=root.UIGlyphs;
   const icons=new Map(), numbers=new Map();
   let epoch=0, reserved=[], grid=1, drawn=[];
-  const overlay=$('#ui-stage'), slots=[];let slot=0;
+  const overlay=$('#ui-stage'), slots=[];let slot=0, budget=Infinity, used=0;
   function iconImage(id,state='normal') {
     const key=id+state;if(icons.has(key))return icons.get(key);
     const c=document.createElement('canvas');c.width=c.height=36;
@@ -30,15 +30,18 @@
   function bounds() {
     reserved=['#hud','#tag','#camp','#chron','#quest','#help','#clock','#scrub'].map($).filter(el=>el&&!el.hidden&&getComputedStyle(el).display!=='none')
       .map(el=>el.getBoundingClientRect()).map(r=>({left:r.left-4,top:r.top-4,right:r.right+4,bottom:r.bottom+4}));
+    const fixed=['#hud','#tag','#help','#clock','#scrub'].map(s=>$(s).getBoundingClientRect());
+    const outer=fixed.filter((r,i)=>!fixed.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
+    budget=Math.max(0,innerWidth*innerHeight*(innerWidth<=760||innerHeight<=500?.25:.2)-outer.reduce((n,r)=>n+r.width*r.height,0));
   }
   function resize() {
     grid=Math.ceil(root.devicePixelRatio||1);
     const hud=$('#hud');document.documentElement.style.setProperty('--hud-height',hud.getBoundingClientRect().height+'px');bounds();
   }
-  function clear() {drawn=[];slot=0;}
+  function clear() {bounds();drawn=[];slot=0;used=0;}
   function flush() {for(let i=slot;i<slots.length;i++)slots[i].hidden=true;}
   function image(im,x,y) {
-    if(slot>=128)return;
+    if(slot>=128||used+im.width*im.height>budget)return;used+=im.width*im.height;
     let c=slots[slot++];if(!c){c=document.createElement('canvas');c.setAttribute('aria-hidden','true');overlay.append(c);slots.push(c);}
     if(c._source!==im||c._grid!==grid){c.width=im.width*grid;c.height=im.height*grid;c.style.width=im.width+'px';c.style.height=im.height+'px';
       const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.drawImage(im,0,0,c.width,c.height);c._source=im;c._grid=grid;}
