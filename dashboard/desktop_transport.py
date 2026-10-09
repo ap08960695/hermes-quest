@@ -46,7 +46,8 @@ INDEX = "index.html"
 # Scripts index.html may reference, in their required relative order. A script
 # that is not listed here makes the bootstrap fail closed: add it deliberately.
 SCRIPT_ORDER = ("font.js", "ui-glyphs.js", "ui-panels.js", "npcs.js", "quest/c-ui.js",
-                "quest/geometry.js", "quest/appearance.js", "quest/state.js", "game.js")
+                "quest/geometry.js", "quest/appearance.js", "quest/state.js",
+                "quest/actions.js", "quest/combat.js", "quest/social.js", "quest/simulation.js", "game.js")
 MAX_SOURCE_BYTES = 1024 * 1024          # per package source file
 MAX_BOOTSTRAP_BYTES = 2 * 1024 * 1024   # composed document
 MAX_ASSET_BYTES = 4 * 1024 * 1024       # ground.png is ~1.9 MB
