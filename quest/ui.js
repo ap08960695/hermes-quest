@@ -6,8 +6,131 @@ const fmt = t => { const d = new Date(t * 1000); return Number.isNaN(d.getTime()
 
 // Page-local presentation only. Never part of a replay checkpoint or live cursor.
 const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null, fit: false, zoom: null, fittedZoom: null};
+// B's selectors are authoritative when installed; raw snapshots are legacy fixtures only.
+const workView = {all:false, focus:null, key:'', pairs:[], savedCamera:null};
+function workingSnapshot() {
+  if(ctx.S.work)return ctx.S.work.has?{asOf:ctx.S.work.asOf,items:ctx.S.work.items(),resting:ctx.S.work.resting,latestOrder:ctx.S.work.latestOrder,progress:ctx.S.work.progress()}:null;
+  const value=ctx.S.working ?? ctx.D.working;
+  return value && Array.isArray(value.items) ? {asOf:value.as_of,items:value.items,resting:value.resting_count,latestOrder:value.latest_order,progress:value.progress}:null;
+}
+function workBinding(item) {
+  const direct=ctx.S.heroes[item.ref];if(direct)return direct;
+  const rows=workingSnapshot()?.items||[],matches=ctx.D.bots.filter(b=>b.display_name&&b.display_name===item.display_name);
+  // A shared alias or multiple simultaneous runs cannot identify an event actor safely.
+  return matches.length===1&&rows.filter(i=>i.status==='running'&&i.display_name===item.display_name).length===1?ctx.S.heroes[matches[0].id]:null;
+}
+function safeWorkText(value,fallback) {
+  const text=String(value??'').trim();
+  const raw=[...ctx.D.bots.map(b=>b.id),...ctx.D.bots.map(b=>b.profile_name),...ctx.D.tasks.map(t=>t.id),...(workingSnapshot()?.items||[]).map(i=>i.ref)].filter(Boolean);
+  if(!text || /(?:t_[\w]+|[a-f\d]{8,}|https?:|\/[\w.-]+\/|\[[^\]]+\]|(?:developer|tester|reviewer|orchestra)-|\b(?:R\d+|P\d+(?:-\d+)?|candidate)\b)/i.test(text) || raw.some(id=>text.includes(id)))return fallback;
+  return text;
+}
+const questKinds={planning:'Planning',plan:'Planning',build:'Build',testing:'Testing',test:'Testing',review:'Review',deploy:'Deploy',verification:'Verification',verify:'Verification'};
+function workItems() {
+  const items=workingSnapshot()?.items||[],seen=new Set();
+  return items.filter(item=>item && typeof item.ref==='string' && !seen.has(item.ref) && seen.add(item.ref)).map((item,i)=>{
+    const cls=safeWorkText(item.class_label,'Guild Worker'),binding=workBinding(item),bot=binding&&ctx.D.bots.find(b=>b.id===binding.bot),role=cls+' '+(bot?ctx.D.bots.indexOf(bot)+1:i+1);
+    const generic=(questKinds[item.quest_kind]||'Guild')+' quest #'+(i+1);
+    let quest=ctx.D.meta.show_titles===true?safeWorkText(item.quest_label,generic):/^(?:Planning|Build|Testing|Review|Deploy|Verification|Guild) quest(?: #\d+)?$/.test(item.quest_label)?item.quest_label:generic;
+    quest=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(quest),s=>s.segment).slice(0,30).join('');
+    return {...item,display_name:item.worker_observed===false?'Worker not observed':ctx.D.meta.show_profile_names===true?safeWorkText(item.display_name,role):item.display_name?.startsWith(cls+' ')&&/^\d+$/.test(item.display_name.slice(cls.length+1))?item.display_name:role,
+      class_label:cls,quest_label:quest,group_label:safeWorkText(item.group_label,'Other work')};
+  });
+}
+function workElapsed(item) {
+  const start=typeof item.started_at==='number'?item.started_at:Date.parse(item.started_at)/1000;
+  return Number.isFinite(start)?Math.floor(Math.max(0,ctx.S.t-start)/60)+' min':'Elapsed unknown';
+}
+function workDetails(ref) {
+  const row=workItems().find(i=>i.ref===ref);if(!row)return null;
+  const parent=row.parent_ref&&workItems().find(i=>i.ref===row.parent_ref);
+  return [row.display_name+' · '+row.class_label,row.quest_label,'Status: '+row.status,workElapsed(row),
+    row.parent_ref?'With: '+(parent?.display_name||'Parent not observed'):'Parent not observed',row.group_label];
+}
+function focusWork(ref,details=false) {
+  if(!workItems().some(i=>i.ref===ref))return;
+  clearInspection();workView.focus=ref;workView.key='';ctx.UI?.menu(false);
+  if(workView.all){workView.all=false;workView.savedCamera=null;}
+  if(details)ctx.UI?.detail(workDetails(ref),'Working quest',{refresh:()=>workDetails(ref)});
+  renderWorking();fitWorking();
+}
+function toggleWorking() {
+  clearInspection();ctx.UI?.selected(null);workView.all=!workView.all;workView.key='';
+  if(workView.all){workView.savedCamera={...ctx.cam};Object.assign(ctx.cam,{x:ctx.W.size[0]/2,y:ctx.W.size[1]/2,tx:ctx.W.size[0]/2,ty:ctx.W.size[1]/2,zi:1});}
+  else if(workView.savedCamera){Object.assign(ctx.cam,workView.savedCamera);workView.savedCamera=null;}
+  renderWorking();if(!workView.all)fitWorking();
+}
+function renderWorking() {
+  const snap=workingSnapshot(),panel=ctx.$('#working-panel');if(!panel)return;
+  panel.hidden=!snap||ctx.privacyPending;
+  if(panel.hidden){workView.key='';return;}
+  const rows=workItems(),running=rows.filter(i=>i.status==='running');
+  if(workView.focus&&!running.some(i=>i.ref===workView.focus))workView.focus=null;
+  if(innerWidth<=760&&!workView.focus&&running.length)workView.focus=running[0].ref;
+  ctx.$('#working-toggle').onclick=toggleWorking;
+  ctx.$('#working-toggle').textContent=workView.all?'Working':'Show all';
+  ctx.$('#working-toggle').setAttribute('aria-pressed',String(workView.all));
+  ctx.$('#working-count').textContent=running.length+' working';
+  ctx.$('#working-resting').textContent=Math.max(0,snap.resting||0)+' resting at the Inn';
+  const order=snap.latestOrder,at=typeof order?.at==='number'?order.at*1000:Date.parse(order?.at);
+  const orderQuest=ctx.D.meta.show_titles===true?order?.quest_label:/^(?:Planning|Build|Testing|Review|Deploy|Verification|Guild) quest(?: #\d+)?$/.test(order?.quest_label)?order.quest_label:'Guild quest';
+  ctx.$('#working-order').textContent=order?'Latest Captain instruction · '+safeWorkText(order.action_label,'Guild instruction')+' · '+safeWorkText(orderQuest,'Guild quest')+
+    (ctx.D.meta.show_profile_names===true&&order.recipient_display_name?' · '+safeWorkText(order.recipient_display_name,'Guild Worker'):'')+' · '+(Number.isFinite(at)?new Date(at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'Time unknown'):'No recent Captain instruction';
+  const p=snap.progress;
+  ctx.$('#working-rewards').textContent=p?'Wins today '+p.wins_today+' · Guild XP '+p.xp+' · Game gold '+p.gold+' · Level '+p.level:'Guild progress unavailable';
+  ctx.$('#guild-progress').value=p?.level_progress||0;
+  const key=JSON.stringify([rows,workView.focus,Math.floor(ctx.S.t/60)]);if(key===workView.key)return;workView.key=key;
+  const list=ctx.$('#working-rows'),active=document.activeElement,owned=list.contains(active),index=[...list.querySelectorAll('button')].indexOf(active);
+  const completedOpen=list.querySelector('details')?.open===true;list.replaceChildren();
+  for(const [status,label] of [['running','Running'],['blocked','Blocked'],['failed','Failed / Needs attention'],['done','Completed']]){
+    const group=rows.filter(i=>i.status===status||(status==='failed'&&i.status==='unknown')).sort((a,b)=>{
+      const time=v=>typeof v==='number'?v:Date.parse(v)/1000;
+      return (time(a.started_at)||Infinity)-(time(b.started_at)||Infinity)||(a.ref<b.ref?-1:a.ref>b.ref?1:0);
+    });if(!group.length)continue;
+    const section=document.createElement(status==='done'?'details':'section');list.append(section);
+    const heading=document.createElement(status==='done'?'summary':'h3');heading.textContent=label+' · '+group.length;section.append(heading);
+    if(status==='done')section.open=completedOpen;
+    for(const item of group){const b=document.createElement('button');b.className='work-row';
+      b.textContent=item.display_name+' · '+item.quest_label+' · '+workElapsed(item)+' · '+item.group_label+(item.status==='unknown'?' · Status unknown':'');
+      b.setAttribute('aria-pressed',String(workView.focus===item.ref));b.onclick=()=>focusWork(item.ref,status!=='running');section.append(b);}
+  }
+  if(!running.length){const p=document.createElement('p');p.textContent='No running quests. The guild is resting.';list.prepend(p);}
+  if(owned)(list.querySelectorAll('button')[index]||ctx.$('#working-toggle')).focus();
+}
+function workingPairs() {
+  const running=workItems().filter(i=>i.status==='running'),cap=innerWidth<=760?8:innerWidth<=1100?14:20;
+  const focus=running.find(i=>i.ref===workView.focus),visible=focus?[focus]:running.slice(0,Math.floor(cap/2));
+  const center=ctx.plazaOf(ctx.defaultRegion()).center,cols=innerWidth<=760?1:3;
+  return visible.map((item,i)=>{
+    // Resolve real animation when unambiguous; never move simulation actors.
+    const raw=workingSnapshot().items.find(r=>r.ref===item.ref),source=workBinding(raw);
+    const x=center[0]+(i%cols-(Math.min(cols,visible.length)-1)/2)*260,y=center[1]+Math.floor(i/cols)*140;
+    const hero=item.worker_observed===false?null:{...(source||{}),bot:item.ref,name:item.display_name,cls:source?.cls||'warrior',x:x-60,y,face:1,
+      path:[],placement:null,homeK:i,atk:source?.atk??-1,hurt:source?.hurt||0,charge:source?.charge||0,cheer:source?.cheer||0,fam:[],bubble:null,gest:null,sleep:false,down:0,rest:source?.rest||{},task:null};
+    const sourceTask=ctx.S.tasks[item.ref]||(source?.task&&ctx.S.tasks[source.task]);
+    const monster={...(sourceTask||{}),id:item.ref,bot:null,title:item.quest_label,x:x+60,y,mx:x+60,my:y,alpha:1,emerge:0,slot:0,
+      placement:null,mpath:null,region:ctx.defaultRegion(),stage:sourceTask?.stage||'BUILD',state:'fight',hp:sourceTask?.hp??1,flash:sourceTask?.flash||0};
+    return {item,hero,monster,x,y};
+  });
+}
+function fitWorking() {
+  if(!workingSnapshot()||workView.all)return;
+  const pairs=workingPairs();workView.pairs=pairs;if(!pairs.length)return;
+  const panel=ctx.$('#working-panel').getBoundingClientRect(),bar=ctx.$('#focus-bar').getBoundingClientRect();
+  const frame={left:12,top:bar.bottom+24,right:innerWidth<=760?innerWidth-12:panel.left-20,bottom:innerWidth<=760?panel.top-20:innerHeight-12};
+  const box={left:Math.min(...pairs.map(p=>p.x))-150,right:Math.max(...pairs.map(p=>p.x))+150,top:Math.min(...pairs.map(p=>p.y))-130,bottom:Math.max(...pairs.map(p=>p.y))+30};
+  const zoom=Math.max(.2,Math.min(workView.focus?2.5:1.5,(frame.right-frame.left)/(box.right-box.left),(frame.bottom-frame.top)/(box.bottom-box.top)));
+  const x=(box.left+box.right)/2-((frame.left+frame.right)/2-innerWidth/2)/zoom,y=(box.top+box.bottom)/2-((frame.top+frame.bottom)/2-innerHeight/2)/zoom;
+  Object.assign(ctx.cam,{x,y,tx:x,ty:y,zi:zoom});
+}
 function characterName(id) {
   const b = ctx.D.bots.find(b => b.id === id);
+  if(workingSnapshot()){
+    const rows=workItems(),matched=rows.find(i=>i.ref===id)||rows.find(i=>workBinding(workingSnapshot().items.find(raw=>raw.ref===i.ref))?.bot===id)||
+      rows.find(i=>b?.display_name&&workingSnapshot().items.find(raw=>raw.ref===i.ref)?.display_name===b.display_name);
+    return matched?.display_name||
+      (ctx.D.meta.show_profile_names===true?safeWorkText(b?.display_name,'Guild Worker '+(ctx.D.bots.indexOf(b)+1)):'Guild Worker '+(ctx.D.bots.indexOf(b)+1));
+  }
   return ctx.D.meta.show_profile_names === true && b ? b.display_name || b.profile_name || b.pet_name || 'Hero' :
     'Hero '+Math.max(1,ctx.D.bots.findIndex(b => b.id === id)+1);
 }
@@ -27,6 +150,7 @@ function parentLabel(s) {
   return parent ? 'Parent: '+(ctx.S.heroes[parent.bot]?characterName(parent.bot):'Character unavailable') : 'Parent unknown';
 }
 function observedTasks(id) {
+  if(workingSnapshot()){const b=ctx.D.bots.find(b=>b.id===id);return workItems().filter(i=>workingSnapshot().items.find(r=>r.ref===i.ref)?.display_name===b?.display_name).map(i=>i.quest_label+' · '+i.status);}
   return ctx.D.tasks.filter(t => ctx.S.tasks[t.id] ? ctx.S.tasks[t.id].bot === id : ctx.S.t >= ctx.D.meta.generated && t.bot === id).map(t => {
     const current = ctx.S.tasks[t.id];
     const status = current ? TASK_STATES[current.state] || 'Status unobserved' :
@@ -120,7 +244,7 @@ function renderInspection() {
   const h = ctx.S.heroes[inspect.bot], s = selectedSession(), rows = characterSessions(inspect.bot), b = ctx.D.bots.find(b => b.id === inspect.bot);
   if (inspect.bot && !h) stopInspectionFollow();
   const lines = inspect.choices ? [] : !h ? ['Character unavailable','Follow off'] : [
-    ctx.D.meta.show_profile_names === true ? 'Profile: '+(b?.profile_name || 'Unknown')+' · Pet: '+(b?.pet_name || 'Unknown') : 'Profile and pet names hidden',
+    workingSnapshot()?characterName(inspect.bot):ctx.D.meta.show_profile_names === true ? 'Profile: '+(b?.profile_name || 'Unknown')+' · Pet: '+(b?.pet_name || 'Unknown') : 'Profile and pet names hidden',
     rows.length > 1 && !s ? 'Choose a session to inspect its parent' : parentLabel(s),
     ...(observedTasks(inspect.bot).length ? observedTasks(inspect.bot) : ['No observed task']),
     'Follow '+(inspect.follow ? 'on' : 'off'),...(inspect.fit?['Zoom adjusted to fit this screen.']:[])];
@@ -164,6 +288,7 @@ function followCharacter(dt) {
   ctx.cam.tx=ctx.cam.x;ctx.cam.ty=ctx.cam.y;
 }
 function sceneName(entity) {
+  if(workingSnapshot())return entity.id?workItems().find(i=>i.ref===entity.id)?.quest_label||'Guild quest':characterName(entity.bot);
   const hero = !!entity.bot && !entity.id, rows = hero ? ctx.D.bots : ctx.D.tasks;
   const fallback = (hero ? 'Hero ' : 'Task ') + (rows.findIndex(r => r.id === (hero ? entity.bot : entity.id)) + 1);
   const name = ctx.D.meta.show_titles === true ? (hero ? entity.name : entity.title) : '';
@@ -172,7 +297,7 @@ function sceneName(entity) {
 function selectedEntity() {
   return ctx.S.heroes[selectedScene] || (ctx.S.tasks[selectedScene]?.alpha > 0 ? ctx.S.tasks[selectedScene] : null);
 }
-const nm = h => `<span class="who">${esc(h.name)}</span> (${esc(h.bot)})`;
+const nm = h => workingSnapshot()?`<span class="who">${esc(characterName(h.bot))}</span>`:`<span class="who">${esc(h.name)}</span> (${esc(h.bot)})`;
 let selectedScene = null;
 const esc = s => String(s ?? '').replace(/[<>&]/g, c => ({'<': '&lt;', '>': '&gt;', '&': '&amp;'}[c]));
 
@@ -197,7 +322,11 @@ function renderFeed() {
     else if(/^💀/.test(text))text='💀 Work stopped; open Details';
     else if(/^🌀/.test(text))text='🌀 Quest handoff; open Details';
     else if(/^🦊/.test(text))text='🦊 Subagent summoned; open Details';
-    if(ctx.D.meta.show_titles!==true){
+    if(workingSnapshot()){
+      for(const t of ctx.D.tasks){text=text.split(t.id).join('Guild quest');detailText=detailText.split(t.id).join('Guild quest');if(t.title){text=text.split(t.title).join('Guild quest');detailText=detailText.split(t.title).join('Guild quest');}}
+      for(const b of ctx.D.bots)for(const raw of [b.id,b.profile_name,b.name].filter(Boolean)){text=text.split(raw).join(characterName(b.id));detailText=detailText.split(raw).join(characterName(b.id));}
+      text=safeWorkText(text,'Guild activity');detailText=safeWorkText(detailText,'Guild activity in retained history');
+    } else if(ctx.D.meta.show_titles!==true){
       for(const t of ctx.D.tasks){text=text.split(t.id).join('Task details hidden');detailText=detailText.split(t.id).join('Task details hidden');}
       for(const b of ctx.D.bots){text=text.split(b.id).join('Hero');detailText=detailText.split(b.id).join('Hero');}
     }
@@ -207,6 +336,7 @@ function renderFeed() {
 }
 function renderCamps() {
   if(!ctx.UI)return;
+  if(workingSnapshot()){const rows=workItems();ctx.UI.camps([{title:'Guild quests',count:rows.filter(i=>i.status==='done').length+'/'+rows.length+' quests',blocked:rows.some(i=>i.status==='blocked')?'Blocked quests need attention':null,stages:[]}]);return;}
   const by={};for(const t of ctx.D.tasks)(by[t.campaign]||=[]).push(t);
   const rows=Object.entries(by).map(([title,ts])=>{
     const live=ts.map(t=>ctx.S.tasks[t.id]).filter(Boolean),done=live.filter(t=>t.state==='done').length;
@@ -216,6 +346,11 @@ function renderCamps() {
 }
 const TASK_STATES={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Waiting for dependencies',done:'Complete',failed:'Failed',archived:'Archived'};
 function renderOverview() {
+  renderWorking();
+  if(workingSnapshot()){
+    const rows=workItems(),tasks=rows.filter(i=>i.status!=='archived').sort((a,b)=>['running','blocked','failed','unknown','done'].indexOf(a.status)-['running','blocked','failed','unknown','done'].indexOf(b.status)).map(i=>({key:i.ref,blocked:i.status==='blocked',summary:i.display_name+' · '+i.quest_label+' · '+i.status,details:()=>focusWork(i.ref,true)}));
+    ctx.UI.overview({tasks,heroes:rows.filter(i=>i.status==='running').map(i=>({key:i.ref,summary:i.display_name+' · '+i.class_label,details:()=>focusWork(i.ref,true)})),blocked:rows.filter(i=>i.status==='blocked').length,errors:rows.filter(i=>i.status==='failed').map(()=> 'A quest failed'),empty:'No quests observed',summary:rows.filter(i=>i.status==='running').length+' working'});return;
+  }
   const states=Object.values(ctx.S.tasks),blocked=states.filter(t=>t.state==='blocked'||t.chained).length;
   const working=states.filter(t=>t.state==='fight').length,waiting=states.filter(t=>['quest','caged'].includes(t.state)).length;
   const completed=states.filter(t=>t.state==='done').length;
@@ -293,6 +428,7 @@ function ui() {
 }
 function click(e) {
   if(ctx.privacyPending)return;
+  if(workingSnapshot()&&!workView.all){const pick=inspect.picks.find(p=>e.clientX>=p.hit.left&&e.clientX<=p.hit.right&&e.clientY>=p.hit.top&&e.clientY<=p.hit.bottom);if(pick)focusWork(pick.id,true);return;}
   const picks=inspect.picks.filter(p=>e.clientX>=p.hit.left&&e.clientX<=p.hit.right&&e.clientY>=p.hit.top&&e.clientY<=p.hit.bottom).sort((a,b)=>b.order-a.order);
   if(!picks.length){
     // An empty tap first closes an open inspection. With none open it keeps main's
@@ -310,11 +446,13 @@ function click(e) {
 }
 function chooseCharacters(picks) {
   if(!picks.length||ctx.privacyPending)return;
+  if(workingSnapshot()&&!workView.all){focusWork(picks[0].id,true);return;}
   if(ctx.UI){ctx.UI.close();ctx.UI.menu(false);}
   inspect.revision=ctx.D.meta.config_revision??null;inspect.choices=picks.map(({type,id})=>({type,id}));inspect.key='';
   renderInspection();ctx.$('#character-content button')?.focus();
 }
 function questLines(t) {
+  if(workingSnapshot())return workDetails(t.ref||t.id)||[sceneName(t),'Status: '+(TASK_STATES[t.state]||'Status unknown')];
   const h=t.bot&&ctx.S.heroes[t.bot], elapsed=t.runStart?Math.round((ctx.S.t-t.runStart)/60):0;
   return [ctx.D.meta.show_titles===true?'Task ID: '+t.id:sceneName(t),ctx.D.meta.show_titles===true?t.title:'Task details hidden',
     'Assigned to: '+(h?(ctx.D.meta.show_titles===true?h.name+' ('+h.bot+')':sceneName(h)):'Not provided'),
@@ -342,6 +480,7 @@ function heroStatus(h) {
   return ctx.restLocked(h)?(h.rest.phase==='moving'?'Walking to rest':'Resting'):h.task?'Working':h.rest.state==='active-unobserved'?'Status unobserved · Unknown':'Active';
 }
 function heroDetails(h) {
+  if(workingSnapshot())return [characterName(h.bot),'Game class: '+h.cls,heroStatus(h),...workItems().filter(i=>i.display_name===characterName(h.bot)).map(i=>i.quest_label)];
   const ledger = ctx.S.tokenNetByBot[h.bot],source=ctx.D.bots.find(b=>b.id===h.bot),current=h.task&&ctx.S.tasks[h.task];
   return [ctx.D.meta.show_titles===true?h.name:'Hero details hidden',ctx.D.meta.show_titles===true?'Hero ID: '+h.bot:sceneName(h),
     'Game class: '+h.cls,'Model: '+(source?.model||'Not provided'),'Effort: '+(source?.effort||'Not provided'),heroStatus(h),
@@ -359,6 +498,8 @@ function heroDetails(h) {
 }
 return {
   get CLOCK_FORMAT(){return CLOCK_FORMAT},
+  get workingSnapshot(){return workingSnapshot}, get workItems(){return workItems}, get workView(){return workView},
+  get workingPairs(){return workingPairs}, get fitWorking(){return fitWorking}, get renderWorking(){return renderWorking}, get focusWork(){return focusWork},
   get fmt(){return fmt},
   get inspect(){return inspect},
   get characterName(){return characterName}, set characterName(v){characterName=v},

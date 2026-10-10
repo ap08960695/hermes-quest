@@ -62,6 +62,16 @@ select:focus-visible{outline:2px solid var(--gold)}
 .item-summary span{min-width:0;overflow-wrap:anywhere}
 #overview-summary,#playback-summary{font-size:12px;margin:4px 0}
 #menu p{overflow-wrap:anywhere}
+#working-panel{z-index:3;right:8px;top:8px;width:320px;max-height:calc(100dvh - 16px);overflow:auto;padding:12px}
+#working-panel h2{margin:0 0 8px;font-size:18px}
+#working-panel h3{font-size:13px;margin:12px 0 4px}
+#working-panel p{margin:6px 0;overflow-wrap:anywhere}
+#working-panel button{width:100%;height:auto;text-align:left;justify-content:flex-start}
+#working-toggle{margin-bottom:8px}
+.work-row{margin:4px 0;padding:8px;border:1px solid var(--line);border-radius:4px}
+.work-row[aria-pressed=true]{border-color:var(--gold);background:#28304a}
+#guild-progress{width:100%;accent-color:var(--gold)}
+@media(max-width:760px){#working-panel{top:auto;bottom:8px;left:8px;width:calc(100vw - 16px);max-height:38dvh;padding:8px}#working-panel h2{font-size:15px}#working-panel h3{margin-top:8px}}
 @media(max-width:360px){#mode{padding:0 2px}#focus-bar{gap:2px}#issues{padding:2px;max-width:124px}}
 @media(max-height:400px){#menu{top:56px;max-height:calc(100dvh - 64px)}}
 
@@ -113,6 +123,15 @@ select:focus-visible{outline:2px solid var(--gold)}
   <details id="group-world"><summary>World</summary><p>Explore the map and its activity markers.</p><div class="menu-controls"><button id="world" aria-label="Map"></button><button id="world-help" class="text-button">Icon legend</button></div></details>
   <details id="group-settings"><summary>Settings</summary><div class="menu-controls"><button id="calm" aria-label="Reduce motion and flashes"></button><button id="help" aria-label="Icon help"></button><button id="hide-panels" class="text-button">Hide panels</button></div><p>Menu and group visibility are saved only on this device. Closing panels does not pause playback or live updates.</p></details>
 </nav>
+<section id="working-panel" class="panel" aria-label="Working quests" hidden>
+  <h2 id="working-count">Working</h2>
+  <button id="working-toggle" class="text-button" aria-pressed="false">Show all</button>
+  <p id="working-resting"></p>
+  <div id="working-order" title="Explicit Captain instructions in retained history only"></div>
+  <p id="working-rewards"></p>
+  <progress id="guild-progress" max="100" value="0" aria-label="Guild level progress"></progress>
+  <div id="working-rows"></div>
+</section>
 <div id="quest" class="panel" role="dialog" aria-modal="true" aria-label="Details" hidden></div>
 <section id="character-card" class="panel" aria-label="Character inspection" hidden style="z-index:5;left:8px;bottom:8px;width:280px;max-width:calc(100vw - 16px);padding:8px;overflow:auto">
   <div style="position:sticky;top:0;background:#111b30;display:flex;align-items:center;justify-content:space-between;gap:8px"><strong id="character-heading" style="min-width:0;max-height:44px;overflow:auto;overflow-wrap:anywhere">Character</strong><button id="character-close" aria-label="Close character inspection">Close</button></div>
