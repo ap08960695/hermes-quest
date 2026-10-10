@@ -4,6 +4,10 @@
   "description": "CI-only tooling (browser smoke); the game itself has no build step or runtime dependencies.",
   "license": "MIT",
   "devDependencies": {
-    "playwright": "1.64.0"
+    "esbuild": "0.28.1",
+    "jsdom": "26.1.0",
+    "playwright": "1.64.0",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
   }
 }

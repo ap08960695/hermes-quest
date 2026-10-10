@@ -222,6 +222,24 @@ class HistoryGuardTests(unittest.TestCase):
         self.git('add', '-A')
         self.git('commit', '-qm', message, **kwargs)
 
+    def test_public_refs_include_sibling_history_not_local_archive(self):
+        self.put('safe.md', 'synthetic')
+        self.commit()
+        safe = self.git('rev-parse', 'HEAD').strip().decode()
+        self.git('switch', '-c', 'published-sibling')
+        self.put('deleted.md', guard.HOME + 'operator/private')
+        self.commit()
+        self.git('switch', '--detach', safe)
+        self.assertFalse(guard.scan_history(self.root)[1])
+        # A local directory is a real Git transport advertising both heads.
+        findings = guard.scan_history(self.root, str(self.root))[1]
+        self.assertIn('local-path', {rule for _, _, rule in findings})
+        self.git('branch', '-D', 'published-sibling')
+        self.assertFalse(guard.scan_history(self.root, str(self.root))[1])
+        # Annotated tags and their otherwise-unreachable commit are public too.
+        self.git('tag', '-a', 'synthetic-tag', '-m', guard.HOME + 'operator/tag')
+        self.assertIn('local-path', {rule for _, _, rule in guard.scan_history(self.root, str(self.root))[1]})
+
     def test_clean_history_and_uncommitted_tree_are_separate(self):
         self.put('safe.md', 'synthetic demo')
         self.commit()

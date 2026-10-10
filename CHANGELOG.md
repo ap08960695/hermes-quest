@@ -4,6 +4,27 @@ All notable changes to Hermes Quest are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.2 - 2026-10-10
+
+### Security
+
+- Ignore replay source overrides in plugin/live mode; standalone replays accept
+  only relative JSON files under `data/`. Static HTML has a same-origin CSP.
+- Serve static content from no-follow file descriptors, not checked paths.
+- Refuse symlinked sampler directories/files and create private, exclusive random
+  checkpoint temporaries. Preserve crash recovery and fsync ordering.
+- Validate Desktop bootstrap CSP/nonce structure with DOMParser. Hide arbitrary
+  campaign text when titles are disabled. Unknown Captain actions are ignored.
+- Pin all CI actions, run the Desktop bridge tests in CI, and add a public-ref
+  history scanner for release audits.
+
+### Fixed
+
+- Default dashboard token authentication uses the host SDK JSON bridge without
+  credentials in frame URLs. Cookie authentication and Desktop share the bridge.
+- Installation, update, Desktop setup, removal and privacy disclosures now cover
+  both entry points without alternate-loopback workarounds.
+
 ## v0.1.1 - 2026-10-10
 
 ### Security

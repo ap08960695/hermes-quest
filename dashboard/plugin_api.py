@@ -16,6 +16,7 @@ import importlib.util
 import json
 import os
 import secrets
+import stat
 from pathlib import Path, PurePosixPath
 import subprocess
 import sys
@@ -23,7 +24,8 @@ import threading
 import types
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
 
 @asynccontextmanager
 async def _lifespan(app):
@@ -306,7 +308,7 @@ def events(since: str = Query(default="", max_length=32768), request: Request = 
 def _static_target(asset_path: str) -> Path:
     # Reject traversal before normalization; only literal POSIX URL paths exist.
     parts = asset_path.split("/")
-    if not asset_path or "\\" in asset_path or any(p in ("", ".", "..") for p in parts):
+    if not asset_path or "\\" in asset_path or "\0" in asset_path or any(p in ("", ".", "..") for p in parts):
         raise HTTPException(status_code=404, detail="Not found")
     relative = PurePosixPath(asset_path)
     allowed = asset_path in {
@@ -322,29 +324,61 @@ def _static_target(asset_path: str) -> Path:
     )
     if not allowed:
         raise HTTPException(status_code=404, detail="Not found")
-    # Even a symlink *inside* assets/px could point to replay or another private
-    # in-repo path. Reject every symlink component, not just escapes from ROOT.
-    target = ROOT
-    for part in parts:
-        target = target / part
-        if target.is_symlink():
-            raise HTTPException(status_code=404, detail="Not found")
+    # Validation returns a name, never authority to open it later by absolute path.
+    return ROOT.joinpath(*parts)
+
+
+_DESCRIPTOR_SAFE = (os.open in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW")
+                    and hasattr(os, "O_DIRECTORY"))
+
+
+def _open_static(asset_path: str) -> int:
+    _static_target(asset_path)
+    if not _DESCRIPTOR_SAFE:
+        raise HTTPException(status_code=404, detail="Not found")
+    parts = asset_path.split("/")
+    base = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    held = None
+    fd = None
     try:
-        resolved = target.resolve(strict=True)
-        resolved.relative_to(ROOT.resolve())
-        if not resolved.is_file():
-            raise ValueError("Not a file")
-    except (OSError, ValueError, RuntimeError):
+        held = os.open(ROOT, base | os.O_DIRECTORY)
+        for part in parts[:-1]:
+            child = os.open(part, base | os.O_DIRECTORY, dir_fd=held)
+            os.close(held)
+            held = child
+        fd = os.open(parts[-1], base | os.O_NONBLOCK, dir_fd=held)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("Not a regular file")
+        return fd
+    except (OSError, ValueError):
+        if fd is not None:
+            os.close(fd)
         raise HTTPException(status_code=404, detail="Not found") from None
-    return resolved
+    finally:
+        if held is not None:
+            os.close(held)
 
 
 @router.get("/static/{asset_path:path}")
 def static_asset(asset_path: str):
-    target = _static_target(asset_path)
+    fd = _open_static(asset_path)
+    suffix = PurePosixPath(asset_path).suffix.lower()
     media_type = {".html": "text/html", ".js": "application/javascript",
-                  ".json": "application/json", ".png": "image/png", ".otf": "font/otf"}[target.suffix.lower()]
-    return FileResponse(target, media_type=media_type, headers={
-        "Cache-Control": "no-store" if target.suffix in {".html", ".js"} else "public, max-age=60",
+                  ".json": "application/json", ".png": "image/png", ".otf": "font/otf"}[suffix]
+    handle = os.fdopen(fd, "rb")
+    def chunks():
+        try:
+            while chunk := handle.read(65536):
+                yield chunk
+        finally:
+            handle.close()
+    headers = {
+        "Cache-Control": "no-store" if suffix in {".html", ".js"} else "public, max-age=60",
         "X-Content-Type-Options": "nosniff",
-    })
+    }
+    if suffix == ".html":
+        headers["Content-Security-Policy"] = ("default-src 'self'; connect-src 'self'; img-src 'self' data:; "
+                                            "script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                            "base-uri 'none'; object-src 'none'; form-action 'none'")
+    return StreamingResponse(chunks(), media_type=media_type, headers=headers,
+                             background=BackgroundTask(handle.close))

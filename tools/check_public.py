@@ -176,7 +176,7 @@ def scan_repository(root):
 
 def scan_commit(oid, raw):
     headers, separator, message = raw.partition(b'\n\n')
-    identity = re.compile(rb'(author|committer) ' + re.escape(PUBLIC_IDENTITY.encode())
+    identity = re.compile(rb'(author|committer|tagger) ' + re.escape(PUBLIC_IDENTITY.encode())
                           + rb' [0-9]+ [+-][0-9]{4}')
     # Do not exempt messages, arbitrary noreply names, or any other header.
     headers = b'\n'.join(b'public contributor <public@users.noreply.github.com>'
@@ -185,7 +185,7 @@ def scan_commit(oid, raw):
     return scan_text('commit:' + oid, readable_text(headers + separator + message))
 
 
-def scan_history(root):
+def scan_history(root, public_remote=None):
     def git(*args, **kwargs):
         return subprocess.run(['git', '--no-replace-objects', *args], cwd=root, check=True,
                               capture_output=True, **kwargs).stdout
@@ -193,7 +193,24 @@ def scan_history(root):
     # A shallow clone cannot prove that all ancestors have been audited.
     if git('rev-parse', '--is-shallow-repository').strip() != b'false':
         raise ValueError('shallow history')
-    oids = git('rev-list', '--objects', '--no-object-names', 'HEAD').splitlines()
+    refs = []
+    revisions = ['HEAD']
+    if public_remote:
+        # Only advertised public heads/tags, never --all (which includes archives).
+        rows = git('ls-remote', '--heads', '--tags', public_remote).splitlines()
+        revisions = []
+        for row in rows:
+            oid, ref = row.split(b'\t')
+            if not re.fullmatch(rb'[0-9a-f]{40}', oid):
+                raise ValueError('invalid public ref')
+            refs.append(ref.decode('utf-8'))
+            revisions.append(oid.decode('ascii'))
+        revisions = sorted(set(revisions))
+        if not revisions:
+            raise ValueError('no public refs')
+        # Fetch exact advertised objects, without changing any local branch/tag.
+        git('fetch', '--no-tags', '--no-write-fetch-head', public_remote, *revisions)
+    oids = git('rev-list', '--objects', '--no-object-names', *revisions).splitlines()
     stream = io.BytesIO(git('cat-file', '--batch', input=b'\n'.join(oids) + b'\n'))
     objects = {}
     for expected in oids:
@@ -204,7 +221,12 @@ def scan_history(root):
         objects[oid.decode()] = (kind, raw)
 
     findings, roots, blob_paths = [], set(), {}
+    for ref in refs:
+        label = 'public-ref:' + hashlib.sha256(ref.encode()).hexdigest()
+        findings.extend((label, line, rule) for _, line, rule in scan_text('', ref))
     for oid, (kind, raw) in objects.items():
+        if kind == b'tag':
+            findings.extend(scan_commit(oid, raw))
         if kind == b'commit':
             findings.extend(scan_commit(oid, raw))
             roots.add(raw.split(b'\n', 1)[0].removeprefix(b'tree ').decode('ascii'))
@@ -242,16 +264,19 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument('--history', action='store_true', help='audit all objects reachable from HEAD')
+    parser.add_argument('--public-refs', nargs='?', const='origin', help='audit every advertised head/tag of a public remote (fetches exact objects)')
     args = parser.parse_args(argv)
+    history = args.history or args.public_refs is not None
     try:
-        paths, findings = (scan_history if args.history else scan_repository)(args.root.resolve())
+        paths, findings = (scan_history(args.root.resolve(), args.public_refs) if history
+                           else scan_repository(args.root.resolve()))
     except (OSError, ValueError, subprocess.CalledProcessError):
-        print('FAIL check_public: cannot audit complete history' if args.history
+        print('FAIL check_public: cannot audit complete history' if history
               else 'FAIL check_public: cannot enumerate tracked files')
         return 2
     for path, line, rule in findings:
         print(f'{path}:{line}: {rule}')
-    scope = 'reachable objects' if args.history else 'tracked files'
+    scope = 'reachable objects' if history else 'tracked files'
     print(f'{"FAIL" if findings else "PASS"} check_public: {len(paths)} {scope}; {len(findings)} findings')
     return 1 if findings else 0
 

@@ -20,6 +20,8 @@ const { createRequire } = require('node:module');
 const NM = process.env.QUEST_NODE_MODULES || path.join(__dirname, '..', 'node_modules');
 const req = createRequire(path.join(NM, 'x.js'));
 const esbuild = req('esbuild');
+const { JSDOM } = req('jsdom');
+globalThis.DOMParser = new JSDOM('').window.DOMParser;
 const ROOT = path.join(__dirname, '..');
 
 const SDK_STUB = `
@@ -62,13 +64,14 @@ const plugin = require(cjsFile);
 const bridgeSource = fs.readFileSync(path.join(__dirname, 'guest-bridge.js'), 'utf8');
 
 const NONCE = 'Sp0oROAYg7qG6emDk4C2Jtjg';
-const goodHtml = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'none'"><meta name="quest-nonce" content="${NONCE}"></head><body><script>parent.postMessage({kind:'quest-ready'})</script></body></html>`;
+const goodHtml = `<!doctype html><html><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"><meta name="quest-nonce" content="${NONCE}"></head><body><script>parent.postMessage({kind:'quest-ready'})</script></body></html>`;
 
 async function unit() {
   await test('registers route, sidebar nav and palette command; opt-in default', () => {
     const items = [];
     const ctx = { i18n: { register() {}, t: k => k }, registerMany: list => items.push(...list), rest: async () => ({}) };
     assert.strictEqual(plugin.default.id, 'hermes-quest');
+    assert.strictEqual(plugin.default.version, '0.1.2');
     assert.strictEqual(plugin.default.defaultEnabled, false);
     plugin.default.register(ctx);
     const byId = Object.fromEntries(items.map(i => [i.id, i]));
@@ -110,6 +113,14 @@ async function unit() {
       { html: goodHtml.replace('connect-src', 'x-src') }, { html: goodHtml.replace(NONCE, 'AAAAAAAAAAAAAAAAAAAAAAAA') },
       { html: goodHtml.replace('quest-ready', 'q') }, { html: 'x'.repeat(3 * 1024 * 1024 + 1) }])
       assert.throws(v(o), /invalid bootstrap/);
+    for (const html of [
+      `<!doctype html><html><head><!--${goodHtml}--></head><body><script>evil()</script></body></html>`,
+      goodHtml.replace('<head>', '<head><!-- inert -->'),
+      goodHtml.replace('<head>', '<head><script>evil()</script>'),
+      goodHtml.replace('</head>', `<meta name="quest-nonce" content="${NONCE}"></head>`),
+      goodHtml.replace("connect-src 'none'", "connect-src *"),
+      goodHtml.replace('<meta name="quest-nonce"', '<template><meta name="quest-nonce"').replace('</head>', '</template></head>'),
+    ]) assert.throws(v({ html }), /invalid bootstrap/);
     assert.throws(() => plugin.validateBootstrap(null), /invalid bootstrap/);
     assert.throws(() => plugin.validateBootstrap('x'), /invalid bootstrap/);
     const src = plugin.buildFrameSrc('<a>#?%</a>');

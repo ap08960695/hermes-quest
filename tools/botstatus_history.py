@@ -25,6 +25,7 @@ import math
 import os
 from pathlib import Path
 import re
+import secrets
 import sqlite3
 import stat
 import sys
@@ -151,13 +152,31 @@ def _files(settings):
     return rotated + [base]  # oldest -> newest
 
 
+def _history_open(path, flags, mode=0o600):
+    """Anchor writes to a non-symlink directory; refuse symlinks and devices."""
+    path = Path(path)
+    held = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = None
+    try:
+        fd = os.open(path.name, flags | os.O_NOFOLLOW | os.O_NONBLOCK, mode, dir_fd=held)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('not a regular history file')
+        return fd
+    except BaseException:
+        if fd is not None:
+            os.close(fd)
+        raise
+    finally:
+        os.close(held)
+
+
 def _lock(settings, shared, wait):
     """Return an open lock fd (or None). Readers never create the lock file."""
     if fcntl is None:
         return None
     path = Path(settings['history_dir']) / LOCK
     try:
-        fd = os.open(path, (os.O_RDONLY if shared else os.O_RDWR | os.O_CREAT) | os.O_NONBLOCK, 0o600)
+        fd = _history_open(path, os.O_RDONLY if shared else os.O_RDWR | os.O_CREAT)
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             os.close(fd)
             return None
@@ -299,7 +318,7 @@ def _save_state(settings, state):
     # checkpoint path can advance or rotation can discard recovered records.
     for path in _files(settings):
         try:
-            fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+            fd = _history_open(path, os.O_RDONLY)
         except FileNotFoundError:
             continue
         try:
@@ -309,18 +328,28 @@ def _save_state(settings, state):
         finally:
             os.close(fd)
     _sync_directory(directory)
-    tmp = directory / (STATE + '.tmp')
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, 'w', encoding='utf-8') as f:
-        json.dump(dict(v=1, last=state['last'], seq=state['seq'], comment=state['comment']), f, separators=(',', ':'))
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, directory / STATE)
-    _sync_directory(directory)
+    held = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    tmp = STATE + '.' + secrets.token_hex(16) + '.tmp'
+    created = False
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                     0o600, dir_fd=held)
+        created = True
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(dict(v=1, last=state['last'], seq=state['seq'], comment=state['comment']), f, separators=(',', ':'))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, STATE, src_dir_fd=held, dst_dir_fd=held)
+        created = False
+        os.fsync(held)
+    finally:
+        if created:
+            os.unlink(tmp, dir_fd=held)
+        os.close(held)
 
 
 def _sync_directory(directory):
-    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         os.fsync(fd)
     finally:
@@ -337,7 +366,7 @@ def _repair_tail(settings):
         return
     end = data.rfind(b'\n') + 1
     # Refuse an oversized torn suffix rather than truncate unseen committed data.
-    fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+    fd = _history_open(path, os.O_WRONLY)
     try:
         size = os.fstat(fd).st_size
         if skipped and not end:
@@ -417,7 +446,12 @@ def sample_once(settings, now=None):
     if status is None:
         return dict(state='absent', written=0)
     directory = Path(settings['history_dir'])
+    if directory.is_symlink():
+        raise ValueError('symlinked history directory')
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Also refuses a directory swapped to a symlink after the check.
+    check = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    os.close(check)
     fd = _lock(settings, False, 0)
     if fd is None and fcntl is not None:
         return dict(state='busy', written=0)
@@ -460,7 +494,7 @@ def sample_once(settings, now=None):
                 # their state first, never the still-unwritten pending batch.
                 _save_state(settings, recovered)
             _rotate(settings)
-            wfd = os.open(directory / FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NONBLOCK, 0o600)
+            wfd = _history_open(directory / FILE, os.O_WRONLY | os.O_APPEND | os.O_CREAT)
             try:
                 if not stat.S_ISREG(os.fstat(wfd).st_mode):
                     raise ValueError('not a regular history file')

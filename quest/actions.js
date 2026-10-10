@@ -113,6 +113,7 @@ const ACTIONS = {
     ctx.S.soc.captain = (ctx.S.soc.captain || 0) + 1;
     const LINE = {create: ['📌 New quest!', '#ffd36b'], reassign: ['🔁 Reassigned!', '#9fd3ff'], extend: ['⏳ More time', '#ffd36b'],
       unblock: ['🔨 Unblocked!', '#ff9f5a'], block: ['⛓ On hold', '#ff6b5a'], link: ['🔗 Linked', '#c8b0ff'], unlink: ['✂ Unlinked', '#c8b0ff'], note: ['✒', '#cfd8ea']}[e.act];
+    if (!Array.isArray(LINE)) return; // Unknown/replayed actions have no presentation.
     if (e.act !== 'note' || Math.random() < .15) { cap.atk = 0; cap.cur = {tool: 'order'}; cap.bubble = {text: LINE[0], until: 1.6}; }
     if (e.act === 'extend' && t.alpha > 0) ctx.num(t.x, t.y - 46, '⏳ +time', '#ffd36b', 1.4);
     if (e.act === 'unblock' && t.alpha > 0) { ctx.burst(t.x, t.y - 20, '#ff9f5a', 14); ctx.S.fx.push({k: 'ring', x: t.x, y: t.y - 20, color: '#ffcf6b', r: 26, life: .4, max: .4}); }

@@ -48,6 +48,56 @@ class RecoveryTests(unittest.TestCase):
         self.addCleanup(db.close)
         return db
 
+    def test_planted_checkpoint_temp_and_state_symlinks_do_not_modify_source(self):
+        self.status({'demo': 'active'})
+        self.directory.mkdir()
+        before = self.source.read_bytes()
+        for name in (bh.STATE + '.tmp', bh.STATE):
+            (self.directory / name).symlink_to(self.source)
+        self.assertEqual(self.sample()['state'], 'ok')
+        self.assertEqual(self.source.read_bytes(), before)
+        self.assertTrue((self.directory / (bh.STATE + '.tmp')).is_symlink())
+        self.assertFalse((self.directory / bh.STATE).is_symlink())
+        self.assertEqual((self.directory / bh.STATE).stat().st_mode & 0o777, 0o600)
+
+    def test_exclusive_random_temp_collision_never_truncates(self):
+        self.directory.mkdir()
+        name = bh.STATE + '.' + 'a' * 32 + '.tmp'
+        target = self.directory / name
+        target.write_text('CANARY')
+        with patch.object(bh.secrets, 'token_hex', return_value='a' * 32):
+            with self.assertRaises(FileExistsError):
+                bh._save_state(self.settings, dict(last={}, seq=0, comment=None))
+        self.assertEqual(target.read_text(), 'CANARY')
+        self.assertFalse((self.directory / bh.STATE).exists())
+
+    def test_history_directory_and_writer_symlinks_are_refused(self):
+        self.status({'demo': 'limited'})
+        before = self.source.read_bytes()
+        other = self.home / 'other'
+        other.mkdir()
+        self.directory.symlink_to(other, target_is_directory=True)
+        with self.assertRaises((OSError, ValueError)):
+            self.sample()
+        self.assertEqual(list(other.iterdir()), [])
+        self.directory.unlink()
+        self.directory.mkdir()
+        for name in (bh.FILE, bh.LOCK):
+            target = self.directory / name
+            target.unlink(missing_ok=True)
+            target.symlink_to(self.source)
+            try:
+                result = self.sample()
+                self.assertEqual(result['state'], 'busy')
+            except (OSError, ValueError):
+                pass
+            self.assertEqual(self.source.read_bytes(), before)
+            target.unlink()
+        fifo = self.directory / bh.FILE
+        os.mkfifo(fifo)
+        with self.assertRaises((OSError, ValueError)):
+            bh._history_open(fifo, os.O_WRONLY)
+
     def crash_at_save(self):
         # A real process pauses after its durable append, retaining the exclusive
         # lock. Another sampler must be busy; SIGKILL releases the lock without

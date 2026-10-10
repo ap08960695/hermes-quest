@@ -41,7 +41,8 @@ function client(search = '', pathname = '/index.html', replay = demo, manifest =
     ['?data=data/replay.json', '/index.html', 'data/replay.json', false],
     ['?live=1', '/index.html', '/api/plugins/hermes-quest/replay?hours=12', true],
     ['', '/api/plugins/hermes-quest/static/index.html', '/api/plugins/hermes-quest/replay?hours=12', true],
-    ['?live=1&data=data/demo.json', '/index.html', 'data/demo.json', false]
+    // Live mode must not be demoted to standalone by a replay override.
+    ['?live=1&data=data/demo.json', '/index.html', '/api/plugins/hermes-quest/replay?hours=12', true]
   ]) {
     const c = client(search, pathname); await c.run('boot()');
     assert.strictEqual(c.calls[0].url, expected);

@@ -28,6 +28,8 @@ jobs:
         run: python3 tools/check_public.py
       - name: Public history guard
         run: python3 tools/check_public.py --history
+      - name: All advertised public heads and tags (not private local archive refs)
+        run: python3 tools/check_public.py --public-refs origin
       - name: Game backtest (must print PASS)
         run: node tools/backtest.js
       - name: Extractor redaction and synthetic API privacy corpus (no Hermes required)
@@ -53,11 +55,14 @@ jobs:
             [ "$test" = dashboard/test_live_contract.py ] && continue
             python3 -m unittest discover -s dashboard -p "${test##*/}" -v
           done
+      - name: Install pinned Node test dependencies
+        run: npm ci --no-audit --no-fund
       - name: Node regression tests
         run: |
           node --test tools/test_mobile_measurement.cjs
           node tools/backtest.test.js
           node dashboard/test_game.cjs
+          node desktop/test_plugin.cjs
           node dashboard/test_defaults.cjs
           node dashboard/test_dashboard_auth.cjs
           # test_api_migration.cjs receives real synthetic API fixtures from
@@ -83,6 +88,8 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npx playwright install --with-deps chromium firefox
+      - name: Replay security regressions (both engines)
+        run: node tools/test_replay_security.cjs
       - name: UI inventory (both engines, portrait/landscape, zoom 1 and 3)
         run: node tools/test_ui_inventory.cjs "$RUNNER_TEMP/ui-regressions/inventory"
       - name: Selected rendering and private presentation (both engines)
@@ -124,7 +131,7 @@ jobs:
           NODE
       - name: Upload UI regression evidence (synthetic data only)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ui-regression-evidence
           path: ${{ runner.temp }}/ui-regressions
@@ -140,11 +147,11 @@ jobs:
       matrix:
         browser: [chromium, firefox]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
           cache: npm
@@ -155,7 +162,7 @@ jobs:
         run: echo "version=$(node -p "require('playwright/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache browser binaries
         id: browser-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-${{ matrix.browser }}
@@ -173,7 +180,7 @@ jobs:
         run: node tools/browser_smoke.mjs ${{ matrix.browser }} --out "$RUNNER_TEMP/smoke-shots"
       - name: Upload screenshots (CI artifact only, never committed)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: smoke-screenshots-${{ matrix.browser }}
           path: ${{ runner.temp }}/smoke-shots

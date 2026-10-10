@@ -57,7 +57,7 @@ function archiveSnapshots(payload) {
     .map(t => ({id: 'snapshot-archive:' + t.id + ':' + at, task: t.id, kind: 'archived', t: at}));
 }
 function redactText() {
-  ctx.D.tasks.forEach(t => { t.title = t.id; delete t.note; });
+  ctx.D.tasks.forEach(t => { t.title = t.id; t.campaign = 'misc'; delete t.note; });
   ctx.D.bots.forEach(b => { b.name = b.id; });
   ctx.D.events.forEach(e => { delete e.note; delete e.title; });
 }

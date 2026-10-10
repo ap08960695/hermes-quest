@@ -48,7 +48,8 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
     await run('pollEvents()');
     const prior = JSON.parse(before), failed = JSON.parse(state());
     const safeData = copy(prior.D);
-    for (const task of safeData.tasks) {task.title = task.id; delete task.note;}
+    // Campaign names are prose too: fail-closed revocation must remove them.
+    for (const task of safeData.tasks) {task.title = task.id; task.campaign = 'misc'; delete task.note;}
     for (const bot of safeData.bots) bot.name = bot.id;
     for (const event of safeData.events) {delete event.title; delete event.note;}
     const safeExpected = copy(prior);

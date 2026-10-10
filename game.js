@@ -23,8 +23,11 @@ let D, W, BG, SPR = {}, MONS = null, MONMETA = null, BLD = {}, MIMG = {}, HMETA 
 async function boot() {
   try {
   const params = new URLSearchParams(window.location?.search || '');
-  ctx.liveFeed = !params.has('data') && (params.get('live') === '1' || (window.location?.pathname || '').startsWith(ctx.API));
-  [D, W] = await Promise.all([ctx.json(params.get('data') || (ctx.liveFeed ? `${ctx.API}replay?hours=12` : 'data/demo.json')), ctx.json('data/world.json')]);
+  ctx.liveFeed = params.get('live') === '1' || (window.location?.pathname || '').startsWith(ctx.API);
+  // Only standalone replays may override the source, and only literal data/ files.
+  const data = params.get('data') || '';
+  const replay = !ctx.liveFeed && /^data\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.json$/.test(data) && !data.includes('..') ? data : 'data/demo.json';
+  [D, W] = await Promise.all([ctx.json(ctx.liveFeed ? `${ctx.API}replay?hours=12` : replay), ctx.json('data/world.json')]);
   ctx.loadReplay(D);
   BG = await img('assets/px/ground.png');
   for (const c of Object.keys(ctx.CLS_HUE)) SPR[c] = await img(`assets/px/${c}.png`);

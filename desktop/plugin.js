@@ -128,9 +128,15 @@ export function validateBootstrap(value) {
   const { nonce, html } = value
   if (typeof nonce !== 'string' || !NONCE_RE.test(nonce)) throw new Error('invalid bootstrap')
   if (typeof html !== 'string' || html.length === 0 || html.length > MAX_BOOTSTRAP_CHARS) throw new Error('invalid bootstrap')
-  if (!html.includes('http-equiv="Content-Security-Policy"') || !html.includes("connect-src 'none'")) throw new Error('invalid bootstrap')
-  if (!html.includes(`<meta name="quest-nonce" content="${nonce}">`)) throw new Error('invalid bootstrap')
-  if (!html.includes('quest-ready')) throw new Error('invalid bootstrap')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const nodes = [...doc.head.childNodes].filter(node => node.nodeType !== 3 || node.textContent.trim())
+  const [csp, nonceMeta] = nodes
+  const policy = "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+  if (doc.doctype?.name !== 'html' || csp?.tagName !== 'META' ||
+      csp.getAttribute('http-equiv') !== 'Content-Security-Policy' || csp.getAttribute('content') !== policy ||
+      nonceMeta?.tagName !== 'META' || nonceMeta.getAttribute('name') !== 'quest-nonce' || nonceMeta.getAttribute('content') !== nonce ||
+      doc.querySelectorAll('meta[http-equiv]').length !== 1 || doc.querySelectorAll('meta[name="quest-nonce"]').length !== 1 ||
+      ![...doc.body.querySelectorAll('script:not([src])')].some(script => script.textContent.includes('quest-ready'))) throw new Error('invalid bootstrap')
   return { nonce, html }
 }
 
@@ -531,6 +537,7 @@ function Quest({ ctx }) {
 export default {
   id: ID,
   name: 'Hermes Quest',
+  version: '0.1.2',
   description: 'The Hermes Quest pixel RPG of your agents, mounted natively in a sandboxed frame.',
   defaultEnabled: false,
   register(ctx) {

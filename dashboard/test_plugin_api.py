@@ -251,6 +251,48 @@ class QuestAPItests(unittest.TestCase):
                 api._static_target(path)
             self.assertEqual(caught.exception.status_code, 404)
 
+    def test_static_swap_after_validation_cannot_redirect_open(self):
+        original = api._static_target
+        for relative in ('assets/px/heroes.json', 'assets/px/swapped/heroes.json'):
+            target = self.root / relative
+            self.put(relative, 'PUBLIC')
+            def swap(path):
+                value = original(path)
+                if '/swapped/' in path:
+                    directory = target.parent
+                    directory.rename(directory.with_name('held'))
+                    directory.symlink_to(self.root / 'data', target_is_directory=True)
+                    self.put('data/heroes.json', 'PRIVATE')
+                else:
+                    target.unlink()
+                    target.symlink_to(self.root / 'data/replay.json')
+                return value
+            with patch.object(api, '_static_target', side_effect=swap):
+                self.assertEqual(self.client.get(PREFIX + '/static/' + relative).status_code, 404)
+
+    def test_static_swap_after_open_streams_original_descriptor(self):
+        target = self.root / 'assets/px/heroes.json'
+        target.write_text('PUBLIC ORIGINAL')
+        original = api._open_static
+        def swap(path):
+            fd = original(path)
+            target.unlink()
+            target.symlink_to(self.root / 'data/replay.json')
+            return fd
+        with patch.object(api, '_open_static', side_effect=swap):
+            response = self.client.get(PREFIX + '/static/assets/px/heroes.json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, 'PUBLIC ORIGINAL')
+
+    def test_static_fifo_and_unsupported_descriptor_open_fail_closed(self):
+        target = self.root / 'assets/px/fifo.json'
+        os.mkfifo(target)
+        self.assertEqual(self.client.get(PREFIX + '/static/assets/px/fifo.json').status_code, 404)
+        with patch.object(api, '_DESCRIPTOR_SAFE', False):
+            self.assertEqual(self.client.get(PREFIX + '/static/index.html').status_code, 404)
+        csp = self.client.get(PREFIX + '/static/index.html').headers['content-security-policy']
+        self.assertIn("connect-src 'self'", csp)
+
     def test_c_ui_symlink_denied(self):
         (self.root / "quest/c-ui.js").unlink()
         (self.root / "quest/c-ui.js").symlink_to(self.root / "data/replay.json")
