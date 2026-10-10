@@ -3,10 +3,48 @@
 The goal is that default output can be screenshotted and shared. This is fail-closed: free text is excluded
 unless you opt in.
 
+## Network and telemetry
+
+Hermes Quest does not send data off your machine. It has no telemetry, analytics, crash reporting, update check
+or remote logging, and the plugin's runtime code (game page, API, extractor) calls no external service. The
+repository's `tools/post_deploy_check.py` is a maintainer script that probes a dashboard URL you give it; it is
+not loaded by the plugin. The game page loads files from its own
+package and from the dashboard's `/api/plugins/hermes-quest/` routes only; the Desktop guest page is sandboxed
+with `connect-src 'none'` and reaches the backend only through the Desktop app's authenticated transport. The
+only traffic is between your browser/Desktop app and the Hermes dashboard/backend you already run. Installing
+or updating the plugin contacts GitHub or the plugin catalog, which is part of Hermes plugin installation.
+
+## What Quest reads, runs and writes
+
+- Reads, read-only: `kanban.db`, each profile's `state.db`, `config.yaml`, `profile.yaml` and `logs/agent.log`
+  under the Hermes home, and `bot-status.json` if present. The extractor opens databases with `mode=ro` and
+  `PRAGMA query_only` and does not open any memory store.
+- Runs: one bundled Python extractor subprocess per `/replay` or `/events` request (30 second limit), about every
+  10 seconds while a Quest tab is open; plus one background thread inside the dashboard process that samples
+  `bot-status.json` about every 30 seconds. Set `HERMES_QUEST_SAMPLER=off` to disable the sampler.
+- Writes: only the Quest state folder, `<hermes_home>/hermes-quest` (or `history_dir`): `session-ref.key`,
+  `botstatus-history.jsonl` with its rotated copies, `state.json` and `.lock`. Quest also stores panel layout in
+  your browser's local storage. Nothing else is written.
+
+## Who can see names (`show_titles` and `show_profile_names`)
+
+These are two separate settings.
+
+| Setting | Default | What it controls | Can the JSON file change it? |
+| --- | --- | --- | --- |
+| `show_titles` | `false` | Free text from cards (titles, notes). Opt-in, redacted. | Yes (boolean) |
+| `show_profile_names` | `false` | Profile and display names of bots. | **No.** The plugin API turns it on only for a request carrying a verified dashboard session or provider-verified bearer/cookie; otherwise it stays off. |
+
+So with the default `show_titles: false`, a signed-in dashboard user still sees profile/display names (they are
+not card text), while anonymous or unverified output shows `bot-<hash>`. `show_titles` does not hide profile names
+and `show_profile_names` does not reveal card text. Pet names are currently always empty. Standalone demo data is
+synthetic.
+
 ## Defaults (`show_titles: false`)
 
 - No free text is exported. Card titles become `Quest #<n> · <STAGE>`; comment, subagent and event notes are
-  generated from fixed words; bot names are hashed (`bot-<hash>`).
+  generated from fixed words. Bot names are hashed (`bot-<hash>`) unless the request has the profile-name
+  permission above.
 - Bot, task and author identifiers are replaced by hashes unless they already match a safe ID shape.
 - Model names are reduced to a family: `gemini`, `gpt`, `claude` or `unknown`.
 - Fields such as status, kind, outcome, tool, effort, wallet and campaign are checked against fixed
@@ -81,6 +119,17 @@ client does this); never add the reset snapshot's mana to the old epoch. Chainin
 the new cursor is incremental again, including signed corrections. No secret or
 mapping is stored in the cursor. This deliberately supersedes the old unkeyed
 session-reference formula; it is not an authentication or task-prose opt-in change.
+
+### Removing Quest's private state
+
+`hermes plugins remove hermes-quest` deletes the package and its `plugins` entry in `config.yaml`, but it does
+**not** delete the Quest state folder, which is the only place Quest keeps data outside the checkout:
+`<hermes_home>/hermes-quest` (or your `history_dir`). To purge it: stop the dashboard, then
+`rm -r "$HERMES_HOME/hermes-quest"`. If you plan to reinstall, keep `session-ref.key` (0600) and back it up
+privately: a new key replaces every session reference once (see above). Also delete the optional Quest config JSON
+(`$HERMES_HOME/hermes-quest.json` or the `HERMES_QUEST_CONFIG` path). In Hermes Desktop turn the Desktop switch off
+and rescan; the app copy is `$HERMES_HOME/desktop-plugins/hermes-quest` on the computer that runs the app. The
+full step list is in the README [Remove](../README.md#remove) section.
 
 - `data/replay.json`, `preview/`, `assets/raw/`: git-ignored; contain data derived from real activity.
 - Screenshots or GIFs taken from real data. Use the synthetic demo (`data/demo.json`) for any public image.
