@@ -59,6 +59,7 @@ jobs:
           node tools/backtest.test.js
           node dashboard/test_game.cjs
           node dashboard/test_defaults.cjs
+          node dashboard/test_dashboard_auth.cjs
           # test_api_migration.cjs receives real synthetic API fixtures from
           # test_live_contract.py in the redaction/privacy step above.
       - name: Live-host checks intentionally skipped
@@ -164,6 +165,10 @@ jobs:
       - name: Install system dependencies only (browser cached)
         if: steps.browser-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps ${{ matrix.browser }}
+      - name: Dashboard SDK token and cookie authentication (synthetic host)
+        run: |
+          python3 -m pip install 'fastapi>=0.115,<1'
+          node dashboard/test_dashboard_auth.cjs ${{ matrix.browser }} "$RUNNER_TEMP/dashboard-auth"
       - name: Browser smoke (1280x800 and 390x844; demo from tools/mock.py)
         run: node tools/browser_smoke.mjs ${{ matrix.browser }} --out "$RUNNER_TEMP/smoke-shots"
       - name: Upload screenshots (CI artifact only, never committed)
