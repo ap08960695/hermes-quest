@@ -56,7 +56,7 @@ function startHangout(h, place, withWho = []) {
   if (party.length > 1) ctx.say(`${place.icon} ${party.map(ctx.nm).join(', ')} ${place.th}`, ctx.S.t, 'hang' + place.region, 900);
 }
 function social(dt) {
-  innAmbient();
+  wireWork(); innAmbient();
   const hs = Object.values(ctx.S.heroes);
   for (const h of hs) {
     h.cheer = Math.max(0, h.cheer - dt); h.talk = Math.max(0, h.talk - dt);
@@ -139,7 +139,7 @@ function onOrder(order, {animate = true} = {}) {
 function onComplete(item, {animate = true} = {}) {
   if (!item || typeof item !== 'object') return false;
   if (item.status != null && item.status !== 'done') return false;   // failed/blocked/archived earn nothing
-  const ref = item.ref ?? item.task ?? item.id;
+  const ref = item.ref ?? item.task ?? item.id ?? (item.at != null ? [item.at, item.display_name, item.quest_label].join('|') : null);
   if (ref == null || ref === '' || !firstTime('win:' + ref) || !animate) return false;
   const t = ctx.S.tasks[item.task ?? ref], h = heroFor(item.bot, item.display_name);
   const [x, y] = t && t.alpha > 0 && !t.dying ? [t.x, t.y - 10] : h ? [h.x, h.y - 20] : ctx.W.regions.vault.spot;
@@ -159,6 +159,16 @@ function innSite() {
   const fire = props.filter(p => p.img === 'campfire' && Math.hypot(p.x - r.spot[0], p.y - r.spot[1]) < 420)
     .sort((a, c) => Math.hypot(a.x - r.spot[0], a.y - r.spot[1]) - Math.hypot(c.x - r.spot[0], c.y - r.spot[1]))[0];
   return {door: r.spot, roof: b ? [b.x + b.w * .25, b.y - b.h * .85] : [r.spot[0], r.spot[1] - 120], fire: fire ? [fire.x, fire.y - 8] : [r.spot[0] + 60, r.spot[1] - 6]};
+}
+// Subscribe to the reducer's hooks (card B: S.work.onOrder/onComplete). Lazy and idempotent per reducer object, so the old
+// replay (no S.work) is untouched and a rebuilt S never double-subscribes. Payloads carry animate:false for silent passes.
+let wired = null;
+function wireWork() {
+  const w = ctx.S && ctx.S.work;
+  if (!w || w === wired || typeof w.onOrder !== 'function' || typeof w.onComplete !== 'function') return;
+  wired = w;
+  w.onOrder(o => onOrder(o, {animate: o.animate !== false}));
+  w.onComplete(i => onComplete({...i, status: 'done'}, {animate: i.animate !== false}));
 }
 function innAmbient() {
   if (!ctx.D || !ctx.D.working) return;               // no Working view: scene stays byte-identical to the old replay
