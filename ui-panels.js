@@ -2,7 +2,7 @@
 (function(root) {
   'use strict';
   const $=s=>document.querySelector(s), T=root.UIText, I=root.UIGlyphs;
-  const icons=new Map(), numbers=new Map();
+  const icons=new Map(), numbers=new Map(), sceneLabels=new Map();
   let epoch=0, reserved=[], grid=1, drawn=[];
   const overlay=$('#ui-stage'), slots=[];let slot=0, budget=Infinity, used=0;
   function iconImage(id,state='normal') {
@@ -48,7 +48,7 @@
     if(c._source!==im||c._grid!==grid){c.width=im.width*grid;c.height=im.height*grid;c.style.width=im.width+'px';c.style.height=im.height+'px';
       const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.drawImage(im,0,0,c.width,c.height);c._source=im;c._grid=grid;}
     c.style.transform=`translate(${x}px,${y}px)`;c.hidden=false;
-    drawn.push({left:x,top:y,right:x+im.width,bottom:y+im.height});
+    drawn.push({left:x,top:y,right:x+im.width,bottom:y+im.height,...(im._unicode?{unicode:true}:{})});
   }
   function fits(x,y,w,h) {const overlaps=r=>x<r.right&&x+w>r.left&&y<r.bottom&&y+h>r.top;
     return x>=0&&y>=0&&x+w<=innerWidth&&y+h<=innerHeight&&!reserved.some(overlaps)&&!drawn.some(overlaps);}
@@ -63,6 +63,19 @@
   }
   function screenLabel(text,x,y,pin=false,maxWidth=Infinity) {
     let label=text.toUpperCase(),im=numericImage(label,'#ffd36b');
+    if(Number.isFinite(maxWidth)&&Array.from(label).some(ch=>!Object.hasOwn(T.glyphs,ch))){
+      const width=Math.max(48,Math.floor(maxWidth)),key=JSON.stringify([label,width]);
+      if(!sceneLabels.has(key)){
+        const token=epoch;sceneLabels.set(key,null);
+        (async()=>{
+          const parts=T.graphemes(label);let value=await T.bitmap(label,{maxWidth:1024,color:'#ffd36b'});
+          while(parts.length&&value.width>width){parts.pop();value=await T.bitmap(parts.join('')+'...',{maxWidth:1024,color:'#ffd36b'});}
+          if(token===epoch){const canvas=value.lines[0].canvas;canvas._unicode=true;sceneLabels.set(key,canvas);}
+        })().catch(()=>{if(token===epoch)sceneLabels.set(key,numericImage('!','#ffd36b'));});
+        if(sceneLabels.size>64)sceneLabels.delete(sceneLabels.keys().next().value);
+      }
+      im=sceneLabels.get(key)||numericImage('...','#ffd36b');
+    }
     if(im.width>maxWidth){
       const parts=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(label),s=>s.segment);
       while(parts.length&&im.width>maxWidth){parts.pop();im=numericImage(parts.join('')+'...','#ffd36b');}
@@ -300,7 +313,7 @@
     const work=$('#working-panel');if(work){work.hidden=true;$('#working-rows').replaceChildren();$('#working-order').textContent='';$('#working-rewards').textContent='';}
     selected(null);presentationKeys.clear();
     sceneOverflow([]);
-    epoch++;T.clearCache();numbers.clear();feedKey='';campKey='';overviewKey='';overviewData=null;lastFeed=[];lastCamps=[];
+    epoch++;T.clearCache();numbers.clear();sceneLabels.clear();feedKey='';campKey='';overviewKey='';overviewData=null;lastFeed=[];lastCamps=[];
     close();$('#quest').replaceChildren();$('#tasks-list').replaceChildren();$('#heroes-list').replaceChildren();
     $('#overview-summary').textContent='Loading activity…';$('#issues').hidden=true;$('#issues').onclick=null;
     $('#tasks-all').onclick=$('#heroes-all').onclick=null;

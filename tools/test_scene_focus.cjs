@@ -91,6 +91,10 @@ const server=http.createServer((req,res)=>{
         mergeDelta(delta);draw();return {added:after-before,repeat:(S.soc.victories||0)-after,visible};
       },bindings);
       assert.equal(fx.added,1);assert.equal(fx.repeat,0);assert(fx.visible>0);
+      const thai=fixture();thai.working.items[0].display_name='กี่ญู';
+      await page.evaluate(data=>{loadReplay(data);workView.focus=null;S.play=false;hudT=1;hud(0);draw();},thai);
+      await page.evaluate(()=>UIText.ready());
+      await page.waitForFunction(()=>{draw();return UIPanels.diagnostics().drawn.some(r=>r.unicode);});
       const empty=fixture();empty.working.items=[];empty.working.latest_order=null;
       await page.evaluate(data=>{loadReplay(data);S.play=false;hudT=1;hud(0);draw();},empty);
       assert.equal(await page.locator('#working-count').textContent(),'0 working');assert.equal(await page.locator('#working-order').textContent(),'No recent Captain instruction');

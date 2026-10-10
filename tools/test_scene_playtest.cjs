@@ -39,6 +39,7 @@ async function metrics(page){return page.evaluate(()=>{
     await page.goto(url);await page.waitForFunction(()=>typeof loop.last==='number'&&S.work.has);
     // Pause replay, not render/update; there must be life without fabricated work.
     await page.evaluate(()=>{S.play=false;S.t=S.work.asOf;hudT=1;hud(0);draw();});
+    await page.evaluate(()=>UIText.ready());await page.waitForTimeout(100);
     const base=await metrics(page);assert.equal(base.rows,base.running);assert.equal(base.duplicatePairs,0);assert(base.entities<=cap);assert.equal(base.overlaps,0);assert.equal(base.overflow,false);assert(base.ink>20);if(base.running)assert.equal(base.labels,base.foreground.heroes+base.foreground.encounters,'missing scene labels');
     await page.screenshot({path:path.join(out,width+'x'+height+'.png')});
     const before=await page.evaluate(()=>({t:S.t,speed:S.speed,play:S.play,following}));
