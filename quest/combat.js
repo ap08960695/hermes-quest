@@ -8,6 +8,21 @@ function burst(x, y, color, n) { if (ctx.calm) n = Math.ceil(n / 3); for (let i 
 function coins(x, y) { const [vx, vy] = ctx.W.regions.vault.spot; for (let i = 0; i < 8; i++) ctx.S.fx.push({k: 'coin', x, y, x0: x, y0: y, x1: vx + (Math.random() - .5) * 30, y1: vy - 10, life: 1.2 + i * .06, max: 1.2 + i * .06}); }
 function portal(t) { ctx.S.fx.push({k: 'portal', x: t.x - 34, y: t.y, life: 2.2, max: 2.2}); }
 function raven(t) { const [x, y] = ctx.spotOf(ctx.regionOf(ctx.captainId())); ctx.S.fx.push({k: 'raven', x0: x, y0: y - 40, x1: t.x, y1: t.y - 40, life: 1.6, max: 1.6}); }
+// Order courier: a scroll (or other icon) flies from the Captain to the recipient. Lifetime scales with the distance so a long
+// walk across the map stays visible; returns the flight time so callers can schedule the arrival.
+function courier(x0, y0, x1, y1, {icon = '📜'} = {}) {
+  const life = Math.max(1.2, Math.min(3.2, Math.hypot(x1 - x0, y1 - y0) / 140));
+  ctx.S.fx.push({k: 'raven', x0, y0, x1, y1, life, max: life, icon});
+  return life;
+}
+// Victory + loot for one real completion: coins fly to the vault, QUEST CLEAR! floats up, a gold ring and sparks mark the spot.
+// Presentation only: it never touches the vault counter, XP, gold or any task.
+function victory(x, y) {
+  coins(x, y); num(x, y - 36, 'QUEST CLEAR!', '#ffd36b', 1.6);
+  ctx.S.fx.push({k: 'ring', x, y: y - 10, color: '#ffd36b', r: 30, life: .5, max: .5});
+  burst(x, y - 14, '#ffd36b', 12);
+  ctx.S.trauma = Math.min(1, ctx.S.trauma + .12);
+}
 // Class-specific attacks. Melee hits land on the impact frame; ranged attacks fire a projectile on the
 // impact frame and the hit (flash, knockback, numbers) lands when it arrives. The tool label rides on the hit.
 const ATTACK = {
@@ -82,6 +97,8 @@ return {
   get coins(){return coins}, set coins(v){coins=v},
   get portal(){return portal}, set portal(v){portal=v},
   get raven(){return raven}, set raven(v){raven=v},
+  get courier(){return courier}, set courier(v){courier=v},
+  get victory(){return victory}, set victory(v){victory=v},
   get ATTACK(){return ATTACK},
   get toolLabel(){return toolLabel}, set toolLabel(v){toolLabel=v},
   get heroAccent(){return heroAccent}, set heroAccent(v){heroAccent=v},
