@@ -392,8 +392,11 @@ class CursorRoundtripTests(unittest.TestCase):
                 delta = get('/events', since=cursor)
                 retry = get('/events', since=cursor)
                 self.assertGreaterEqual(retry['meta']['as_of'], delta['meta']['as_of'])
+                self.assertEqual(retry['working']['as_of'], extract._iso(retry['meta']['as_of']))
+                self.assertEqual(delta['working']['as_of'], extract._iso(delta['meta']['as_of']))
                 retry['meta']['as_of'] = delta['meta']['as_of']
-                self.assertEqual(retry, delta, 'retry rows/cursor must be identical at either observation time')
+                retry['working']['as_of'] = delta['working']['as_of']
+                self.assertEqual(retry, delta, 'retry rows/cursor must be identical apart from snapshot observation clocks')
                 corrections = [e for e in delta['events'] if e.get('correction')]
                 self.assertEqual(len(corrections), count)
                 self.assertEqual({e['tokens'] for e in corrections}, {change - previous_change})
