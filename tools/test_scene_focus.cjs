@@ -35,10 +35,11 @@ const server=http.createServer((req,res)=>{
         draw();const d=UIPanels.diagnostics(),canvas=cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
         return {count:inspect.picks.length,hero:inspect.picks.filter(p=>p.type==='hero').length,monster:inspect.picks.filter(p=>p.type==='monster').length,pressed:document.querySelectorAll('#working-rows button[aria-pressed=true]').length,
           groups:[...document.querySelectorAll('#working-rows h3,#working-rows summary')].map(el=>el.textContent),completed:document.querySelector('#working-rows details').open,
-          ink:new Set(Array.from(canvas).filter((v,i)=>i%4!==3)).size,overlap:d.drawn.some((r,i)=>d.drawn.slice(i+1).some(s=>r.left<s.right&&r.right>s.left&&r.top<s.bottom&&r.bottom>s.top)),
+          labels:d.drawn.length,ink:new Set(Array.from(canvas).filter((v,i)=>i%4!==3)).size,overlap:d.drawn.some((r,i)=>d.drawn.slice(i+1).some(s=>r.left<s.right&&r.right>s.left&&r.top<s.bottom&&r.bottom>s.top)),
           pageOverflow:document.documentElement.scrollWidth>innerWidth};
       });
       assert.equal(baseline.hero,width<=760?1:3);assert.equal(baseline.monster,baseline.hero);assert(baseline.count<=cap);assert.equal(baseline.completed,false);assert.equal(baseline.overlap,false);assert.equal(baseline.pageOverflow,false);assert(baseline.ink>20);
+      assert.equal(baseline.labels,baseline.hero+baseline.monster,'scene labels must not silently disappear');
       assert(!(await page.locator('#working-order').textContent()).includes('Time unknown'));
       assert.equal(await page.locator('#working-resting').textContent(),'7 resting at the Inn');
       assert((await page.locator('#working-rewards').textContent()).includes('Guild XP 120'));

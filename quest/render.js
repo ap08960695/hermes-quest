@@ -131,7 +131,9 @@ function drawWorking() {
     if(pair.hero)heroDraw(v,pair.hero);
     else {const [x,y]=P(v,pair.x-60,pair.y-20);ctx.cx.strokeStyle='#ffd36b';ctx.cx.strokeRect(x-12*v.Z,y-24*v.Z,24*v.Z,24*v.Z);}
     monster(v,pair.monster);
-    ctx.UI?.screenLabel(pair.item.display_name+' · '+pair.item.quest_label,(v.ox+pair.x*v.Z)/ctx.DPR,(v.oy+(pair.y-110)*v.Z)/ctx.DPR);
+    const labelWidth=Math.max(48,110*v.Z/ctx.DPR),labelY=(v.oy+(pair.y-110)*v.Z)/ctx.DPR;
+    if(pair.hero)ctx.UI?.screenLabel(pair.item.display_name,(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
+    ctx.UI?.screenLabel(pair.item.quest_label,(v.ox+pair.monster.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
   }
   // Ambient villagers are reserved for the no-work scene; no hidden idle heroes.
   const cap=innerWidth<=760?8:innerWidth<=1100?14:20;

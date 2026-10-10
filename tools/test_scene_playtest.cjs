@@ -26,7 +26,7 @@ async function metrics(page){return page.evaluate(()=>{
   const refs=workView.pairs.map(p=>p.item.ref),foreground=workView.foreground;
   const pixels=cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
   let hash=2166136261;const colors=new Set();for(let i=0;i<pixels.length;i+=64){hash=Math.imul(hash^pixels[i],16777619);colors.add(pixels[i]);}
-  return {running:running.length,rows:running.length?buttons.length:0,pairs:refs.length,duplicatePairs:refs.length-new Set(refs).size,foreground,entities:Object.values(foreground).reduce((a,b)=>a+b,0),overlaps,ink:colors.size,signature:hash>>>0,overflow:document.documentElement.scrollWidth>innerWidth,progress:S.work.progress()};
+  return {running:running.length,rows:running.length?buttons.length:0,pairs:refs.length,labels:labels.length,duplicatePairs:refs.length-new Set(refs).size,foreground,entities:Object.values(foreground).reduce((a,b)=>a+b,0),overlaps,ink:colors.size,signature:hash>>>0,overflow:document.documentElement.scrollWidth>innerWidth,progress:S.work.progress()};
 });}
 (async()=>{
   fs.mkdirSync(out,{recursive:true});await new Promise(r=>server.listen(0,'127.0.0.1',r));
@@ -39,7 +39,7 @@ async function metrics(page){return page.evaluate(()=>{
     await page.goto(url);await page.waitForFunction(()=>typeof loop.last==='number'&&S.work.has);
     // Pause replay, not render/update; there must be life without fabricated work.
     await page.evaluate(()=>{S.play=false;S.t=S.work.asOf;hudT=1;hud(0);draw();});
-    const base=await metrics(page);assert.equal(base.rows,base.running);assert.equal(base.duplicatePairs,0);assert(base.entities<=cap);assert.equal(base.overlaps,0);assert.equal(base.overflow,false);assert(base.ink>20);
+    const base=await metrics(page);assert.equal(base.rows,base.running);assert.equal(base.duplicatePairs,0);assert(base.entities<=cap);assert.equal(base.overlaps,0);assert.equal(base.overflow,false);assert(base.ink>20);if(base.running)assert.equal(base.labels,base.foreground.heroes+base.foreground.encounters,'missing scene labels');
     await page.screenshot({path:path.join(out,width+'x'+height+'.png')});
     const before=await page.evaluate(()=>({t:S.t,speed:S.speed,play:S.play,following}));
     await page.click('#working-toggle');await page.click('#working-toggle');assert.deepEqual(await page.evaluate(()=>({t:S.t,speed:S.speed,play:S.play,following})),before);
@@ -62,7 +62,7 @@ async function metrics(page){return page.evaluate(()=>{
     }
     await page.close();
   }}finally{await browser.close();await new Promise(r=>server.close(r));}
-  const hash=crypto.createHash('sha256');for(const name of ['game.js','quest/state.js','quest/history.js','quest/ui.js','quest/render.js','quest/social.js','quest/combat.js'])hash.update(fs.readFileSync(path.join(root,name)));
+  const hash=crypto.createHash('sha256');for(const name of ['game.js','quest/state.js','quest/history.js','quest/ui.js','quest/render.js','quest/social.js','quest/combat.js','ui-panels.js'])hash.update(fs.readFileSync(path.join(root,name)));
   fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({runtimeHash:hash.digest('hex'),records,rubric:'NOT_SCORED: independent human playtest required'},null,2));
   console.log('PASS Working captures: 3 viewports, card/row 1:1, caps, overlap, focus, 60 s motion; rubric NOT_SCORED');
 })().catch(e=>{console.error(e);process.exitCode=1;});

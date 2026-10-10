@@ -32,7 +32,10 @@
     const fixed=['#focus-bar','#menu','#quest','#character-card','#scene-overflow','#scene-selected','#working-panel'].map($).filter(visible).map(el=>el.getBoundingClientRect());
     reserved=fixed.map(r=>({left:r.left-8,top:r.top-8,right:r.right+8,bottom:r.bottom+8}));
     const outer=fixed.filter((r,i)=>!fixed.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
-    budget=Math.max(0,innerWidth*innerHeight*(innerWidth<=760||innerHeight<=500?.25:.2)-outer.reduce((n,r)=>n+r.width*r.height,0));
+    const area=innerWidth*innerHeight,covered=outer.reduce((n,r)=>n+r.width*r.height,0),ratio=innerWidth<=760||innerHeight<=500?.25:.2;
+    // The work summary can occupy more than the legacy text budget by itself.
+    // Reserve text in the remaining scene; do not silently drop every name.
+    budget=Math.max(0,visible($('#working-panel'))?(area-covered)*ratio:area*ratio-covered);
   }
   function resize() {
     grid=Math.ceil(root.devicePixelRatio||1);bounds();
@@ -58,8 +61,12 @@
     for(let lane=0;lane<3;lane++){const top=y-lane*18;
       if(fits(x,top,im.width,im.height)){image(im,x,top);break;}}
   }
-  function screenLabel(text,x,y,pin=false) {
-    const im=numericImage(text.toUpperCase(),'#ffd36b');
+  function screenLabel(text,x,y,pin=false,maxWidth=Infinity) {
+    let label=text.toUpperCase(),im=numericImage(label,'#ffd36b');
+    if(im.width>maxWidth){
+      const parts=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(label),s=>s.segment);
+      while(parts.length&&im.width>maxWidth){parts.pop();im=numericImage(parts.join('')+'…','#ffd36b');}
+    }
     x=Math.round(x-im.width/2);y=Math.round(y-im.height);
     if(pin){x=Math.round(Math.max(8,Math.min(innerWidth-im.width-8,x)));
       y=Math.round(Math.max(($('#focus-bar')?.getBoundingClientRect().bottom||0)+12,Math.min(innerHeight-im.height-8,y)));}
