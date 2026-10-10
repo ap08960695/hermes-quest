@@ -4,7 +4,7 @@ All notable changes to Hermes Quest are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## v0.1.1 - 2026-10-10
 
 ### Security
 
@@ -17,6 +17,20 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- Canvas-first English Menu with Playback, Overview, World and Settings groups,
+  expandable summaries and privacy-safe details.
+- Expanded scale-C world built from processed pixel assets, a rest camp and
+  failover portal, clearer region selection and less crowded standing slots.
+- Tap heroes and monsters for details, follow heroes without changing replay
+  state, and see parent/session lineage. Oversized poses adjust camera zoom to
+  fit the screen with an explicit notice; monster motion is render-only.
+- Authenticated Desktop guest transport and bridge with safe static traversal
+  and canonical bootstrap HTML. Native Linux gameplay and the Mac SSH backend
+  path were verified separately; Mac renderer motion was not measured.
+- Truthful archive/actor/session metadata, authenticated profile-name display,
+  and a visible degraded-session warning when the private key is unavailable.
+- Chromium/Firefox CI smoke, inventory, mobile and scene/hero regressions,
+  cursor capacity and Desktop checks, and a post-deploy gate with rollback.
 - D2: split the game into classic-script factories with unchanged simulation and
   rendering behavior, exact static/Desktop script ordering, deterministic parity
   checks, and native game-frame performance and hidden-tab measurements.
@@ -34,6 +48,17 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - C-UI: token-based mana percentages against simulated wallet capacity (not real
   quota), signed corrections without double counting, and heroes walking to the
   rest camp on pause/failover and returning on resume.
+
+### Fixed
+
+- Repair five cropped sprites and cape/boot edges from processed pixel assets;
+  keep rest-camp placement off existing roads without removing existing props.
+- Make sampler shutdown and history recovery safe for FIFO inputs, torn tails,
+  short writes and full Unicode batches; fsync before checkpointing.
+- Index Captain tool-call lookups once per session and discover the shared data
+  root in profile hosts, avoiding slow extraction and empty Desktop data.
+- Preserve fail-closed metadata, update open details after history eviction, and
+  keep stale warnings across different failure types until a successful poll.
 
 ### Known limitations
 
