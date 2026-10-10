@@ -55,6 +55,7 @@ jobs:
           done
       - name: Node regression tests
         run: |
+          node --test tools/test_mobile_measurement.cjs
           node tools/backtest.test.js
           node dashboard/test_game.cjs
           node dashboard/test_defaults.cjs

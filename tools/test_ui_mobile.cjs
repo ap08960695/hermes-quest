@@ -3,17 +3,26 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict'),cp=require('node:child_process');
 const crypto=require('node:crypto');
 const {chromium}=require('playwright');
+const {instrument,assertPerf}=require('./mobile_measurement.cjs');
 const root=path.resolve(__dirname,'..'),out=path.resolve(process.argv[2]||process.env.TMPDIR||'.');fs.mkdirSync(out,{recursive:true});
 const mode=process.argv[3]||'smoke',base='a326040901cc54d6e4a6fc34ea2ec2be97e4bb44';
 const demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json'))),requests=[];
 const mime={'.html':'text/html; charset=utf-8','.js':'application/javascript','.otf':'font/otf','.json':'application/json','.png':'image/png'};
 let seq=0;
+let activePolls=0,maxActivePolls=0,holdPoll=false,releasePoll;
 function liveReplay(){const d=structuredClone(demo),shift=Date.now()/1000-d.meta.to;d.events.forEach(e=>e.t+=shift);d.meta.from_+=shift;d.meta.to+=shift;d.cursor=String(seq);return d;}
 const server=http.createServer((req,res)=>{
   const u=new URL(req.url,'http://localhost');requests.push({time:Date.now(),path:u.pathname});
   if(u.pathname.startsWith('/api/plugins/hermes-quest/replay')){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(liveReplay()));return;}
   if(u.pathname.startsWith('/api/plugins/hermes-quest/events')){
-    seq++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({events:[{id:'fresh-'+seq,t:Date.now()/1000,task:'t_demo0001',kind:'heartbeat',bot:'demo-smith',note:'synthetic update '+seq}],tasks:[],bots:[],cursor:String(seq),state:'online'}));return;
+    activePolls++;maxActivePolls=Math.max(maxActivePolls,activePolls);
+    let completed=false;const finish=()=>{if(!completed){completed=true;activePolls--;}};
+    res.once('finish',finish);res.once('close',finish);
+    if(holdPoll){holdPoll=false;releasePoll=()=>send();return;}
+    send();return;
+    function send(){
+      seq++;res.setHeader('Content-Type','application/json');res.end(JSON.stringify({events:[{id:'fresh-'+seq,t:Date.now()/1000,task:'t_demo0001',kind:'heartbeat',bot:'demo-smith',note:'synthetic update '+seq}],tasks:[],bots:[],cursor:String(seq),state:'online'}));
+    }
   }
   if(u.pathname==='/dashboard-host'){
     // Synthetic host chrome: 56px header + 24px top inset + 64px bottom inset.
@@ -43,14 +52,12 @@ async function openGroup(page,id){
 }
 function errors(page){const all=[];page.on('pageerror',e=>all.push('page: '+e.message));page.on('console',m=>{if(m.type()==='error')all.push('console: '+m.text());});page.on('requestfailed',r=>all.push('request: '+r.url()));page.on('response',r=>{if(r.status()>=400)all.push('http: '+r.status()+' '+r.url());});return all;}
 function monitor(){
-  window.measurement={frames:[],tasks:[],start:performance.now(),last:null};
-  const observer=new PerformanceObserver(list=>{for(const e of list.getEntries())measurement.tasks.push({start:e.startTime,duration:e.duration});});observer.observe({type:'longtask',buffered:false});window.probeObserver=observer;
-  const original=loop;loop=function(ts){if(measurement.last!==null)measurement.frames.push({ts,dt:ts-measurement.last});measurement.last=ts;return original(ts);};
+  measurement.frames=[];measurement.tasks=[];measurement.start=performance.now();measurement.last=null;
 }
 (async()=>{
   await new Promise(r=>server.listen(0,'127.0.0.1',r));const url='http://127.0.0.1:'+server.address().port+'/';let browser,native;
-  const sourceHashes=()=>Object.fromEntries(['game.js','index.html','ui-panels.js','dashboard/plugin_api.py','dashboard/dist/index.js','tools/test_ui_mobile.cjs'].map(f=>[f,crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')]));
-  const report={base,browser:null,mode,source:sourceHashes(),demoSHA:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'data/demo.json'))).digest('hex'),records:[]};
+  const sourceHashes=()=>Object.fromEntries(['game.js','index.html','ui-panels.js','dashboard/plugin_api.py','dashboard/dist/index.js','tools/test_ui_mobile.cjs','tools/mobile_measurement.cjs',...fs.readdirSync(path.join(root,'quest')).filter(f=>f.endsWith('.js')).map(f=>'quest/'+f)].map(f=>[f,crypto.createHash('sha256').update(fs.readFileSync(path.join(root,f))).digest('hex')]));
+  const report={base,revision:cp.execFileSync('git',['rev-parse','HEAD'],{cwd:root,encoding:'utf8'}).trim(),browser:null,mode,pass:false,source:sourceHashes(),demoSHA:crypto.createHash('sha256').update(fs.readFileSync(path.join(root,'data/demo.json'))).digest('hex'),records:[]};
   try{
     if(mode==='hidden'){
       // Native default-context attachment avoids Playwright's sticky forced visibility.
@@ -63,12 +70,16 @@ function monitor(){
       for(const before of (mode==='perf-after'?[false]:[true,false]))for(const cpu of [1,4])for(const live of [false,true]){
         const page=await browser.newPage({viewport:{width:375,height:667},deviceScaleFactor:3}),err=errors(page),cdp=await page.context().newCDPSession(page);
         await cdp.send('Emulation.setCPUThrottlingRate',{rate:cpu});await cdp.send('Performance.enable');
-        await ready(page,url+(before?'before/':'')+(live?'?live=1':''));await page.evaluate(monitor);const metrics0=(await cdp.send('Performance.getMetrics')).metrics;
+        await page.addInitScript(instrument);
+        await ready(page,url+(before?'before/':'')+(live?'?live=1':''));
+        assert(await page.evaluate(()=>measurement.gameLoop===loop),'observer is the actual runtime loop');
+        await page.evaluate(monitor);const metrics0=(await cdp.send('Performance.getMetrics')).metrics;
         await page.waitForTimeout(60000);const metrics1=(await cdp.send('Performance.getMetrics')).metrics;
         const record=await page.evaluate(()=>{const end=performance.now(),start=measurement.start+5000,f=measurement.frames.filter(f=>f.ts>=start),rates=f.map(f=>1000/f.dt).sort((a,b)=>a-b),tasks=measurement.tasks.filter(t=>t.start>=start);
           return {elapsed:(end-start)/1000,frames:f.length,avg:f.length/((end-start)/1000),p5:rates[Math.floor(rates.length*.05)]||0,longTasks:tasks.length,maxLongTask:Math.max(0,...tasks.map(t=>t.duration)),tasks,hidden:document.hidden};});
         const m=(xs,k)=>xs.find(x=>x.name===k)?.value;record.taskDurationPerSecond=(m(metrics1,'TaskDuration')-m(metrics0,'TaskDuration'))/60;
         report.records.push({before,cpu,live,...record,errors:err});console.log(JSON.stringify(report.records.at(-1)));await page.close();
+        if(!before)assertPerf(report.records.at(-1));
       }
     }else if(mode==='functional'){
       const page=await browser.newPage({viewport:{width:320,height:568},deviceScaleFactor:3}),err=errors(page);
@@ -99,17 +110,33 @@ function monitor(){
       const glyphs=await page.evaluate(()=>{UIPanels.clear();for(let i=0;i<10;i++)UIPanels.screenNumber('10',160,200);const d=UIPanels.diagnostics();return {count:d.drawn.length,rows:d.drawn.map(r=>r.top)};});assert.equal(glyphs.count,3);
       report.records.push({pending,replayCount,pure,glyphs,errorsExpected503:err});assert.equal(err.filter(e=>!e.includes('503')).length,0);await page.close();
     }else if(mode==='hidden'){
-      const context=browser.contexts()[0],page=context.pages()[0],err=errors(page);
-      await ready(page,url+'?live=1');await page.evaluate(()=>{window.rafCalls=0;const orig=loop;loop=function(ts){rafCalls++;return orig(ts);};});
-      const cdp=await context.newCDPSession(page),win=await cdp.send('Browser.getWindowForTarget');
-      const other=await context.newPage();await other.goto('about:blank');await other.bringToFront();
-      await page.waitForFunction(()=>document.hidden===true,null,{polling:100});
-      const start=Date.now(),count=await page.evaluate(()=>rafCalls);await new Promise(r=>setTimeout(r,60000));
-      const hidden=await page.evaluate(()=>({hidden:document.hidden,rafCalls,raf,pollTimer})),polls=requests.filter(r=>r.time>=start&&r.path.endsWith('/events')).length;
-      assert.equal(hidden.hidden,true);assert.equal(hidden.rafCalls,count);assert.equal(polls,0);
-      const back=Date.now();await page.bringToFront();await page.waitForFunction(()=>!document.hidden,null,{polling:100});await page.waitForTimeout(1500);
-      const catches=requests.filter(r=>r.time>=back&&r.path.endsWith('/events')).length;assert.equal(catches,1);assert((await page.evaluate(()=>rafCalls))>count);
-      report.records.push({hidden,callbackDelta:hidden.rafCalls-count,pollsIn60s:polls,catchupPolls:catches,errors:err});await context.close();
+      const context=browser.contexts()[0];await context.addInitScript(instrument);
+      for(const inflight of [false,true]){
+        maxActivePolls=0;
+        const page=await context.newPage(),err=errors(page);
+        await ready(page,url+'?live=1');await page.waitForFunction(()=>measurement.calls>2);
+        assert(await page.evaluate(()=>measurement.gameLoop===loop),'observer is the actual runtime loop');
+        const other=await context.newPage();await other.goto('about:blank');await page.bringToFront();
+        await page.waitForFunction(()=>!document.hidden,null,{polling:100});
+        if(inflight){
+          holdPoll=true;
+          for(let i=0;i<150&&!releasePoll;i++)await new Promise(r=>setTimeout(r,100));
+          assert(releasePoll,'natural in-flight poll began');assert.equal(activePolls,1);
+          assert(await page.evaluate(()=>pollBusy),'runtime poll is busy');
+        }
+        await other.bringToFront();await page.waitForFunction(()=>document.hidden,null,{polling:100});
+        if(inflight){releasePoll();releasePoll=null;await page.waitForFunction(()=>!pollBusy,null,{polling:100});}
+        const start=Date.now(),count=await page.evaluate(()=>measurement.calls);await new Promise(r=>setTimeout(r,60000));
+        const hidden=await page.evaluate(()=>({hidden:document.hidden,rafCalls:measurement.calls,raf,pollTimer,pollBusy})),polls=requests.filter(r=>r.time>=start&&r.path.endsWith('/events')).length;
+        const back=Date.now();await page.bringToFront();await page.waitForFunction(()=>!document.hidden,null,{polling:100});await page.waitForTimeout(1500);
+        const catches=requests.filter(r=>r.time>=back&&r.path.endsWith('/events')).length,resumedFrames=(await page.evaluate(()=>measurement.calls))-count;
+        report.records.push({inflight,hiddenSeconds:(back-start)/1000,hidden,callbackDelta:hidden.rafCalls-count,pollsIn60s:polls,catchupPolls:catches,resumedFrames,maxActivePolls,errors:err});
+        console.log(JSON.stringify(report.records.at(-1)));
+        assert.equal(hidden.hidden,true);assert.equal(hidden.rafCalls,count);assert.equal(hidden.raf,null);assert.equal(hidden.pollTimer,null);assert.equal(hidden.pollBusy,false);assert.equal(polls,0);
+        assert.equal(catches,1);assert(resumedFrames>0);assert.equal(maxActivePolls,1);assert.equal(activePolls,0);assert.deepEqual(err,[]);
+        await page.close();await other.close();
+      }
+      await context.close();
     }else if(mode==='dashboard'){
       const page=await browser.newPage({viewport:{width:844,height:390},deviceScaleFactor:3}),err=errors(page);
       await page.goto(url+'dashboard-host');
@@ -177,6 +204,7 @@ function monitor(){
         await page.screenshot({path:path.join(out,(before?'before':'after')+'-paired.png')});await page.close();
       }
     }
-    report.requests=requests;fs.writeFileSync(path.join(out,mode+'-report.json'),JSON.stringify(report,null,2)+'\n');console.log('PASS '+mode);
-  }finally{if(browser)await browser.close();if(native)native.kill();await new Promise(r=>server.close(r));}
+    report.pass=true;console.log('PASS '+mode);
+  }catch(e){report.error=e.message;throw e;}
+  finally{report.requests=requests;fs.writeFileSync(path.join(out,mode+'-report.json'),JSON.stringify(report,null,2)+'\n');if(releasePoll){releasePoll();releasePoll=null;}if(browser)await browser.close();if(native)native.kill();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});
