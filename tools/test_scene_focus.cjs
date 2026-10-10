@@ -40,6 +40,9 @@ const server=http.createServer((req,res)=>{
       });
       assert.equal(baseline.hero,width<=760?1:3);assert.equal(baseline.monster,baseline.hero);assert(baseline.count<=cap);assert.equal(baseline.completed,false);assert.equal(baseline.overlap,false);assert.equal(baseline.pageOverflow,false);assert(baseline.ink>20);
       assert.equal(baseline.labels,baseline.hero+baseline.monster,'scene labels must not silently disappear');
+      const elapsed=await page.locator('#working-rows').textContent();
+      await page.evaluate(()=>{const saved=S.t;S.t-=86400;hudT=1;hud(0);S.t=saved;});
+      assert.equal(await page.locator('#working-rows').textContent(),elapsed,'current card elapsed follows snapshot, not replay scrub');
       assert(!(await page.locator('#working-order').textContent()).includes('Time unknown'));
       assert.equal(await page.locator('#working-resting').textContent(),'7 resting at the Inn');
       assert((await page.locator('#working-rewards').textContent()).includes('Guild XP 120'));

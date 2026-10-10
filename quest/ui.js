@@ -34,7 +34,7 @@ function workItems() {
 }
 function workElapsed(item) {
   const start=item.started_at==null?NaN:typeof item.started_at==='number'?item.started_at:Date.parse(item.started_at)/1000;
-  return Number.isFinite(start)?Math.floor(Math.max(0,ctx.S.t-start)/60)+' min':'Elapsed unknown';
+  return Number.isFinite(start)?Math.floor(Math.max(0,(ctx.S.work.asOf??ctx.S.t)-start)/60)+' min':'Elapsed unknown';
 }
 function workDetails(ref) {
   const row=workItems().find(i=>i.ref===ref);if(!row)return null;
