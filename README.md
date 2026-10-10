@@ -106,31 +106,56 @@ tools or hooks. It does not open its own server. The UI bundle is included; no Q
   repository tests also run on Python 3.12. Follow the current [Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation)
   rather than installing Hermes dependencies into system Python.
 
-If Hermes is not installed, the official source installer supports a non-interactive dashboard-only setup:
+If Hermes is not installed, follow the official
+[Hermes installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation). Quest does
+not need any model key just to be viewed. If you prefer the vendor's installer script, download it, read it, and
+only then run it. Do not pipe a remote script straight into a shell:
 
 ```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- --non-interactive --skip-browser --skip-computer-use
+curl -fsSLo hermes-install.sh https://hermes-agent.nousresearch.com/install.sh
+less hermes-install.sh        # read it first
+bash hermes-install.sh --non-interactive --skip-browser --skip-computer-use
 export PATH="$HOME/.local/bin:$PATH"
 hermes --version
 ```
 
-The skip flags omit agent browser/computer-use tools, not the dashboard. No model key is needed just to view Quest.
+The skip flags omit agent browser/computer-use tools, not the dashboard.
 
-### 2. Clone and enable
+### 2. Install and enable
 
 Use the Hermes home that runs your dashboard, not an unrelated coding-worker profile. For a named profile,
-set `HERMES_HOME` to that profile's home first. Keep the whole repository layout.
+set `HERMES_HOME` to that profile's home first. Choose one of the two ways below.
+
+**A. From the Hermes plugin catalog** (available once the catalog entry is merged, see
+[NousResearch/hermes-agent#135744](https://github.com/NousResearch/hermes-agent/pull/135744); until then
+`hermes plugins search hermes-quest` finds nothing and you must use option B):
+
+```bash
+hermes plugins install hermes-quest --enable
+hermes plugins list
+```
+
+The catalog pins a reviewed commit, so the installed version is the one the catalog lists.
+
+**B. From a Git release tag.** Check out a release tag, not `main`: `main` can move ahead of the last reviewed
+release. Find the newest tag on the repository's Releases page on GitHub (or with `git ls-remote --tags`) and put it
+in `QUEST_TAG`. Keep the whole repository layout.
 
 ```bash
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+QUEST_TAG=v0.1.2        # replace with the newest release tag
 mkdir -p "$HERMES_HOME/plugins"
-git clone https://github.com/ap08960695/hermes-quest.git "$HERMES_HOME/plugins/hermes-quest"
+git clone --branch "$QUEST_TAG" https://github.com/ap08960695/hermes-quest.git "$HERMES_HOME/plugins/hermes-quest"
 hermes plugins enable hermes-quest --no-allow-tool-override
 hermes plugins list
 ```
 
-If that destination already exists, do not clone over it: use the update steps below. For development, the
-local-checkout symlink alternative is documented in [dashboard/README.md](dashboard/README.md).
+Git reports a detached HEAD after a tag clone; that is expected. If the destination already exists, do not clone
+over it: use the update steps below. For development, the local-checkout symlink alternative is documented in
+[dashboard/README.md](dashboard/README.md).
+
+`hermes plugins enable` turns on the web dashboard tab and the backend API. Hermes Desktop has its own, separate
+switch: see [Install in Hermes Desktop](#install-in-hermes-desktop).
 
 ### 3. Optional configuration and title opt-in
 
@@ -155,49 +180,134 @@ Stop the existing dashboard in the terminal/service that owns it, then start it 
 `HERMES_HOME` and optional `HERMES_QUEST_CONFIG`. If a service manages your dashboard, set these in its
 service environment and restart that service instead; exports in another shell do not reach a running service.
 
-A fresh `127.0.0.1` dashboard uses token-only API auth on the tested Hermes build; signing in does not
-make its plugin iframe work (401). Use the alternate local loopback address `127.0.0.2` below, which enables
-Hermes's cookie-auth gate without binding to the LAN. Configure the host's bundled username/password
-provider (or use your existing authenticated deployment); do not disable authentication.
-The alternate loopback recipe was tested on Linux; on other hosts use an authenticated dashboard as
-specified in the host's guide. In Bash, choose credentials without saving them in shell history:
+Start the dashboard with its default settings:
 
 ```bash
-read -r -p 'Dashboard username: ' HERMES_DASHBOARD_BASIC_AUTH_USERNAME
-read -r -s -p 'Dashboard password: ' HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
-printf '\n'
-export HERMES_DASHBOARD_BASIC_AUTH_USERNAME HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
-hermes dashboard --host 127.0.0.2 --port 9119 --no-open
+hermes dashboard
 ```
 
-Use a strong unique password. These exports apply to this process only; for persistent service credentials
-follow the [Hermes dashboard authentication guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard)
-(secrets belong in the host's protected environment, never in Quest JSON or a repository).
-Open `http://127.0.0.2:9119/login` and sign in with your chosen credentials, then select
-"Hermes Quest" (or visit `http://127.0.0.2:9119/hermes-quest`). The first launch may build the host web UI.
+Then open the address it prints (normally `http://127.0.0.1:9119`) and select "Hermes Quest" in the tab list
+(or visit `/hermes-quest`). The default token-authenticated dashboard is supported: Quest reads its data through
+the dashboard's own session, so you do not need to change the host address, set up a cookie login or add
+credentials for Quest. The first launch may build the host web UI. Quest v0.1.2 or newer is required for this;
+v0.1.0 and v0.1.1 showed a blank tab or `401 Unauthorized` on the default dashboard.
+
 An empty Hermes home shows the game world with no work/hero activity; it does not inject synthetic quests
 into your live board. Try the standalone demo above for a populated example.
 
-Keep loopback binding. For remote access use the host's documented authentication and a tunnel/VPN; do not
-expose a private board through an unauthenticated server. Quest inherits the dashboard's authentication.
+Keep the dashboard on loopback. For remote access use the host's documented authentication and a tunnel/VPN
+(see the [Hermes dashboard guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/web-dashboard));
+do not expose a private board through an unauthenticated server. Quest inherits the dashboard's authentication
+and has no credentials of its own.
+
+## Install in Hermes Desktop
+
+Hermes Desktop loads Quest as a native Desktop plugin (a "Quest" entry in the sidebar, route `/hermes-quest`).
+It is separate from the web tab: enabling the agent plugin with `hermes plugins enable` does not turn on the
+Desktop page, and the Desktop switch does not enable the agent plugin. Follow the steps in order.
+
+**1. Put the package where the Desktop app can see it.** The package has two halves: the backend
+(`dashboard/`) and the Desktop UI (`desktop/`). They live in the same repository.
+
+- Local backend (Desktop runs the agent on this computer): install Quest as in
+  [step 2](#2-install-and-enable) above. Desktop copies the `desktop/` folder from
+  `$HERMES_HOME/plugins/hermes-quest` into its own `$HERMES_HOME/desktop-plugins/hermes-quest` folder by itself
+  when you rescan (step 2).
+- Remote backend (Desktop connects over SSH or to another machine): the data and the extractor run on the
+  remote machine, so install the package **there** (step 2 of this guide, run on the remote machine). The
+  Desktop UI is different: Hermes Desktop loads it from the computer where the Desktop app runs, never from the
+  remote disk. So also put the package on that computer: run the same install command there (catalog or tag
+  clone), or use Settings, Plugins, "Install from Git" in the app with this repository's URL and the Desktop
+  target checked. Without that local copy the Quest entry never appears in the sidebar.
+
+**2. Rescan.** In Hermes Desktop open Settings, then Plugins, then "Manage plugins" (Desktop plugins), and choose
+**Rescan**. Rescan copies the Desktop half into the app. You do not need to restart the app.
+
+**3. Turn on the switch.** In the same Plugins page find the row for Hermes Quest (shown as "Agent + Desktop"). Turn
+on the **Desktop** switch for Hermes Quest. A "Quest" button appears in the sidebar; select it to open the game.
+Desktop plugins are off by default, and each plugin has a separate Agent and Desktop switch.
+
+**4. What you should see.**
+
+- A populated board: heroes and quests for the work in the last 12 hours, live-updating about every 10 seconds.
+- A new or quiet Hermes home: the game town with **no heroes, no quests and no battles**. That is normal and not
+  an error. Quest shows your real board only and never injects demo data into it. Use the standalone demo to see
+  a populated example.
+- "Quest is not available yet": the backend for the connection you selected does not have Quest installed or
+  enabled. Install or update it there, restart that backend, then use **Try again**.
+- "Sign-in needed": reconnect or sign in to that connection again.
+- "Desktop update needed": this Desktop build cannot report connection changes; update Hermes Desktop.
+
+Desktop support is tested on Hermes Desktop for Linux (local backend) and on a macOS Desktop connected to a
+Linux backend over SSH. The macOS renderer motion and mobile Desktop have not been measured, so treat those as
+untested. The technical contract is in [docs/native-integration.md](docs/native-integration.md).
 
 ### Update
 
+Catalog install:
+
 ```bash
-git -C "$HERMES_HOME/plugins/hermes-quest" pull --ff-only origin main
+hermes plugins update hermes-quest
 ```
 
-Then restart the same dashboard/service and reload the Quest tab. `--ff-only` refuses to overwrite local
-commits; preserve your changes before resolving that error. A release candidate branch is not stable `main`.
+This is available once the catalog entry is merged (see option A above). It moves you to the commit the catalog
+currently pins.
+
+Git tag install: fetch tags and check out a newer release tag, never `main`:
+
+```bash
+git -C "$HERMES_HOME/plugins/hermes-quest" fetch --tags origin
+git -C "$HERMES_HOME/plugins/hermes-quest" checkout v0.1.2   # replace with the newest release tag
+```
+
+Then restart the same dashboard/service (and the remote backend, if you use one) and reload the Quest tab. In
+Hermes Desktop use **Rescan** afterwards so the app copy of the Desktop half follows the package. `checkout`
+refuses to overwrite local changes; preserve them before resolving that error. A release candidate branch or
+`main` is not a release.
 
 ### Remove
 
+Removal has four parts. Do them in this order. Nothing here touches your Hermes databases (`kanban.db`,
+`state.db`) or `config.yaml` settings other than Quest's own plugin entry.
+
+**1. Hermes Desktop (only if you enabled it there).** In Settings, Plugins, turn the **Desktop** switch for Hermes
+Quest **off**. Deleting only the app copy (`$HERMES_HOME/desktop-plugins/hermes-quest`) is not enough while the
+package is still installed: Desktop recreates it on the next rescan. On a remote-backend setup repeat this on the
+computer that runs the Desktop app, and also remove the package there (step 2).
+
+**2. The agent plugin.**
+
 ```bash
-hermes plugins disable hermes-quest
+hermes plugins disable hermes-quest      # turn it off and keep the files
+hermes plugins remove hermes-quest       # delete the package (catalog or git clone)
 ```
 
-Restart the dashboard and confirm the tab is gone. Only then remove the plugin checkout if you no longer
-need it (preserve local edits first). The optional Quest JSON can also be removed; Hermes databases stay untouched.
+`remove` deletes `$HERMES_HOME/plugins/hermes-quest` and its `plugins` entry in `config.yaml`. Preserve any local
+edits first. If you installed by symlink, remove the symlink yourself. Restart the dashboard (and any remote
+backend) and confirm the Quest tab is gone. After a Desktop **Rescan** the sidebar entry and the
+`$HERMES_HOME/desktop-plugins/hermes-quest` copy are also gone.
+
+**3. Quest settings.** If you created a Quest config file, delete it:
+`rm -f "$HERMES_HOME/hermes-quest.json"` (or the path in `HERMES_QUEST_CONFIG`). Remove `HERMES_QUEST_CONFIG`
+from your service environment as well.
+
+**4. Quest's private state.** Quest keeps a small folder of its own in `$HERMES_HOME/hermes-quest` (or the
+`history_dir` you configured). It is **not** removed by `hermes plugins remove`:
+
+| File | What it is | Safe to delete? |
+| --- | --- | --- |
+| `session-ref.key` | Random 32-byte private key used to make session references. Never leaves your machine. | Yes, but hold it back if you plan to reinstall: a new key changes the pseudonymous references, so old replay identity does not match. Back it up privately (mode 0600) to keep them stable. |
+| `botstatus-history.jsonl` and rotated `.1`, `.2`, `.3` copies, `state.json`, `.lock` | A small log of bot availability changes (profile ID, status, timestamps only) | Yes |
+
+To purge everything Quest ever stored:
+
+```bash
+rm -r "$HERMES_HOME/hermes-quest"
+```
+
+Check first that the path is Quest's folder and not something else. For a named profile set `HERMES_HOME` to that
+profile's home before you run it. Browser-side Quest preferences (panel layout) are stored in your browser's
+local storage for the dashboard site and are removed by clearing site data. See [docs/privacy.md](docs/privacy.md).
 
 ### Troubleshooting
 
@@ -208,8 +318,10 @@ need it (preserve local edits first). The optional Quest JSON can also be remove
 | Tab visible but data unavailable / API 503 | Check that `HERMES_QUEST_CONFIG` is valid JSON and its `hermes_home` exists and is readable by the dashboard. Inspect host logs privately; API errors deliberately hide paths. |
 | World is empty | Expected on a clean home or a window with no recent activity. Use the standalone synthetic demo to see battles. |
 | Configuration has no effect | Set the variable in the dashboard/service environment and restart; shell exports do not change an existing process. |
+| Desktop: no Quest entry in the sidebar | Run Settings, Plugins, Rescan and turn on the **Desktop** switch. With a remote backend, the package must also be installed on the computer that runs the Desktop app. |
+| Desktop: "Quest is not available yet" | The connected backend has no Quest or it is not enabled. Install/update it there, restart that backend, then **Try again**. |
 | Port 9119 is occupied | Reuse/restart the existing dashboard or choose a free `--port` (use `0` for automatic assignment and open the printed URL). |
-| Login required / iframe says `Unauthorized` | On the tested Linux build, use the authenticated `127.0.0.2` loopback recipe above, configure a host auth provider, restart and visit `/login`; `127.0.0.1` is token-only even after login. Quest does not supply or bypass credentials. |
+| Tab is blank or the iframe says `Unauthorized` | Update Quest to v0.1.2 or newer; the default `hermes dashboard` is supported and needs no extra host or login setup. If the dashboard itself shows a login page, sign in as the host's authentication guide describes. Quest does not supply or bypass credentials. |
 
 ### Read-only API
 
@@ -247,8 +359,34 @@ nothing is tied to a particular home directory or profile name.
 
 Hermes Quest is designed so the default output is safe to screenshot.
 
-- Free text is not exported by default. Card titles, comments and bot names are replaced by generated labels
+**Network and telemetry.** Hermes Quest sends **no data off your machine** and has **no telemetry**, analytics,
+crash reporting or update check. The plugin's runtime code (game page, API and extractor) calls no external service: the game page
+loads only files from its own package and the dashboard's own `/api/plugins/hermes-quest/` routes, and the
+Desktop guest page is sandboxed with `connect-src 'none'`. The only network traffic is between your browser or
+Desktop app and the Hermes dashboard/backend you already run. Installing from the catalog or Git contacts GitHub
+(or the catalog) once, the same as any plugin; that is Hermes, not Quest.
+
+**What it reads, and what it runs.**
+
+- Reads (read-only): `kanban.db`, each profile's `state.db`, `config.yaml`, `profile.yaml` and `logs/agent.log`
+  under `$HERMES_HOME`, and `bot-status.json` if present. Databases are opened read-only.
+- Runs: on each `/replay` and `/events` request (about every 10 seconds while a Quest tab is open) the plugin
+  starts one bundled Python extractor subprocess (30 second limit). While the dashboard is up, a background
+  thread also samples `bot-status.json` about every 30 seconds. Set `HERMES_QUEST_SAMPLER=off` to disable it.
+- Writes: only its own folder `$HERMES_HOME/hermes-quest` (the private `session-ref.key` and a small bot
+  availability history). See [Remove](#remove) to delete it.
+
+**What is shown by default.**
+
+- Free text is not exported by default. Card titles and comments are replaced by generated labels
   (for example `Quest #12 · BUILD`); bot and task identifiers are hashed; model names are reduced to a family.
+  `show_titles` is `false` by default and is a local setting you can opt in to.
+- Profile and pet names are a **separate** setting from card titles. `show_profile_names` is `false` for
+  anonymous output and cannot be turned on from the JSON file. The dashboard plugin turns it on only for a
+  request that carries a verified dashboard session, so a signed-in dashboard user sees profile/display names
+  (never card text), while anything unverified shows `bot-<hash>` labels. So with the default `show_titles: false`
+  you can still see real profile names inside your own signed-in dashboard. Treat a signed-in view as private
+  and do not screenshot it for sharing.
 - Text fields come from fixed enumerations. Anything unknown becomes `unknown`.
 - Memory activity is counted and shown as a gesture. The extractor projects tool identities from session
   transcripts without materializing memory query/result prose. It does not open any memory store.

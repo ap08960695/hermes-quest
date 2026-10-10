@@ -20,6 +20,12 @@ hermes plugins enable hermes-quest --no-allow-tool-override
 # then restart the existing dashboard
 ```
 
+This symlink form is for development. Users should install from the plugin catalog
+(`hermes plugins install hermes-quest --enable`, once the catalog entry is merged) or from a release tag; see the
+README [Install](../README.md#2-install-and-enable) section. The web tab and Hermes Desktop have separate
+switches; for Desktop see [Install in Hermes Desktop](../README.md#install-in-hermes-desktop). Run the plain
+`hermes dashboard` command: the default token-authenticated dashboard is supported.
+
 Enable it only in the Hermes home whose dashboard should show the tab. `HERMES_HOME` must point at that home;
 if it is unset the link would target `/plugins`, which is why the snippet defaults it to `~/.hermes`.
 
