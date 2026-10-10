@@ -21,7 +21,8 @@ function registerCharacter(v, type, id, box) {
     right:r.left+(v.ox+box.right*v.Z)*scale, bottom:r.top+(v.oy+box.bottom*v.Z)*scale};
   if (body.right < r.left || body.left > r.right || body.bottom < r.top || body.top > r.bottom) return;
   const dx = Math.max(0, (44 - (body.right-body.left))/2), dy = Math.max(0, (44 - (body.bottom-body.top))/2);
-  ctx.inspect.picks.push({type,id,world:box,body,anchor:type==='hero'?[ctx.S.heroes[id].x,ctx.S.heroes[id].y]:null,order:ctx.inspect.picks.length,
+  const h=ctx.workView?.pairs.find(p=>p.item.ref===id)?.hero || ctx.S.heroes[id];
+  ctx.inspect.picks.push({type,id,world:box,body,anchor:type==='hero'&&h?[h.x,h.y]:null,order:ctx.inspect.picks.length,
     hit:{left:body.left-dx,right:body.right+dx,top:body.top-dy,bottom:body.bottom+dy}});
 }
 function registerSprite(v, type, id, im, sx, w, h, nx, ny, flip) {
@@ -88,6 +89,7 @@ function blit(v, im, sx, sy, sw, sh, nx, ny, flip = false) {       // nx,ny: nat
   ctx.cx.save(); ctx.cx.translate(v.ox + (nx + sw) * Z, v.oy + ny * Z); ctx.cx.scale(-1, 1); ctx.cx.drawImage(im, sx, sy, sw, sh, 0, 0, sw * Z, sh * Z); ctx.cx.restore();
 }
 function draw() {
+  if(ctx.workingSnapshot?.()&&!ctx.workView.all)return drawWorking();
   const v = view();
   if (!ctx.privacyPending) sceneOverflow(v);
   if (ctx.UI) ctx.UI.clear();
@@ -118,6 +120,23 @@ function draw() {
   vignette();
 }
 const SHADOWS = new Map(), FLASH = new Map();
+function drawWorking() {
+  ctx.renderWorking();ctx.fitWorking();const v=view();
+  ctx.UI?.sceneOverflow([]);ctx.UI?.selected(null);ctx.UI?.clear();ctx.inspect.picks=[];
+  ctx.cx.imageSmoothingEnabled=false;ctx.cx.fillStyle='#0b1220';ctx.cx.fillRect(0,0,ctx.cv.width,ctx.cv.height);
+  if(ctx.privacyPending){ctx.UI?.flush();return;}
+  if(ctx.BG)ctx.cx.drawImage(ctx.BG,v.ox,v.oy,ctx.W.size[0]*v.Z,ctx.W.size[1]*v.Z);
+  for(const p of ctx.W.layered?ctx.W.props:[])prop(v,p);
+  for(const pair of ctx.workView.pairs){
+    if(pair.hero)heroDraw(v,pair.hero);
+    else {const [x,y]=P(v,pair.x-60,pair.y-20);ctx.cx.strokeStyle='#ffd36b';ctx.cx.strokeRect(x-12*v.Z,y-24*v.Z,24*v.Z,24*v.Z);}
+    monster(v,pair.monster);
+    ctx.UI?.screenLabel(pair.item.display_name+' · '+pair.item.quest_label,(v.ox+pair.x*v.Z)/ctx.DPR,(v.oy+(pair.y-110)*v.Z)/ctx.DPR);
+  }
+  // Ambient villagers are reserved for the no-work scene; no hidden idle heroes.
+  if(!ctx.workView.pairs.length&&window.NPCS)NPCS.ents(v,blit,shadowPx).slice(0,innerWidth<=760?8:innerWidth<=1100?14:20).forEach(e=>e.f());
+  ctx.UI?.flush();vignette();
+}
 function onScreen(v,x,y,w,h) {
   const sx=v.ox+x*v.Z, sy=v.oy+y*v.Z;
   return sx+w*v.Z>=0 && sx-w*v.Z<=ctx.cv.width && sy+32*v.Z>=0 && sy-h*v.Z<=ctx.cv.height;
@@ -211,7 +230,7 @@ function heroDraw(v, h) {
   if (h.gest && !walking) emoji(h.gest.icon.split(' ')[0], hx + 14 * v.Z, top + 6 * v.Z - Math.sin(performance.now() / 200) * 2 * v.Z, 12 * v.Z);
   if (h.sleep && !walking) emoji('💤', hx + 12 * v.Z, top + 28 * v.Z - Math.sin(performance.now() / 400) * 4 * v.Z, 14 * v.Z);
 
-  if (h.bubble) bubble(hx, top - 16 * ctx.DPR, h.bubble.text);
+  if (h.bubble && !ctx.workingSnapshot?.()) bubble(hx, top - 16 * ctx.DPR, h.bubble.text);
 
 }
 // Effort/attack colours come from the character itself: the dominant saturated hue of its first frame, plus a
