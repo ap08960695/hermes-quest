@@ -79,7 +79,7 @@ function parseWorkingBlock(block) {
   return {asOf, items, order, resting: nonNegInt(block.resting_count) ?? 0,
     progress: fields && fields.every(v => v !== null) ? {wins_today: fields[0], xp: fields[1], gold: fields[2], level: fields[3], level_progress: fields[4]} : null};
 }
-const orderKey = o => [o.at, o.action_label, o.quest_label, o.recipient_display_name ?? ''].join('\u0001');
+const orderKey = o => JSON.stringify([o.at, o.action_label, o.task_ref, o.recipient_bot_ref]);
 const dayKey = sec => { const d = new Date(sec * 1000); return d.getFullYear() * 10000 + d.getMonth() * 100 + d.getDate(); };
 // Pure: nothing is mutated until applyWork. mode 'delta' ignores an older snapshot (out-of-order
 // poll); 'rebase' is an authoritative reload and always wins.

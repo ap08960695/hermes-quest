@@ -379,6 +379,31 @@ def _tool_calls_sql(captain=False, json1=True):
         WHERE type='object')"""
 
 
+def _latest_order_sql(json1=True):
+    # Repeated snapshot reads have no prose consumer. Project only known action
+    # names and string bindings in SQLite, never full arguments or call IDs.
+    window = "FROM messages WHERE role='assistant' AND timestamp>=? AND timestamp<=?"
+    if not json1:
+        return 'SELECT session_id,timestamp,NULL AS name,NULL AS task_id,' \
+               'NULL AS child_id,NULL AS assignee ' + window + ' AND 0'
+    names = ','.join("'" + name + "'" for name in sorted(CAP_ACT))
+    fields = ','.join(
+        f"CASE WHEN json_type(args,'$.{field}')='text' "
+        f"THEN json_extract(args,'$.{field}') END AS {field}"
+        for field in ('task_id', 'child_id', 'assignee'))
+    return f"""WITH calls AS (
+        SELECT messages.rowid AS seq,session_id,timestamp,j.key AS call_index,
+               CASE WHEN j.type='object' THEN j.value ELSE '{{}}' END AS call
+        FROM messages,json_each(CASE WHEN json_valid(tool_calls) THEN tool_calls ELSE '[]' END) AS j
+        WHERE role='assistant' AND timestamp>=? AND timestamp<=?
+    ), actions AS (
+        SELECT seq,session_id,timestamp,call_index,json_extract(call,'$.function.name') AS name,
+               CASE WHEN json_valid(json_extract(call,'$.function.arguments'))
+                    THEN json_extract(call,'$.function.arguments') ELSE '{{}}' END AS args
+        FROM calls WHERE json_extract(call,'$.function.name') IN ({names})
+    ) SELECT session_id,timestamp,name,{fields} FROM actions ORDER BY seq,call_index"""
+
+
 def _message_columns(captain=False, json1=True):
     # chars is a number only: the size of what the model wrote/received in this message
     # (content + tool-call arguments / tool result), used to estimate mana when Hermes
@@ -1153,22 +1178,14 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 # A latest-order snapshot cannot be built from just newly delivered
                 # events: otherwise every unchanged poll forgets an explicit order.
                 # Read only projected Captain calls; never comments/results/prose.
-                for m in s.execute(f'SELECT session_id,timestamp,{_tool_calls_sql(True, json1)} AS tool_calls '
-                                   "FROM messages WHERE role='assistant' AND timestamp>=? AND timestamp<=? "
-                                   'AND tool_calls IS NOT NULL ORDER BY rowid', (as_of - hours * 3600, as_of)):
+                for m in s.execute(_latest_order_sql(json1), (as_of - hours * 3600, as_of)):
                     if m['session_id'] in mapping:
                         continue
-                    for call in _json(m['tool_calls'], []):
-                        fn = call.get('function') or {}
-                        act = CAP_ACT.get(fn.get('name'))
-                        args = _json(fn.get('arguments'), {})
-                        if not isinstance(args, dict):
-                            continue
-                        tid = args.get('task_id') or args.get('child_id')
-                        if act and isinstance(tid, str) and tid in tasks:
-                            recipient = args.get('assignee')
-                            working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act,
-                                                               bot=recipient if isinstance(recipient, str) else None))
+                    act = CAP_ACT.get(m['name'])
+                    tid = m['task_id'] or m['child_id']
+                    if act and tid in tasks:
+                        working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act,
+                                                           bot=m['assignee']))
                 deferred = previous.get('captain_pending', {})
                 call_indexes = {}
                 def call_index(session_id):

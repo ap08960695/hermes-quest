@@ -4,7 +4,10 @@
 function redactCharacterNames() {
   for (const b of ctx.D.bots) {
     if (ctx.D.meta.show_profile_names === false) b.name = b.id;
-    delete b.display_name; delete b.profile_name; delete b.pet_name;
+    // Working payloads carry generated class labels even with aliases disabled.
+    // Keep only that closed vocabulary; arbitrary aliases/profile names still go.
+    if(!/^(?:Build Warrior|Test Ranger|Review Paladin|Deploy Engineer|Research Mage|Analyst Sage|Captain) \d+$/.test(b.display_name||''))delete b.display_name;
+    delete b.profile_name; delete b.pet_name;
   }
 }
 function syncInspectionSessions(rows = ctx.D.sessions) {

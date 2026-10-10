@@ -452,6 +452,87 @@ CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content T
         self.assertEqual(idle['working']['latest_order'], order)
         self.assertEqual(s.replay()['working']['latest_order'], order)
 
+    def test_idle_latest_order_scan_never_imports_private_arguments(self):
+        s = self.scene()
+        private = 'PRIVATE_ARGUMENT_SENTINEL'
+        db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'profiles/planner-demo/state.db')
+        db.executescript('''
+CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,parent_session_id TEXT,started_at REAL,title TEXT);
+CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,
+ tool_calls TEXT,tool_name TEXT,tool_call_id TEXT,timestamp REAL,token_count INTEGER);
+''')
+        db.execute("INSERT INTO sessions VALUES('captain','cli',NULL,?,'Captain')", (s.now - 100,))
+        calls = [
+            {'id': 'order', 'function': {'name': 'kanban_reassign', 'arguments':
+             json.dumps({'task_id': 't_a0000001', 'assignee': 'tester-demo', 'reason': private})}},
+            {'id': 'comment', 'function': {'name': 'kanban_comment', 'arguments':
+             json.dumps({'task_id': 't_a0000001', 'body': private})}},
+        ] + [{'id': name, 'function': {'name': name, 'arguments': json.dumps({'prose': private})}}
+             for name in ('terminal', 'patch', 'write_file', 'mnemosyne_recall')]
+        db.execute("INSERT INTO messages VALUES(1,'captain','assistant',NULL,?,NULL,NULL,?,NULL)",
+                   (json.dumps(calls), s.now - 5))
+        db.commit(); db.close()
+        first = s.replay()
+        original_ro = extract.ro
+        source_rows = []
+
+        def spy_ro(path):
+            connection = original_ro(path)
+            if Path(path).name == 'state.db':
+                def source_read(cursor, values):
+                    # Observe SQL result values as they cross into Python, not only
+                    # the final payload (which already redacted the old full args).
+                    source_rows.append(tuple(values))
+                    return sqlite3.Row(cursor, values)
+                connection.row_factory = source_read
+            return connection
+
+        with patch.object(extract, 'ro', side_effect=spy_ro):
+            delta = s.delta(first['cursor'])
+        self.assertEqual(delta['events'], [])
+        self.assertEqual(delta['working']['latest_order'], first['working']['latest_order'])
+        self.assertTrue(source_rows, 'The source-read spy must observe the idle scan')
+        imported = repr(source_rows)
+        self.assertNotIn(private, imported)
+        for name in ('terminal', 'patch', 'write_file', 'mnemosyne_recall'):
+            self.assertNotIn(name, imported)
+        self.assertNotIn(private, json.dumps(delta))
+
+    def test_latest_order_projection_is_scalar_only_and_json1_fails_closed(self):
+        private = 'PRIVATE_PROJECTION_SENTINEL'
+        with sqlite3.connect(':memory:') as db:
+            db.row_factory = sqlite3.Row
+            db.execute('CREATE TABLE messages(session_id TEXT,timestamp REAL,role TEXT,tool_calls TEXT)')
+            calls = [
+                {'function': {'name': 'kanban_link', 'arguments':
+                 {'child_id': 't_a0000001', 'parent_id': private, 'body': private}}},
+                {'function': {'name': 'kanban_reassign', 'arguments': json.dumps(
+                 {'task_id': 't_a0000002', 'assignee': 'tester-demo', 'reason': private})}},
+                {'function': {'name': 'kanban_comment', 'arguments':
+                 {'task_id': {'nested': private}, 'child_id': [private], 'assignee': [private]}}},
+                {'function': {'name': 'kanban_block', 'arguments': 'not JSON ' + private}},
+                {'function': {'name': 'terminal', 'arguments': {'task_id': private}}},
+                private, None,
+            ]
+            for raw in (json.dumps(calls), 'invalid JSON ' + private, json.dumps(private)):
+                db.execute("INSERT INTO messages VALUES('captain',10,'assistant',?)", (raw,))
+            projected = [dict(r) for r in db.execute(extract._latest_order_sql(), (0, 20))]
+            self.assertEqual(len(projected), 4)
+            self.assertEqual(set(projected[0]),
+                             {'session_id', 'timestamp', 'name', 'task_id', 'child_id', 'assignee'})
+            self.assertEqual(projected[0]['child_id'], 't_a0000001')
+            self.assertEqual(projected[1]['task_id'], 't_a0000002')
+            self.assertEqual(projected[1]['assignee'], 'tester-demo')
+            for row in projected[2:]:
+                self.assertTrue(all(row[field] is None for field in ('task_id', 'child_id', 'assignee')))
+            self.assertNotIn(private, json.dumps(projected))
+            # Prove the fallback does not merely skip parsing the returned source:
+            # even unavailable JSON functions cannot execute on this path.
+            def unavailable(*args):
+                raise AssertionError('JSON1 must not run in the fail-closed query')
+            db.create_function('json_valid', 1, unavailable)
+            self.assertEqual(list(db.execute(extract._latest_order_sql(False), (0, 20))), [])
+
     def test_session_parent_lineage_is_keyed_and_never_task_dependencies(self):
         s = self.scene()
         db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'profiles/developer-demo/state.db')

@@ -98,6 +98,8 @@ jobs:
         run: node tools/test_scene_selection.cjs "$RUNNER_TEMP/ui-regressions/selection"
       - name: Working view focus and privacy (both engines, three viewports)
         run: node tools/test_scene_focus.cjs "$RUNNER_TEMP/ui-regressions/working-focus"
+      - name: Working review transition regressions (both engines)
+        run: node tools/test_working_regressions.cjs "$RUNNER_TEMP/ui-regressions/working-regressions"
       - name: Working view 1-to-1, caps, overlap and 60 second observation (synthetic only)
         run: node tools/test_scene_playtest.cjs "$RUNNER_TEMP/ui-regressions/working-playtest"
       - name: Native scene + hero interaction (region tap vs main, overflow/chooser identity, occlusion; both engines)

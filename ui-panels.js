@@ -283,6 +283,16 @@
     (visible(own)?own:visible(all)?all:$('#menu-toggle')).focus();
   }
   function overview(data) {overviewView(data);refreshDialog();} // Dialog last: list rows exist again for focus return.
+  function overviewTasks(data) {
+    const el=$('#tasks-list'),completed=data.tasks.filter(t=>t.completed);
+    const wasOpen=el.querySelector('details')?.open===true;
+    itemList(el,data.tasks.filter(t=>!t.completed),data.empty);
+    if(!completed.length)return;
+    if(!data.tasks.some(t=>!t.completed))el.replaceChildren();
+    const group=document.createElement('details'),heading=document.createElement('summary');
+    heading.textContent='Completed · '+completed.length;group.append(heading);group.open=wasOpen;
+    const rows=document.createElement('div');group.append(rows);itemList(rows,completed,data.empty);el.append(group);
+  }
   function overviewView(data) {
     overviewData=data;
     const issueCount=data.blocked+data.errors.length;
@@ -295,9 +305,9 @@
       ...data.tasks.filter(t=>t.blocked).map(t=>t.summary),'Open Overview for permitted task details.'],'Issues');
     $('#overview-summary').textContent=data.summary;
     if($('#menu').hidden||!$('#group-overview').open)return;
-    const key=JSON.stringify([data.summary,data.tasks.map(t=>[t.key,t.summary]),data.heroes.map(h=>[h.key,h.summary])]);
+    const key=JSON.stringify([data.summary,data.tasks.map(t=>[t.key,t.summary,t.completed]),data.heroes.map(h=>[h.key,h.summary])]);
     if(key===overviewKey)return;overviewKey=key;
-    keepListFocus('#tasks-list','#tasks-all',()=>itemList('#tasks-list',data.tasks,data.empty));
+    keepListFocus('#tasks-list','#tasks-all',()=>overviewTasks(data));
     keepListFocus('#heroes-list','#heroes-all',()=>itemList('#heroes-list',data.heroes,'No heroes in this replay range'));
     $('#tasks-all').onclick=()=>listDialog('All tasks',()=>overviewData?.tasks,overviewData.empty);
     $('#heroes-all').onclick=()=>listDialog('All heroes',()=>overviewData?.heroes,'No heroes in this replay range');

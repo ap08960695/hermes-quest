@@ -119,12 +119,14 @@ function onOrder(order, {animate = true} = {}) {
   if (!order || typeof order !== 'object') return false;
   const id = order.key ?? order.id;
   if (id == null && order.at == null) return false;   // nothing to dedupe on: do not animate
-  const to = order.bot || order.recipient_display_name || '';
-  const key = 'order:' + (id ?? [order.at, to, order.action_label, order.quest_label].join('|'));
+  const key = 'order:' + (id ?? JSON.stringify([order.at, order.action_label, order.task_ref ?? null, order.recipient_bot_ref ?? order.bot ?? null]));
   if (!firstTime(key) || !animate) return false;
   const pairs = ctx.workingPairs?.() || [];
-  const pair = pairs.find(p => order.task_ref && p.item.task_ref === order.task_ref) ||
+  const pair = order.task_ref ? pairs.find(p => p.item.task_ref === order.task_ref) :
     pairs.find(p => order.recipient_bot_ref && p.item.bot_ref === order.recipient_bot_ref);
+  // A task-bound order outside the Working frame stays pinned in the instruction
+  // panel; never send its scroll to another encounter sharing the same worker.
+  if(order.task_ref&&ctx.S.work?.has&&!ctx.workView?.all&&!pair)return false;
   const h = pair?.hero || heroFor(order.recipient_bot_ref || order.bot, order.recipient_display_name);
   if (!h || ctx.restLocked(h)) return false;
   const cap = ctx.S.heroes[ctx.captainId()], [x0, y0] = pair ? [pair.x - 150, pair.y - 90] : cap ? [cap.x, cap.y] : ctx.spotOf(ctx.regionOf(ctx.captainId()));

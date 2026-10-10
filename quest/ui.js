@@ -7,7 +7,7 @@ const fmt = t => { const d = new Date(t * 1000); return Number.isNaN(d.getTime()
 // Page-local presentation only. Never part of a replay checkpoint or live cursor.
 const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null, fit: false, zoom: null, fittedZoom: null};
 // One reducer is authoritative; no raw snapshot/fixture adapter.
-const workView = {all:false, focus:null, key:'', pairs:[], savedCamera:null};
+const workView = {all:false, focus:null, key:'', pairs:[], savedCamera:null, buttons:new Map()};
 function workingSnapshot() {
   return ctx.S.work?.has?{asOf:ctx.S.work.asOf,items:ctx.S.work.items(),resting:ctx.S.work.resting,latestOrder:ctx.S.work.latestOrder,progress:ctx.S.work.progress()}:null;
 }
@@ -28,16 +28,17 @@ function workItems() {
     const generic=(questKinds[item.quest_kind]||'Guild')+' quest #'+(i+1);
     let quest=ctx.D.meta.show_titles===true?safeWorkText(item.quest_label,generic):/^(?:Planning|Build|Testing|Review|Deploy|Verification|Guild) quest(?: #\d+)?$/.test(item.quest_label)?item.quest_label:generic;
     quest=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(quest),s=>s.segment).slice(0,30).join('');
-    return {...item,display_name:item.worker_observed===false?'Worker not observed':ctx.D.meta.show_profile_names===true?safeWorkText(item.display_name,role):item.display_name?.startsWith(cls+' ')&&/^\d+$/.test(item.display_name.slice(cls.length+1))?item.display_name:role,
+    return {...item,display_name:item.status==='running'&&item.worker_observed===false?(item.display_name==='Unassigned'?'Unassigned':'Worker not observed'):ctx.D.meta.show_profile_names===true?safeWorkText(item.display_name,role):item.display_name?.startsWith(cls+' ')&&/^\d+$/.test(item.display_name.slice(cls.length+1))?item.display_name:role,
       class_label:cls,quest_label:quest,group_label:safeWorkText(item.group_label,'Other work')};
   });
 }
+const workClock = () => ctx.liveFeed && ctx.following ? ctx.S.work.asOf ?? ctx.S.t : ctx.S.t;
 function workElapsed(item) {
   const start=item.started_at==null?NaN:typeof item.started_at==='number'?item.started_at:Date.parse(item.started_at)/1000;
-  return Number.isFinite(start)?Math.floor(Math.max(0,(ctx.S.work.asOf??ctx.S.t)-start)/60)+' min':'Elapsed unknown';
+  return Number.isFinite(start)?Math.floor(Math.max(0,workClock()-start)/60)+' min':'Elapsed unknown';
 }
 function workDetails(ref) {
-  const row=workItems().find(i=>i.ref===ref);if(!row)return null;
+  const row=workItems().find(i=>i.ref===ref||i.task_ref===ref);if(!row)return null;
   const parent=row.parent_ref&&workItems().find(i=>i.ref===row.parent_ref);
   return [row.display_name+' · '+row.class_label,row.quest_label,'Status: '+row.status,workElapsed(row),
     row.parent_ref?'With: '+(parent?.display_name||'Parent not observed'):'Parent not observed',row.group_label];
@@ -74,8 +75,11 @@ function renderWorking() {
   const p=snap.progress;
   ctx.$('#working-rewards').textContent=p?'Wins today '+p.wins_today+' · Guild XP '+p.xp+' · Game gold '+p.gold+' · Level '+p.level:'Guild progress unavailable';
   ctx.$('#guild-progress').value=p?.level_progress||0;
-  const key=JSON.stringify([rows,workView.focus,Math.floor(ctx.S.t/60)]);if(key===workView.key)return;workView.key=key;
-  const list=ctx.$('#working-rows'),active=document.activeElement,owned=list.contains(active),index=[...list.querySelectorAll('button')].indexOf(active);
+  const list=ctx.$('#working-rows'),key=JSON.stringify([rows,workView.focus,Math.floor(workClock()/60)]);
+  // privacy/rebase may have cleared the DOM without changing the snapshot.
+  if(key===workView.key&&list.childElementCount)return;workView.key=key;
+  const active=document.activeElement,owned=list.contains(active),focusedRef=[...workView.buttons].find(([,button])=>button===active)?.[0];
+  const focusedCompleted=owned&&active===list.querySelector('summary');workView.buttons.clear();
   const completedOpen=list.querySelector('details')?.open===true;list.replaceChildren();
   for(const [status,label] of [['running','Running'],['blocked','Blocked'],['failed','Failed / Needs attention'],['done','Completed']]){
     const group=rows.filter(i=>i.status===status||(status==='failed'&&i.status==='unknown')).sort((a,b)=>{
@@ -87,10 +91,11 @@ function renderWorking() {
     if(status==='done')section.open=completedOpen;
     for(const item of group){const b=document.createElement('button');b.className='work-row';
       b.textContent=item.display_name+' · '+item.quest_label+' · '+workElapsed(item)+' · '+item.group_label+(item.status==='unknown'?' · Status unknown':'');
-      b.setAttribute('aria-pressed',String(workView.focus===item.ref));b.onclick=()=>focusWork(item.ref,status!=='running');section.append(b);}
+      b.setAttribute('aria-pressed',String(workView.focus===item.ref));b.onclick=()=>focusWork(item.ref,status!=='running');section.append(b);workView.buttons.set(item.ref,b);}
   }
   if(!running.length){const p=document.createElement('p');p.textContent='No running quests. The guild is resting.';list.prepend(p);}
-  if(owned)(list.querySelectorAll('button')[index]||ctx.$('#working-toggle')).focus();
+  if(owned){const target=focusedCompleted?list.querySelector('summary'):workView.buttons.get(focusedRef);
+    (target&&target.getClientRects().length?target:ctx.$('#working-toggle')).focus();}
 }
 function workingPairs() {
   const running=workItems().filter(i=>i.status==='running'),cap=innerWidth<=760?8:innerWidth<=1100?14:20;
@@ -125,8 +130,8 @@ function characterName(id) {
   const b = ctx.D.bots.find(b => b.id === id);
   if(workingSnapshot()){
     const rows=workItems(),matched=rows.find(i=>i.ref===id)||rows.find(i=>i.bot_ref===id);
-    return matched?.display_name||
-      (ctx.D.meta.show_profile_names===true?safeWorkText(b?.display_name,'Guild Worker '+(ctx.D.bots.indexOf(b)+1)):'Guild Worker '+(ctx.D.bots.indexOf(b)+1));
+    const role='Guild Worker '+(ctx.D.bots.indexOf(b)+1),canonical=safeWorkText(b?.display_name,role);
+    return matched?.display_name||(ctx.D.meta.show_profile_names===true||/^(?:Build Warrior|Test Ranger|Review Paladin|Deploy Engineer|Research Mage|Analyst Sage|Captain) \d+$/.test(canonical)?canonical:role);
   }
   return ctx.D.meta.show_profile_names === true && b ? b.display_name || b.profile_name || b.pet_name || 'Hero' :
     'Hero '+Math.max(1,ctx.D.bots.findIndex(b => b.id === id)+1);
@@ -285,7 +290,7 @@ function followCharacter(dt) {
   ctx.cam.tx=ctx.cam.x;ctx.cam.ty=ctx.cam.y;
 }
 function sceneName(entity) {
-  if(workingSnapshot())return entity.id?workItems().find(i=>i.ref===entity.id)?.quest_label||'Guild quest':characterName(entity.bot);
+  if(workingSnapshot())return entity.id?workItems().find(i=>i.ref===entity.id||i.task_ref===entity.id)?.quest_label||'Guild quest':characterName(entity.bot);
   const hero = !!entity.bot && !entity.id, rows = hero ? ctx.D.bots : ctx.D.tasks;
   const fallback = (hero ? 'Hero ' : 'Task ') + (rows.findIndex(r => r.id === (hero ? entity.bot : entity.id)) + 1);
   const name = ctx.D.meta.show_titles === true ? (hero ? entity.name : entity.title) : '';
@@ -345,7 +350,7 @@ const TASK_STATES={quest:'Waiting',fight:'Working',blocked:'Blocked',caged:'Wait
 function renderOverview() {
   renderWorking();
   if(workingSnapshot()){
-    const rows=workItems(),tasks=rows.filter(i=>i.status!=='archived').sort((a,b)=>['running','blocked','failed','unknown','done'].indexOf(a.status)-['running','blocked','failed','unknown','done'].indexOf(b.status)).map(i=>({key:i.ref,blocked:i.status==='blocked',summary:i.display_name+' · '+i.quest_label+' · '+i.status,details:()=>focusWork(i.ref,true)}));
+    const rows=workItems(),tasks=rows.filter(i=>i.status!=='archived').sort((a,b)=>['running','blocked','failed','unknown','done'].indexOf(a.status)-['running','blocked','failed','unknown','done'].indexOf(b.status)).map(i=>({key:i.ref,completed:i.status==='done',blocked:i.status==='blocked',summary:i.display_name+' · '+i.quest_label+' · '+i.status,details:()=>focusWork(i.ref,true)}));
     ctx.UI.overview({tasks,heroes:rows.filter(i=>i.status==='running').map(i=>({key:i.ref,summary:i.display_name+' · '+i.class_label,details:()=>focusWork(i.ref,true)})),blocked:rows.filter(i=>i.status==='blocked').length,errors:rows.filter(i=>i.status==='failed').map(()=> 'A quest failed'),empty:'No quests observed',summary:rows.filter(i=>i.status==='running').length+' working'});return;
   }
   const states=Object.values(ctx.S.tasks),blocked=states.filter(t=>t.state==='blocked'||t.chained).length;

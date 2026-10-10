@@ -114,6 +114,16 @@ test('latest order fires once per distinct order, not at boot baseline, never tw
   G.loadReplay({...demo(), working: snap(T + 12, [], {latest_order: o2})}, {t: 0, keys: new Set()});
   deepEqual(orders, ['Q2']); assert.equal(G.S.work.latestOrder.recipient_display_name, null);
 });
+test('order identity ignores alias/title changes but distinguishes bound tasks', () => {
+  const G=mk(),orders=[];G.S.work.onOrder(o=>orders.push(o.task_ref));
+  G.mergeDelta(delta(snap(T,[])));
+  const order={at:T+1,action_label:'Assigned quest',quest_label:'Build quest #1',recipient_display_name:'Nova',task_ref:'task-one',recipient_bot_ref:'bot-one'};
+  G.mergeDelta(delta(snap(T+2,[],{latest_order:order})));
+  G.mergeDelta(delta(snap(T+3,[],{latest_order:{...order,quest_label:'Safe new label',recipient_display_name:'Ember'}})));
+  deepEqual(orders,['task-one']);assert.equal(G.S.work.latestOrder.recipient_display_name,'Ember');
+  G.mergeDelta(delta(snap(T+4,[],{latest_order:{...order,task_ref:'task-two'}})));
+  deepEqual(orders,['task-one','task-two']);
+});
 test('a throwing hook neither blocks other hooks nor the poll; unsubscribe works', () => {
   const G = mk(), got = []; G.mergeDelta(delta(snap(T, [item('a', 'running')])));
   G.S.work.onComplete(() => { throw new Error('listener'); }); const off = G.S.work.onComplete(i => got.push(i.ref));

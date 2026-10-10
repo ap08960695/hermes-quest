@@ -69,6 +69,15 @@ test('one order -> one courier scroll and one acknowledgement; repeat delivery p
   assert.deepEqual(counts(G), before);                          // no fake hero/task/xp/gold/mana
 });
 
+test('order animation deduplicates immutable bindings, not alias or quest prose', () => {
+  const {G}=game();G.workView.all=true;
+  const order={at:7,action_label:'Assigned quest',quest_label:'Build quest #1',recipient_display_name:'Nova',recipient_bot_ref:smith,task_ref:'task-one'};
+  assert.equal(G.onOrder(order),true);
+  assert.equal(G.onOrder({...order,recipient_display_name:'Ember',quest_label:'Updated title'}),false);
+  assert.equal(G.S.soc.couriers,1);
+  assert.equal(G.onOrder({...order,task_ref:'task-two'}),true);
+  assert.equal(G.S.soc.couriers,2);
+});
 test('order: replay (animate:false), unknown recipient, resting recipient and malformed input play nothing and invent nothing', () => {
   const {G} = game(), before = counts(G), fx0 = G.S.fx.length;
   assert.equal(G.onOrder({at: 1, bot: smith, action_label: 'Assigned'}, {animate: false}), false);
