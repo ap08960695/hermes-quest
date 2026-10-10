@@ -130,9 +130,27 @@ test('Inn ambience: calm mode trims particles; missing inn geometry is a no-op',
   const g2 = game(); delete g2.G.W.regions.inn; g2.step(10); assert.equal(g2.G.S.soc.innBeats || 0, 0);
 });
 
+test('with card B reducer present: baseline silent, one real order/done fires once, repeat poll silent (skipped on a base without S.work)', () => {
+  const {G, data} = game({working: null}); if (!G.S.work) { console.log('SKIP reducer integration: S.work not in this base'); return; }
+  const T = 1900000000, name = G.S.heroes[smith].name;
+  const it = (ref, status) => ({ref, status, started_at: T, display_name: name, class_label: 'Mage', quest_label: 'Build door', quest_kind: 'build', group_label: 'A', parent_ref: null, worker_observed: true});
+  const snap = (t, items, o) => ({as_of: t, items, resting_count: 0, latest_order: o || null});
+  const delta = w => ({events: [], tasks: [], bots: [], cursor: 'c' + w.as_of, working: w});
+  const ord = {at: T + 9, action_label: 'Assigned', quest_label: 'Build door', recipient_display_name: name};
+  G.liveFeed = true; G.following = true; G.S.play = true; G.update(1 / 60);
+  G.loadReplay({...copy(data), working: snap(T, [it('a', 'done')])}, {t: 0, keys: new Set()}); G.update(1 / 60);
+  assert.equal(G.S.fx.filter(f => f.k === 'coin').length, 0);                       // baseline: finished work does not fire
+  G.mergeDelta(delta(snap(T + 10, [it('a', 'done'), it('b', 'running')], ord)));
+  assert.equal(G.S.fx.filter(f => f.icon === '📜').length, 1);
+  G.S.fx.length = 0; G.mergeDelta(delta(snap(T + 20, [it('a', 'done'), it('b', 'done')], ord)));
+  assert.equal(G.S.fx.filter(f => f.k === 'coin').length, 8); assert.equal(G.S.fx.filter(f => f.text === 'QUEST CLEAR!').length, 1);
+  G.S.fx.length = 0; G.mergeDelta(delta(snap(T + 30, [it('a', 'done'), it('b', 'done')], ord)));
+  assert.equal(G.S.fx.filter(f => f.k === 'coin' || f.icon === '📜').length, 0);
+});
+
 (async () => {
   let failed = 0;
   for (const {name, f} of cases) { try { await f(); console.log('PASS ' + name); } catch (e) { failed++; console.error('FAIL ' + name + '\n' + e.stack); } }
-  console.log(JSON.stringify({tests: cases.length, passed: cases.length - failed, failed, notRun: ['browser/raster', 'hidden-tab 60 s', 'integration with card B hooks']}));
+  console.log(JSON.stringify({tests: cases.length, passed: cases.length - failed, failed, notRun: ['browser/raster', 'hidden-tab 60 s', 'merged-branch integration is only exercised when S.work exists']}));
   process.exitCode = failed ? 1 : 0;
 })();
