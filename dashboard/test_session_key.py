@@ -58,7 +58,8 @@ class SessionKeyTests(unittest.TestCase):
         wire = json.dumps(payload) + json.dumps(state)
         self.assertNotIn(str(self.path), wire)
         self.assertNotIn('session-ref.key', wire)
-        self.assertNotIn('worker', wire)
+        # `worker_observed` is the readability-r2 `working` field name, not a leaked worker path.
+        self.assertNotIn('worker', wire.replace('worker_observed', ''))
 
     def test_http_missing_unsafe_restore_and_no_duplicate_mana(self):
         (self.f.home / 'bot-status.json').write_text(json.dumps({

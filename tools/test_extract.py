@@ -776,7 +776,8 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
         self.assertEqual(extract.collect_since(self.cfg, delta['cursor']),
                          dict(meta=delta['meta'], events=[], tasks=[], bots=[],
                               session_data={'status': 'available', 'reason': None},
-                              sessions=delta['sessions'], cursor=delta['cursor']))
+                              sessions=delta['sessions'], working=delta['working'],
+                              cursor=delta['cursor']))
         # Reusing the same cursor gives the same delta (retry-safe).
         self.assertEqual(extract.collect_since(self.cfg, initial['cursor']), delta)
 
@@ -1211,6 +1212,9 @@ def captain_fixture_digest(extract_module, n=CAPTAIN_FIXTURE_MESSAGES, timings=N
     for part in (initial, delta, idle):
         # config_revision hashes the random temporary hermes_home path; the code
         # that computes it is outside this change, every other byte is compared.
+        # `working` is the additive readability-r2 block (covered by test_scene_contract);
+        # excluding it keeps this digest proving every pre-existing byte is unchanged.
+        part = {key: value for key, value in part.items() if key != 'working'}
         part = dict(part, meta={k: v for k, v in part['meta'].items() if k != 'config_revision'})
         digest.update(json.dumps(part, sort_keys=True, ensure_ascii=False).encode())
     return digest.hexdigest(), initial, delta, idle

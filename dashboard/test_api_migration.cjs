@@ -52,6 +52,7 @@ assert(run('Object.values(S.tasks).some(t=>t.title.includes("Harmless old prose"
     for (const task of safeData.tasks) {task.title = task.id; task.campaign = 'misc'; delete task.note;}
     for (const bot of safeData.bots) bot.name = bot.id;
     for (const event of safeData.events) {delete event.title; delete event.note;}
+    delete safeData.working; // readability-r2 `working` block holds opt-in title text: revoked too
     const safeExpected = copy(prior);
     safeExpected.D = safeData; safeExpected.checkpoint = null; safeExpected.privacyPending = true;
     // Exact safe rollback snapshot: only revoked prose and the old scene change.

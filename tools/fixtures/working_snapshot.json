@@ -1,0 +1,745 @@
+{
+  "_about": "Synthetic readability-r2 contract-A fixture (no real data). `board` builds a throwaway Kanban DB; `expected` holds the `working` block per privacy mode (anonymous / names_only / names_and_titles) the extractor must return for it. B/C/D may copy this shape.",
+  "now": 1800000000,
+  "tz": "Asia/Bangkok",
+  "captain": "planner-demo",
+  "profiles": {
+    "planner-demo": {},
+    "developer-demo": {
+      "display_name": "Demo Builder"
+    },
+    "tester-demo": {},
+    "reviewer-demo": {},
+    "researcher-demo": {},
+    "devops-demo": {}
+  },
+  "board": {
+    "tasks": [
+      {
+        "id": "t_a0000001",
+        "title": "[Demo Project] Build alpha dashboard - CUST-00012345 /srv/demo/private",
+        "assignee": "developer-demo",
+        "status": "running",
+        "created_by": "planner-demo",
+        "created_ago": 9000,
+        "started_ago": 600
+      },
+      {
+        "id": "t_a0000002",
+        "title": "Smoke verify beta checkout",
+        "assignee": "tester-demo",
+        "status": "running",
+        "created_by": "planner-demo",
+        "created_ago": 8000,
+        "started_ago": 300
+      },
+      {
+        "id": "t_a0000003",
+        "title": "Regression sweep for gamma billing report export",
+        "assignee": "tester-demo",
+        "status": "running",
+        "created_by": "planner-demo",
+        "created_ago": 7000,
+        "started_ago": 200
+      },
+      {
+        "id": "t_a0000004",
+        "title": "password=Fictional Credential rotation",
+        "assignee": "developer-demo",
+        "status": "running",
+        "created_by": "planner-demo",
+        "created_ago": 100,
+        "started_ago": 50
+      },
+      {
+        "id": "t_a0000005",
+        "title": "Unowned housekeeping",
+        "assignee": null,
+        "status": "running",
+        "created_by": "planner-demo",
+        "created_ago": 6000,
+        "started_ago": null
+      },
+      {
+        "id": "t_a0000006",
+        "title": "Review delta auth change",
+        "assignee": "reviewer-demo",
+        "status": "blocked",
+        "created_by": "planner-demo",
+        "created_ago": 5000,
+        "started_ago": 4000
+      },
+      {
+        "id": "t_a0000007",
+        "title": "Build epsilon importer",
+        "assignee": "developer-demo",
+        "status": "ready",
+        "created_by": "planner-demo",
+        "created_ago": 4500,
+        "started_ago": 3000
+      },
+      {
+        "id": "t_a0000008",
+        "title": "Build zeta cache",
+        "assignee": "developer-demo",
+        "status": "done",
+        "created_by": "planner-demo",
+        "created_ago": 20000,
+        "started_ago": 3500,
+        "completed_ago": 1000
+      },
+      {
+        "id": "t_a0000009",
+        "title": "Review eta schema",
+        "assignee": "reviewer-demo",
+        "status": "done",
+        "created_by": "planner-demo",
+        "created_ago": 30000,
+        "started_ago": 20000,
+        "completed_ago": 18000
+      },
+      {
+        "id": "t_a000000a",
+        "title": "Plan theta roadmap",
+        "assignee": "researcher-demo",
+        "status": "done",
+        "created_by": "planner-demo",
+        "created_ago": 300000,
+        "started_ago": 290000,
+        "completed_ago": 259200
+      },
+      {
+        "id": "t_a000000b",
+        "title": "Old iota deploy",
+        "assignee": "devops-demo",
+        "status": "archived",
+        "created_by": "planner-demo",
+        "created_ago": 20000,
+        "started_ago": 15000,
+        "completed_ago": 2000
+      },
+      {
+        "id": "t_a000000c",
+        "title": "Done without a timestamp",
+        "assignee": "developer-demo",
+        "status": "done",
+        "created_by": "planner-demo",
+        "created_ago": 10000,
+        "started_ago": 9000,
+        "completed_ago": null
+      },
+      {
+        "id": "t_a000000d",
+        "title": "Two workers on kappa",
+        "assignee": "developer-demo",
+        "status": "running",
+        "created_by": "planner-demo",
+        "created_ago": 3000,
+        "started_ago": 1000
+      },
+      {
+        "id": "t_a000000e",
+        "title": "Queued lambda",
+        "assignee": "tester-demo",
+        "status": "ready",
+        "created_by": "planner-demo",
+        "created_ago": 2000,
+        "started_ago": null
+      },
+      {
+        "id": "t_a000000f",
+        "title": "Mu follow-up from a worker",
+        "assignee": "tester-demo",
+        "status": "ready",
+        "created_by": "tester-demo",
+        "created_ago": 10,
+        "started_ago": null
+      }
+    ],
+    "runs": [
+      {
+        "task_id": "t_a0000001",
+        "profile": "developer-demo",
+        "started_ago": 600,
+        "ended_ago": null,
+        "outcome": null
+      },
+      {
+        "task_id": "t_a0000002",
+        "profile": "tester-demo",
+        "started_ago": 300,
+        "ended_ago": null,
+        "outcome": null
+      },
+      {
+        "task_id": "t_a0000003",
+        "profile": "tester-demo",
+        "started_ago": 200,
+        "ended_ago": null,
+        "outcome": null
+      },
+      {
+        "task_id": "t_a0000006",
+        "profile": "reviewer-demo",
+        "started_ago": 4000,
+        "ended_ago": 3800,
+        "outcome": "blocked"
+      },
+      {
+        "task_id": "t_a0000007",
+        "profile": "developer-demo",
+        "started_ago": 3000,
+        "ended_ago": 2500,
+        "outcome": "crashed"
+      },
+      {
+        "task_id": "t_a0000008",
+        "profile": "developer-demo",
+        "started_ago": 3500,
+        "ended_ago": 1000,
+        "outcome": "completed"
+      },
+      {
+        "task_id": "t_a000000d",
+        "profile": "developer-demo",
+        "started_ago": 1000,
+        "ended_ago": null,
+        "outcome": null
+      },
+      {
+        "task_id": "t_a000000d",
+        "profile": "tester-demo",
+        "started_ago": 900,
+        "ended_ago": null,
+        "outcome": null
+      }
+    ]
+  },
+  "expected": {
+    "anonymous": {
+      "as_of": "2027-01-15T08:00:00Z",
+      "items": [
+        {
+          "ref": "w-7851b35d991e847e76ae",
+          "status": "running",
+          "started_at": "2027-01-15T07:59:10Z",
+          "display_name": "Worker not observed",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #2",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-b591d0d97f5f591998e2",
+          "status": "running",
+          "started_at": "2027-01-15T07:56:40Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Testing quest #1",
+          "quest_kind": "testing",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-77c1e2109727f0c95d02",
+          "status": "running",
+          "started_at": "2027-01-15T07:55:00Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Verification quest #1",
+          "quest_kind": "verification",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-f8c2c786ecff460a4497",
+          "status": "running",
+          "started_at": "2027-01-15T07:50:00Z",
+          "display_name": "Build Warrior 1",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #1",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-68f1ed53a8a6e0abee0c",
+          "status": "running",
+          "started_at": "2027-01-15T07:45:00Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Build quest #6",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-26d66baa7aadbb6d954b",
+          "status": "running",
+          "started_at": "2027-01-15T07:43:20Z",
+          "display_name": "Build Warrior 1",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #6",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-e206561d6599dcdc665f",
+          "status": "running",
+          "started_at": null,
+          "display_name": "Unassigned",
+          "class_label": "Unassigned",
+          "quest_label": "Guild quest #1",
+          "quest_kind": "guild",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-e7959fa41bd80bb4154e",
+          "status": "blocked",
+          "started_at": "2027-01-15T06:53:20Z",
+          "display_name": "Review Paladin 1",
+          "class_label": "Review Paladin",
+          "quest_label": "Review quest #1",
+          "quest_kind": "review",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-53d2f543a930f9cdbd17",
+          "status": "failed",
+          "started_at": "2027-01-15T07:10:00Z",
+          "display_name": "Build Warrior 1",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #3",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-08af1f3efbf83e72144b",
+          "status": "unknown",
+          "started_at": "2027-01-15T05:30:00Z",
+          "display_name": "Build Warrior 1",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #5",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-30be3e2a7fcfa9c09670",
+          "status": "done",
+          "started_at": "2027-01-15T07:01:40Z",
+          "display_name": "Build Warrior 1",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #4",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-4817005628fc1168c092",
+          "status": "done",
+          "started_at": "2027-01-15T02:26:40Z",
+          "display_name": "Review Paladin 1",
+          "class_label": "Review Paladin",
+          "quest_label": "Review quest #2",
+          "quest_kind": "review",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-78569c1e33ed287858f7",
+          "status": "archived",
+          "started_at": "2027-01-15T03:50:00Z",
+          "display_name": "Deploy Engineer 1",
+          "class_label": "Deploy Engineer",
+          "quest_label": "Deploy quest #1",
+          "quest_kind": "deploy",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        }
+      ],
+      "resting_count": 3,
+      "latest_order": {
+        "at": "2027-01-15T07:58:20Z",
+        "action_label": "Assigned quest",
+        "quest_label": "Build quest #2",
+        "recipient_display_name": "Build Warrior 1"
+      },
+      "progress": {
+        "wins_today": 2,
+        "xp": 30,
+        "gold": 3,
+        "level": 1,
+        "level_progress": 30
+      }
+    },
+    "names_only": {
+      "as_of": "2027-01-15T08:00:00Z",
+      "items": [
+        {
+          "ref": "w-7851b35d991e847e76ae",
+          "status": "running",
+          "started_at": "2027-01-15T07:59:10Z",
+          "display_name": "Worker not observed",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #2",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-b591d0d97f5f591998e2",
+          "status": "running",
+          "started_at": "2027-01-15T07:56:40Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Testing quest #1",
+          "quest_kind": "testing",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-77c1e2109727f0c95d02",
+          "status": "running",
+          "started_at": "2027-01-15T07:55:00Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Verification quest #1",
+          "quest_kind": "verification",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-f8c2c786ecff460a4497",
+          "status": "running",
+          "started_at": "2027-01-15T07:50:00Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #1",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-68f1ed53a8a6e0abee0c",
+          "status": "running",
+          "started_at": "2027-01-15T07:45:00Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Build quest #6",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-26d66baa7aadbb6d954b",
+          "status": "running",
+          "started_at": "2027-01-15T07:43:20Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #6",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-e206561d6599dcdc665f",
+          "status": "running",
+          "started_at": null,
+          "display_name": "Unassigned",
+          "class_label": "Unassigned",
+          "quest_label": "Guild quest #1",
+          "quest_kind": "guild",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-e7959fa41bd80bb4154e",
+          "status": "blocked",
+          "started_at": "2027-01-15T06:53:20Z",
+          "display_name": "Review Paladin 1",
+          "class_label": "Review Paladin",
+          "quest_label": "Review quest #1",
+          "quest_kind": "review",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-53d2f543a930f9cdbd17",
+          "status": "failed",
+          "started_at": "2027-01-15T07:10:00Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #3",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-08af1f3efbf83e72144b",
+          "status": "unknown",
+          "started_at": "2027-01-15T05:30:00Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #5",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-30be3e2a7fcfa9c09670",
+          "status": "done",
+          "started_at": "2027-01-15T07:01:40Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #4",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-4817005628fc1168c092",
+          "status": "done",
+          "started_at": "2027-01-15T02:26:40Z",
+          "display_name": "Review Paladin 1",
+          "class_label": "Review Paladin",
+          "quest_label": "Review quest #2",
+          "quest_kind": "review",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-78569c1e33ed287858f7",
+          "status": "archived",
+          "started_at": "2027-01-15T03:50:00Z",
+          "display_name": "Deploy Engineer 1",
+          "class_label": "Deploy Engineer",
+          "quest_label": "Deploy quest #1",
+          "quest_kind": "deploy",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        }
+      ],
+      "resting_count": 3,
+      "latest_order": {
+        "at": "2027-01-15T07:58:20Z",
+        "action_label": "Assigned quest",
+        "quest_label": "Build quest #2",
+        "recipient_display_name": "Demo Builder"
+      },
+      "progress": {
+        "wins_today": 2,
+        "xp": 30,
+        "gold": 3,
+        "level": 1,
+        "level_progress": 30
+      }
+    },
+    "names_and_titles": {
+      "as_of": "2027-01-15T08:00:00Z",
+      "items": [
+        {
+          "ref": "w-7851b35d991e847e76ae",
+          "status": "running",
+          "started_at": "2027-01-15T07:59:10Z",
+          "display_name": "Worker not observed",
+          "class_label": "Build Warrior",
+          "quest_label": "Build quest #2",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-b591d0d97f5f591998e2",
+          "status": "running",
+          "started_at": "2027-01-15T07:56:40Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Regression sweep for gamma bi…",
+          "quest_kind": "testing",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-77c1e2109727f0c95d02",
+          "status": "running",
+          "started_at": "2027-01-15T07:55:00Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Smoke verify beta checkout",
+          "quest_kind": "verification",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-f8c2c786ecff460a4497",
+          "status": "running",
+          "started_at": "2027-01-15T07:50:00Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build alpha dashboard",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-68f1ed53a8a6e0abee0c",
+          "status": "running",
+          "started_at": "2027-01-15T07:45:00Z",
+          "display_name": "Test Ranger 1",
+          "class_label": "Test Ranger",
+          "quest_label": "Two workers on kappa",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-26d66baa7aadbb6d954b",
+          "status": "running",
+          "started_at": "2027-01-15T07:43:20Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Two workers on kappa",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-e206561d6599dcdc665f",
+          "status": "running",
+          "started_at": null,
+          "display_name": "Unassigned",
+          "class_label": "Unassigned",
+          "quest_label": "Unowned housekeeping",
+          "quest_kind": "guild",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-e7959fa41bd80bb4154e",
+          "status": "blocked",
+          "started_at": "2027-01-15T06:53:20Z",
+          "display_name": "Review Paladin 1",
+          "class_label": "Review Paladin",
+          "quest_label": "Review delta auth change",
+          "quest_kind": "review",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-53d2f543a930f9cdbd17",
+          "status": "failed",
+          "started_at": "2027-01-15T07:10:00Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build epsilon importer",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-08af1f3efbf83e72144b",
+          "status": "unknown",
+          "started_at": "2027-01-15T05:30:00Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Done without a timestamp",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-30be3e2a7fcfa9c09670",
+          "status": "done",
+          "started_at": "2027-01-15T07:01:40Z",
+          "display_name": "Demo Builder",
+          "class_label": "Build Warrior",
+          "quest_label": "Build zeta cache",
+          "quest_kind": "build",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": true
+        },
+        {
+          "ref": "w-4817005628fc1168c092",
+          "status": "done",
+          "started_at": "2027-01-15T02:26:40Z",
+          "display_name": "Review Paladin 1",
+          "class_label": "Review Paladin",
+          "quest_label": "Review eta schema",
+          "quest_kind": "review",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        },
+        {
+          "ref": "w-78569c1e33ed287858f7",
+          "status": "archived",
+          "started_at": "2027-01-15T03:50:00Z",
+          "display_name": "Deploy Engineer 1",
+          "class_label": "Deploy Engineer",
+          "quest_label": "Old iota deploy",
+          "quest_kind": "deploy",
+          "group_label": "Other work",
+          "parent_ref": null,
+          "worker_observed": false
+        }
+      ],
+      "resting_count": 3,
+      "latest_order": {
+        "at": "2027-01-15T07:58:20Z",
+        "action_label": "Assigned quest",
+        "quest_label": "Build quest #2",
+        "recipient_display_name": "Demo Builder"
+      },
+      "progress": {
+        "wins_today": 2,
+        "xp": 30,
+        "gold": 3,
+        "level": 1,
+        "level_progress": 30
+      }
+    }
+  }
+}

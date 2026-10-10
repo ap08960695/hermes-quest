@@ -50,6 +50,26 @@ CMD = [('test', r'\b(jest|vitest|go test|pytest|playwright|npm (run )?test|check
        ('git', r'\bgit\b'), ('probe', r'\b(curl|psql|mysql|wget|sqlite3)\b')]
 
 
+# --- `working` block (readability-r2 contract A) ---------------------------------
+# Every string below is generated here or sanitized; upstream prose never passes through.
+QUEST_KIND = {'PLAN': 'planning', 'BUILD': 'build', 'TEST': 'testing', 'REVIEW': 'review',
+              'DEPLOY': 'deploy', 'VERIFY': 'verification'}
+QUEST_NOUN = {'planning': 'Planning quest', 'build': 'Build quest', 'testing': 'Testing quest',
+              'review': 'Review quest', 'deploy': 'Deploy quest',
+              'verification': 'Verification quest', 'guild': 'Guild quest'}
+ROLE_LABEL = {'warrior': 'Build Warrior', 'ranger': 'Test Ranger', 'paladin': 'Review Paladin',
+              'engineer': 'Deploy Engineer', 'mage': 'Research Mage', 'sage': 'Analyst Sage',
+              'commander': 'Captain'}
+WORK_ORDER = {'running': 0, 'blocked': 1, 'failed': 2, 'unknown': 3, 'done': 4, 'archived': 5}
+FAILED_OUTCOMES = {'failed', 'crashed', 'timed_out', 'spawn_failed'}
+RETRY_STATUSES = {'ready', 'todo', 'scheduled', 'triage'}
+ORDER_LABEL = {'create': 'Assigned quest', 'create_unassigned': 'Created quest',
+               'reassign': 'Reassigned quest', 'unblock': 'Unblocked quest'}
+GROUP_LABEL = 'Other work'     # no safe project mapping exists yet (Captain decision 2026-10-11)
+XP_PER_WIN, GOLD_PER_WIN, XP_PER_LEVEL = 10, 1, 100
+QUEST_TEXT_MAX = 30            # grapheme clusters
+
+
 def load_backend_config(path=None):
     """Host-only entry point; CLI/library callers keep their original home scope."""
     return load_config(path, backend=True)
@@ -592,6 +612,174 @@ def _bot(prof, cfg, captain, entity_type='profile', availability=None, commenter
                 wallet=wallet, model=model, effort=effort)
 
 
+def _iso(stamp):
+    if stamp is None:
+        return None
+    return datetime.datetime.fromtimestamp(float(stamp), datetime.timezone.utc).isoformat(
+        timespec='seconds').replace('+00:00', 'Z')
+
+
+def _graphemes(text):
+    """Approximate grapheme clusters: a base character plus marks/modifiers/joiners."""
+    clusters = []
+    for char in text:
+        joined = clusters and clusters[-1].endswith('\u200d')
+        if clusters and (joined or unicodedata.category(char)[0] == 'M' or
+                         unicodedata.category(char) == 'Sk' or char in '\u200d\ufe0e\ufe0f'):
+            clusters[-1] += char
+        else:
+            clusters.append(char)
+    return clusters
+
+
+def _quest_title(raw, profile_ids=()):
+    """Opt-in task title -> short action+object text, or None when nothing safe remains.
+
+    Strips project prefixes, task/profile IDs and hash-like words, keeps only the head
+    before the first separator, then fails closed through the same gate as every other
+    opt-in text. Never returns an ellipsis-free overlong value (<= QUEST_TEXT_MAX clusters).
+    """
+    text = _normalize_text(raw)
+    text = re.sub(r'^\s*(?:\[[^\]]*\]\s*)+', '', text)
+    text = re.split(r'\s[-:|]\s|[:|—–]', text, maxsplit=1)[0]
+    text = re.sub(r'(?i)\bt_[0-9a-f]{8}\b|\b[0-9a-f]{7,64}\b', ' ', text)
+    for profile in sorted((p for p in profile_ids if len(p) >= 3), key=len, reverse=True):
+        text = re.sub(re.escape(profile), ' ', text, flags=re.I)
+    text = ' '.join(text.split()).strip(' -_.,;')
+    if not text or not any(char.isalpha() for char in text):
+        return None
+    text = _opt_in_text(text, QUEST_TEXT_MAX * 4)
+    if text == '[redacted]' or re.search(r'[\[\]…]', text) or not any(c.isalpha() for c in text):
+        return None
+    clusters = _graphemes(text)
+    if len(clusters) > QUEST_TEXT_MAX:
+        text = ''.join(clusters[:QUEST_TEXT_MAX - 1]).rstrip() + '…'
+    return text
+
+
+def _display_labels(bot_rows, profiles, captain):
+    """One display name per profile: consented alias, else a stable `<Class> <n>` label.
+    Never falls back to a profile ID, profile_name or hash."""
+    labels, seen_class, used = {}, {}, {}
+    for prof in sorted(bot_rows, key=lambda p: (p not in profiles, p)):
+        row = bot_rows[prof]
+        alias = row.get('display_name')
+        if alias and alias != '[redacted]':
+            label = alias
+        elif prof == captain:
+            label = ROLE_LABEL['commander']
+        else:
+            seen_class[row['cls']] = seen_class.get(row['cls'], 0) + 1
+            label = f"{ROLE_LABEL.get(row['cls'], 'Guild Hero')} {seen_class[row['cls']]}"
+        used[label.lower()] = used.get(label.lower(), 0) + 1
+        labels[prof] = label if used[label.lower()] == 1 else f'{label} {used[label.lower()]}'
+    return labels
+
+
+def _empty_working(as_of):
+    return dict(as_of=_iso(as_of), items=[], resting_count=0, latest_order=None,
+                progress=dict(wins_today=0, xp=0, gold=0, level=1, level_progress=0))
+
+
+def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, captain_events, key):
+    """Read-only projection of CURRENT Kanban state (same snapshot as meta.as_of).
+
+    One row per (task, open run) for running work; one row per task otherwise. Strings are
+    generated here or sanitized; `ref` is an HMAC (or ordinal without a session key)."""
+    cutoff = as_of - hours * 3600
+    labels = _display_labels(bot_rows, set(profiles), captain)
+    ordered = sorted(tasks.values(), key=lambda t: t['seq'])
+    numbers, counts = {}, {}
+    for t in ordered:
+        counts[t['kind']] = counts.get(t['kind'], 0) + 1
+        numbers[t['id']] = counts[t['kind']]
+    profile_ids = set(bot_rows) | set(profiles)
+
+    def quest_label(t):
+        generic = f"{QUEST_NOUN[t['kind']]} #{numbers[t['id']]}"
+        if cfg['show_titles']:
+            title = _quest_title(t['title'], profile_ids)
+            return title or generic
+        return generic
+
+    def class_of(prof):
+        return bot_rows[prof]['cls'] if prof in bot_rows else None
+
+    rows, busy = [], set()
+    for t in ordered:
+        rs = sorted(runs.get(t['id'], []), key=lambda r: r['id'])
+        last = rs[-1] if rs else None
+        status = t['status']
+        if status == 'failed' or (status in RETRY_STATUSES and last and last['ended_at'] and
+                                  last['outcome'] in FAILED_OUTCOMES and last['ended_at'] >= cutoff):
+            status = 'failed'
+        elif status in ('running', 'blocked', 'done', 'archived'):
+            pass
+        elif status in RETRY_STATUSES or status == 'review':
+            continue  # queued/waiting work is not "current work"
+        else:
+            status = 'unknown'
+        activity = max([t['completed_at'] or 0, t['started_at'] or 0] +
+                       [r['ended_at'] or 0 for r in rs])
+        if status in ('done', 'archived') and activity < cutoff:
+            continue
+        if status == 'done' and not t['completed_at']:
+            status = 'unknown'  # contradictory source state never earns a win
+        open_runs = [r for r in rs if r['ended_at'] is None]
+        for run in (open_runs if status == 'running' and open_runs else [last if status != 'running' else None]):
+            prof = (run['profile'] if run and run['profile'] else None) or t['assignee'] or None
+            observed = run is not None
+            if status == 'running' and not observed:
+                name = 'Worker not observed' if t['assignee'] else 'Unassigned'
+                class_label = ROLE_LABEL.get(class_of(t['assignee'])) if t['assignee'] else 'Unassigned'
+            else:
+                name = labels.get(prof) or 'Unassigned'
+                class_label = ROLE_LABEL.get(class_of(prof), 'Unassigned') if prof else 'Unassigned'
+            if status == 'running':
+                busy.add(prof)
+                busy.add(t['assignee'])
+            rows.append(dict(
+                _order=(WORK_ORDER.get(status, 3), -(((run or {}).get('started_at') or t['started_at'] or 0)),
+                        t['seq'], (run or {}).get('id') or 0),
+                _key=(t['id'], (run or {}).get('id')),
+                status=status, started_at=_iso((run or {}).get('started_at') or t['started_at']),
+                display_name=name, class_label=class_label, quest_label=quest_label(t),
+                quest_kind=t['kind'], group_label=GROUP_LABEL, parent_ref=None,
+                worker_observed=observed))
+    rows.sort(key=lambda r: r['_order'])
+    items = []
+    for index, row in enumerate(rows, 1):
+        task_id, run_id = row.pop('_key')
+        row.pop('_order')
+        ref = ('w-' + _session_digest(key, '', f'work:{task_id}:{run_id}')[:20]) if key else f'w-{index}'
+        items.append(dict(ref=ref, **row))
+
+    candidates = []
+    if captain:
+        candidates += [(t['created_at'], 'create', t['id'], t['assignee']) for t in ordered
+                       if t['created_by'] == captain and t['created_at']]
+    candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'])
+                   for e in captain_events if e.get('act') in ('create', 'reassign', 'unblock')
+                   and e['task'] in tasks]
+    candidates = [c for c in candidates if cutoff <= c[0] <= as_of + 60]
+    latest_order = None
+    if candidates:
+        at, act, tid, recipient = max(candidates, key=lambda c: (c[0], c[1]))
+        latest_order = dict(
+            at=_iso(at), action_label=ORDER_LABEL[act if recipient or act != 'create' else 'create_unassigned'],
+            quest_label=quest_label(tasks[tid]), recipient_display_name=labels.get(recipient) if recipient else None)
+
+    done = [t for t in ordered if t['status'] == 'done' and t['completed_at']]
+    midnight = datetime.datetime.fromtimestamp(as_of).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    xp = len(done) * XP_PER_WIN
+    progress = dict(wins_today=sum(1 for t in done if midnight <= t['completed_at'] <= as_of),
+                    xp=xp, gold=len(done) * GOLD_PER_WIN, level=1 + xp // XP_PER_LEVEL,
+                    level_progress=xp % XP_PER_LEVEL)
+    resting = {p for p in profiles if p != captain and p not in busy}
+    return dict(as_of=_iso(as_of), items=items, resting_count=len(resting),
+                latest_order=latest_order, progress=progress)
+
+
 def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     previous = previous or {}
     hours = window_hours if window_hours is not None else previous.get('window_hours', 12)
@@ -658,7 +846,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         # Legacy cursors cannot reconstruct yesterday's evolving usage totals.
         # The revision change makes the production client rebase before accepting
         # any events, rather than guessing what it has already charged.
-        return dict(meta=meta(), session_data=session_data, tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous))
+        return dict(meta=meta(), session_data=session_data, tasks=[], bots=[], sessions=[], events=[],
+                    working=_empty_working(as_of), cursor=_cursor(previous))
     path = home / 'kanban.db'
     try:
         path.stat()
@@ -667,7 +856,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
             raise  # A broken configured source is not an absent database.
         # No board means no live observations. Preserve an existing cursor so a
         # temporarily absent source cannot acknowledge rows or duplicate recovery.
-        return dict(meta=meta(), session_data=session_data, tasks=[], bots=[], sessions=[], events=[], cursor=_cursor(previous or state))
+        return dict(meta=meta(), session_data=session_data, tasks=[], bots=[], sessions=[], events=[],
+                    working=_empty_working(as_of), cursor=_cursor(previous or state))
     def emit(source, seq, event):
         event['id'] = 'e_' + _hash([source, seq])
         if t0 is None or event['t'] >= t0:
@@ -685,6 +875,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     k = ro(home / 'kanban.db')
     task_activity, active_tasks = {}, set()
     commenters = set()
+    raw_tasks, raw_runs = {}, {}   # unsanitized current rows, consumed only by _build_working
     try:
         commenters = {r[0] for r in k.execute('SELECT DISTINCT author FROM task_comments') if r[0]}
         captain = cfg['captain']
@@ -708,6 +899,12 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                                   max_rt=r.get('max_runtime_seconds') or 1800, parents=[], stage=stage)
             # Snapshot-only tombstone: do not synthesize a historical archive time.
             tasks[r['id']]['tombstone'] = r['status'] == 'archived'
+            kind_class = _class(prof, cfg, captain) if prof and prof != captain else None
+            raw_tasks[r['id']] = dict(
+                id=r['id'], seq=r['seq'], title=r['title'] or '', assignee=prof or None,
+                status=r['status'], created_by=r['created_by'], created_at=r['created_at'],
+                started_at=r['started_at'], completed_at=r['completed_at'],
+                kind=QUEST_KIND.get(stage if kind_class else '', 'guild'))
         for table, timestamp in (('task_events', 'created_at'), ('task_comments', 'created_at'),
                                  ('task_runs', 'started_at'), ('task_runs', 'ended_at')):
             for r in k.execute(f'SELECT task_id,max({timestamp}) AS stamp FROM {table} GROUP BY task_id'):
@@ -737,6 +934,9 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                  author=r['author'], tag=tag, note=note(r['task_id'], 'comment', body)))
         marks['kanban-runs'] = k.execute('SELECT coalesce(max(id),0) FROM task_runs').fetchone()[0]
         for r in k.execute('SELECT * FROM task_runs'):
+            raw_runs.setdefault(r['task_id'], []).append(
+                dict(id=r['id'], profile=r['profile'], started_at=r['started_at'],
+                     ended_at=r['ended_at'], outcome=r['outcome'] or ''))
             for field, kind in (('started_at', 'run_start'), ('ended_at', 'run_end')):
                 key = f'{r["id"]}:{kind}'
                 stamp = [r[field], _hash(r['outcome'])[:16] if field == 'ended_at' else None]
@@ -1073,9 +1273,16 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         except (OSError, ValueError, TypeError, AttributeError):
             pass  # Absent/malformed observation is unknown, never active.
 
-    bots = [_bot(p, cfg, captain, 'profile' if p in profiles else 'actor',
-                 availability.get(p) if p in profiles else None, p in commenters)
-            for p in sorted(bot_ids) if re.fullmatch(r'[\w-]+', p)]
+    raw_bots = {p: _bot(p, cfg, captain, 'profile' if p in profiles else 'actor',
+                        availability.get(p) if p in profiles else None, p in commenters)
+                for p in sorted(bot_ids) if re.fullmatch(r'[\w-]+', p)}
+    for p in {r['profile'] for rs in raw_runs.values() for r in rs if r['profile']} | {
+            t['assignee'] for t in raw_tasks.values() if t['assignee']}:
+        if p not in raw_bots and re.fullmatch(r'[\w-]+', p):
+            raw_bots[p] = _bot(p, cfg, captain, 'profile' if p in profiles else 'actor')
+    working = _build_working(cfg, as_of, hours, captain, raw_tasks, raw_runs, raw_bots,
+                             profiles, events, session_key)
+    bots = [raw_bots[p] for p in sorted(bot_ids) if p in raw_bots]
     tasks = [safe(t) for t in tasks.values()]
     bots = safe(bots)
     # Event high-water marks, not task fingerprints, deduplicate events. Keep a
@@ -1104,7 +1311,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     events = safe(events)
     events.sort(key=lambda e: (e['t'], e['id']))
     return dict(meta=meta(), session_data=session_data, tasks=changed_tasks, bots=changed_bots,
-                sessions=safe(list(session_entities.values())), events=events, cursor=_cursor(state))
+                sessions=safe(list(session_entities.values())), events=events, working=working,
+                cursor=_cursor(state))
 
 
 def build_replay(cfg, hours=12):

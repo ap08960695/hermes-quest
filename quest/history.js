@@ -60,6 +60,9 @@ function redactText() {
   ctx.D.tasks.forEach(t => { t.title = t.id; t.campaign = 'misc'; delete t.note; });
   ctx.D.bots.forEach(b => { b.name = b.id; });
   ctx.D.events.forEach(e => { delete e.note; delete e.title; });
+  // `working` carries opt-in title text (quest_label); drop it with the other prose and let
+  // the next authorised snapshot refill it.
+  delete ctx.D.working;
 }
 // Prefer extractor IDs. Canonical field ordering also deduplicates legacy overlap.
 function eventKey(e) {
