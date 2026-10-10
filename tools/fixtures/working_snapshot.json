@@ -1,5 +1,5 @@
 {
-  "_about": "Synthetic readability-r2 contract-A fixture (no real data). `board` builds a throwaway Kanban DB; `expected` holds the `working` block per privacy mode (anonymous / names_only / names_and_titles) the extractor must return for it. B/C/D may copy this shape.",
+  "_about": "Synthetic readability-r2 contract-A fixture (no real data). `board` builds a throwaway Kanban DB; `expected` holds the `working` block per privacy mode (anonymous / names_only / names_and_titles) the extractor must return for it. B/C/D may copy this shape. One row per current card; bot_ref/task_ref/run_ref are INTERNAL bindings only, never DOM/text/ARIA. ref is stable keyed card identity, run_ref is keyed attempt identity.",
   "now": 1800000000,
   "tz": "Asia/Bangkok",
   "captain": "planner-demo",
@@ -220,7 +220,7 @@
       "as_of": "2027-01-15T08:00:00Z",
       "items": [
         {
-          "ref": "w-7851b35d991e847e76ae",
+          "ref": "w-cdcac873364d7be2a666",
           "status": "running",
           "started_at": "2027-01-15T07:59:10Z",
           "display_name": "Worker not observed",
@@ -229,10 +229,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000004",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": null
         },
         {
-          "ref": "w-b591d0d97f5f591998e2",
+          "ref": "w-f2fe71ca824e5c02e937",
           "status": "running",
           "started_at": "2027-01-15T07:56:40Z",
           "display_name": "Test Ranger 1",
@@ -241,10 +244,13 @@
           "quest_kind": "testing",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000003",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-7723098a9e1889b846d4"
         },
         {
-          "ref": "w-77c1e2109727f0c95d02",
+          "ref": "w-9c5969596387d2605bd9",
           "status": "running",
           "started_at": "2027-01-15T07:55:00Z",
           "display_name": "Test Ranger 1",
@@ -253,10 +259,13 @@
           "quest_kind": "verification",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000002",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-6cff05e39b571dda187c"
         },
         {
-          "ref": "w-f8c2c786ecff460a4497",
+          "ref": "w-bb0cc8f5ad90d7ac3f7a",
           "status": "running",
           "started_at": "2027-01-15T07:50:00Z",
           "display_name": "Build Warrior 1",
@@ -265,10 +274,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000001",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-855ccef628b5674ff588"
         },
         {
-          "ref": "w-68f1ed53a8a6e0abee0c",
+          "ref": "w-90f7c85393b296b989d5",
           "status": "running",
           "started_at": "2027-01-15T07:45:00Z",
           "display_name": "Test Ranger 1",
@@ -277,22 +289,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a000000d",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-9f83f538b7ee6194af60"
         },
         {
-          "ref": "w-26d66baa7aadbb6d954b",
-          "status": "running",
-          "started_at": "2027-01-15T07:43:20Z",
-          "display_name": "Build Warrior 1",
-          "class_label": "Build Warrior",
-          "quest_label": "Build quest #6",
-          "quest_kind": "build",
-          "group_label": "Other work",
-          "parent_ref": null,
-          "worker_observed": true
-        },
-        {
-          "ref": "w-e206561d6599dcdc665f",
+          "ref": "w-63a0c54d34ec5d48e834",
           "status": "running",
           "started_at": null,
           "display_name": "Unassigned",
@@ -301,10 +304,13 @@
           "quest_kind": "guild",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000005",
+          "bot_ref": null,
+          "run_ref": null
         },
         {
-          "ref": "w-e7959fa41bd80bb4154e",
+          "ref": "w-ec171810ccf784be8026",
           "status": "blocked",
           "started_at": "2027-01-15T06:53:20Z",
           "display_name": "Review Paladin 1",
@@ -313,10 +319,13 @@
           "quest_kind": "review",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000006",
+          "bot_ref": "bot-c2f8976dd1866aec7db9",
+          "run_ref": "r-f6b182511a7056efea59"
         },
         {
-          "ref": "w-53d2f543a930f9cdbd17",
+          "ref": "w-941ba1495a7ce07802af",
           "status": "failed",
           "started_at": "2027-01-15T07:10:00Z",
           "display_name": "Build Warrior 1",
@@ -325,10 +334,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000007",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-bbb9f41c21ca6c72af1c"
         },
         {
-          "ref": "w-08af1f3efbf83e72144b",
+          "ref": "w-cf1cf567eb593afb4f29",
           "status": "unknown",
           "started_at": "2027-01-15T05:30:00Z",
           "display_name": "Build Warrior 1",
@@ -337,10 +349,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a000000c",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": null
         },
         {
-          "ref": "w-30be3e2a7fcfa9c09670",
+          "ref": "w-ea918cde354029c4c0ba",
           "status": "done",
           "started_at": "2027-01-15T07:01:40Z",
           "display_name": "Build Warrior 1",
@@ -349,10 +364,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000008",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-50d9740c520ad3abca83"
         },
         {
-          "ref": "w-4817005628fc1168c092",
+          "ref": "w-9b2439e1aacd50406c33",
           "status": "done",
           "started_at": "2027-01-15T02:26:40Z",
           "display_name": "Review Paladin 1",
@@ -361,10 +379,13 @@
           "quest_kind": "review",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000009",
+          "bot_ref": "bot-c2f8976dd1866aec7db9",
+          "run_ref": null
         },
         {
-          "ref": "w-78569c1e33ed287858f7",
+          "ref": "w-56cf9e07b2ad17cce547",
           "status": "archived",
           "started_at": "2027-01-15T03:50:00Z",
           "display_name": "Deploy Engineer 1",
@@ -373,7 +394,10 @@
           "quest_kind": "deploy",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a000000b",
+          "bot_ref": "bot-7700c7ed4edd64d6e494",
+          "run_ref": null
         }
       ],
       "resting_count": 3,
@@ -381,7 +405,9 @@
         "at": "2027-01-15T07:58:20Z",
         "action_label": "Assigned quest",
         "quest_label": "Build quest #2",
-        "recipient_display_name": "Build Warrior 1"
+        "recipient_display_name": "Build Warrior 1",
+        "recipient_bot_ref": "bot-3bddce632f33deafb63b",
+        "task_ref": "t_a0000004"
       },
       "progress": {
         "wins_today": 2,
@@ -395,7 +421,7 @@
       "as_of": "2027-01-15T08:00:00Z",
       "items": [
         {
-          "ref": "w-7851b35d991e847e76ae",
+          "ref": "w-cdcac873364d7be2a666",
           "status": "running",
           "started_at": "2027-01-15T07:59:10Z",
           "display_name": "Worker not observed",
@@ -404,10 +430,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000004",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": null
         },
         {
-          "ref": "w-b591d0d97f5f591998e2",
+          "ref": "w-f2fe71ca824e5c02e937",
           "status": "running",
           "started_at": "2027-01-15T07:56:40Z",
           "display_name": "Test Ranger 1",
@@ -416,10 +445,13 @@
           "quest_kind": "testing",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000003",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-7723098a9e1889b846d4"
         },
         {
-          "ref": "w-77c1e2109727f0c95d02",
+          "ref": "w-9c5969596387d2605bd9",
           "status": "running",
           "started_at": "2027-01-15T07:55:00Z",
           "display_name": "Test Ranger 1",
@@ -428,10 +460,13 @@
           "quest_kind": "verification",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000002",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-6cff05e39b571dda187c"
         },
         {
-          "ref": "w-f8c2c786ecff460a4497",
+          "ref": "w-bb0cc8f5ad90d7ac3f7a",
           "status": "running",
           "started_at": "2027-01-15T07:50:00Z",
           "display_name": "Demo Builder",
@@ -440,10 +475,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000001",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-855ccef628b5674ff588"
         },
         {
-          "ref": "w-68f1ed53a8a6e0abee0c",
+          "ref": "w-90f7c85393b296b989d5",
           "status": "running",
           "started_at": "2027-01-15T07:45:00Z",
           "display_name": "Test Ranger 1",
@@ -452,22 +490,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a000000d",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-9f83f538b7ee6194af60"
         },
         {
-          "ref": "w-26d66baa7aadbb6d954b",
-          "status": "running",
-          "started_at": "2027-01-15T07:43:20Z",
-          "display_name": "Demo Builder",
-          "class_label": "Build Warrior",
-          "quest_label": "Build quest #6",
-          "quest_kind": "build",
-          "group_label": "Other work",
-          "parent_ref": null,
-          "worker_observed": true
-        },
-        {
-          "ref": "w-e206561d6599dcdc665f",
+          "ref": "w-63a0c54d34ec5d48e834",
           "status": "running",
           "started_at": null,
           "display_name": "Unassigned",
@@ -476,10 +505,13 @@
           "quest_kind": "guild",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000005",
+          "bot_ref": null,
+          "run_ref": null
         },
         {
-          "ref": "w-e7959fa41bd80bb4154e",
+          "ref": "w-ec171810ccf784be8026",
           "status": "blocked",
           "started_at": "2027-01-15T06:53:20Z",
           "display_name": "Review Paladin 1",
@@ -488,10 +520,13 @@
           "quest_kind": "review",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000006",
+          "bot_ref": "bot-c2f8976dd1866aec7db9",
+          "run_ref": "r-f6b182511a7056efea59"
         },
         {
-          "ref": "w-53d2f543a930f9cdbd17",
+          "ref": "w-941ba1495a7ce07802af",
           "status": "failed",
           "started_at": "2027-01-15T07:10:00Z",
           "display_name": "Demo Builder",
@@ -500,10 +535,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000007",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-bbb9f41c21ca6c72af1c"
         },
         {
-          "ref": "w-08af1f3efbf83e72144b",
+          "ref": "w-cf1cf567eb593afb4f29",
           "status": "unknown",
           "started_at": "2027-01-15T05:30:00Z",
           "display_name": "Demo Builder",
@@ -512,10 +550,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a000000c",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": null
         },
         {
-          "ref": "w-30be3e2a7fcfa9c09670",
+          "ref": "w-ea918cde354029c4c0ba",
           "status": "done",
           "started_at": "2027-01-15T07:01:40Z",
           "display_name": "Demo Builder",
@@ -524,10 +565,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000008",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-50d9740c520ad3abca83"
         },
         {
-          "ref": "w-4817005628fc1168c092",
+          "ref": "w-9b2439e1aacd50406c33",
           "status": "done",
           "started_at": "2027-01-15T02:26:40Z",
           "display_name": "Review Paladin 1",
@@ -536,10 +580,13 @@
           "quest_kind": "review",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000009",
+          "bot_ref": "bot-c2f8976dd1866aec7db9",
+          "run_ref": null
         },
         {
-          "ref": "w-78569c1e33ed287858f7",
+          "ref": "w-56cf9e07b2ad17cce547",
           "status": "archived",
           "started_at": "2027-01-15T03:50:00Z",
           "display_name": "Deploy Engineer 1",
@@ -548,7 +595,10 @@
           "quest_kind": "deploy",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a000000b",
+          "bot_ref": "bot-7700c7ed4edd64d6e494",
+          "run_ref": null
         }
       ],
       "resting_count": 3,
@@ -556,7 +606,9 @@
         "at": "2027-01-15T07:58:20Z",
         "action_label": "Assigned quest",
         "quest_label": "Build quest #2",
-        "recipient_display_name": "Demo Builder"
+        "recipient_display_name": "Demo Builder",
+        "recipient_bot_ref": "bot-3bddce632f33deafb63b",
+        "task_ref": "t_a0000004"
       },
       "progress": {
         "wins_today": 2,
@@ -570,7 +622,7 @@
       "as_of": "2027-01-15T08:00:00Z",
       "items": [
         {
-          "ref": "w-7851b35d991e847e76ae",
+          "ref": "w-cdcac873364d7be2a666",
           "status": "running",
           "started_at": "2027-01-15T07:59:10Z",
           "display_name": "Worker not observed",
@@ -579,10 +631,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000004",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": null
         },
         {
-          "ref": "w-b591d0d97f5f591998e2",
+          "ref": "w-f2fe71ca824e5c02e937",
           "status": "running",
           "started_at": "2027-01-15T07:56:40Z",
           "display_name": "Test Ranger 1",
@@ -591,10 +646,13 @@
           "quest_kind": "testing",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000003",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-7723098a9e1889b846d4"
         },
         {
-          "ref": "w-77c1e2109727f0c95d02",
+          "ref": "w-9c5969596387d2605bd9",
           "status": "running",
           "started_at": "2027-01-15T07:55:00Z",
           "display_name": "Test Ranger 1",
@@ -603,10 +661,13 @@
           "quest_kind": "verification",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000002",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-6cff05e39b571dda187c"
         },
         {
-          "ref": "w-f8c2c786ecff460a4497",
+          "ref": "w-bb0cc8f5ad90d7ac3f7a",
           "status": "running",
           "started_at": "2027-01-15T07:50:00Z",
           "display_name": "Demo Builder",
@@ -615,10 +676,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000001",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-855ccef628b5674ff588"
         },
         {
-          "ref": "w-68f1ed53a8a6e0abee0c",
+          "ref": "w-90f7c85393b296b989d5",
           "status": "running",
           "started_at": "2027-01-15T07:45:00Z",
           "display_name": "Test Ranger 1",
@@ -627,22 +691,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a000000d",
+          "bot_ref": "bot-b96b27b5adc4bcfcd26d",
+          "run_ref": "r-9f83f538b7ee6194af60"
         },
         {
-          "ref": "w-26d66baa7aadbb6d954b",
-          "status": "running",
-          "started_at": "2027-01-15T07:43:20Z",
-          "display_name": "Demo Builder",
-          "class_label": "Build Warrior",
-          "quest_label": "Two workers on kappa",
-          "quest_kind": "build",
-          "group_label": "Other work",
-          "parent_ref": null,
-          "worker_observed": true
-        },
-        {
-          "ref": "w-e206561d6599dcdc665f",
+          "ref": "w-63a0c54d34ec5d48e834",
           "status": "running",
           "started_at": null,
           "display_name": "Unassigned",
@@ -651,10 +706,13 @@
           "quest_kind": "guild",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000005",
+          "bot_ref": null,
+          "run_ref": null
         },
         {
-          "ref": "w-e7959fa41bd80bb4154e",
+          "ref": "w-ec171810ccf784be8026",
           "status": "blocked",
           "started_at": "2027-01-15T06:53:20Z",
           "display_name": "Review Paladin 1",
@@ -663,10 +721,13 @@
           "quest_kind": "review",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000006",
+          "bot_ref": "bot-c2f8976dd1866aec7db9",
+          "run_ref": "r-f6b182511a7056efea59"
         },
         {
-          "ref": "w-53d2f543a930f9cdbd17",
+          "ref": "w-941ba1495a7ce07802af",
           "status": "failed",
           "started_at": "2027-01-15T07:10:00Z",
           "display_name": "Demo Builder",
@@ -675,10 +736,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000007",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-bbb9f41c21ca6c72af1c"
         },
         {
-          "ref": "w-08af1f3efbf83e72144b",
+          "ref": "w-cf1cf567eb593afb4f29",
           "status": "unknown",
           "started_at": "2027-01-15T05:30:00Z",
           "display_name": "Demo Builder",
@@ -687,10 +751,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a000000c",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": null
         },
         {
-          "ref": "w-30be3e2a7fcfa9c09670",
+          "ref": "w-ea918cde354029c4c0ba",
           "status": "done",
           "started_at": "2027-01-15T07:01:40Z",
           "display_name": "Demo Builder",
@@ -699,10 +766,13 @@
           "quest_kind": "build",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": true
+          "worker_observed": true,
+          "task_ref": "t_a0000008",
+          "bot_ref": "bot-3bddce632f33deafb63b",
+          "run_ref": "r-50d9740c520ad3abca83"
         },
         {
-          "ref": "w-4817005628fc1168c092",
+          "ref": "w-9b2439e1aacd50406c33",
           "status": "done",
           "started_at": "2027-01-15T02:26:40Z",
           "display_name": "Review Paladin 1",
@@ -711,10 +781,13 @@
           "quest_kind": "review",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a0000009",
+          "bot_ref": "bot-c2f8976dd1866aec7db9",
+          "run_ref": null
         },
         {
-          "ref": "w-78569c1e33ed287858f7",
+          "ref": "w-56cf9e07b2ad17cce547",
           "status": "archived",
           "started_at": "2027-01-15T03:50:00Z",
           "display_name": "Deploy Engineer 1",
@@ -723,7 +796,10 @@
           "quest_kind": "deploy",
           "group_label": "Other work",
           "parent_ref": null,
-          "worker_observed": false
+          "worker_observed": false,
+          "task_ref": "t_a000000b",
+          "bot_ref": "bot-7700c7ed4edd64d6e494",
+          "run_ref": null
         }
       ],
       "resting_count": 3,
@@ -731,7 +807,9 @@
         "at": "2027-01-15T07:58:20Z",
         "action_label": "Assigned quest",
         "quest_label": "Build quest #2",
-        "recipient_display_name": "Demo Builder"
+        "recipient_display_name": "Demo Builder",
+        "recipient_bot_ref": "bot-3bddce632f33deafb63b",
+        "task_ref": "t_a0000004"
       },
       "progress": {
         "wins_today": 2,

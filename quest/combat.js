@@ -43,6 +43,7 @@ function toolLabel(e) {
 function heroAccent(h) { const im = ctx.SPRV[`${h.cls}-${(h.st || ctx.NO_STYLE).tag}`] || ctx.SPR[h.cls]; return im ? ctx.accent(im) : {}; }
 function landHit(h, t, e, a0, ix, iy) {
   if (!ctx.canStrike(h,t,e)) return;
+  const firstFx=ctx.S.fx.length;
   const st = {...(h.st || ctx.NO_STYLE), ...heroAccent(h)}, ef = h.eff || ctx.EFF.medium, crit = Math.random() < ef.crit;
   const a = {...a0, color: a0.kind === 'proj' ? st.color : a0.color, glow: st.glow};
   t.flash = .09 * ef.mult; t.kick = Math.min(1.6, ef.mult * (crit ? 1.4 : 1));
@@ -57,6 +58,7 @@ function landHit(h, t, e, a0, ix, iy) {
   burst(ix, iy, a.glow, a.kind === 'proj' ? 6 : 9);
   const [txt, col] = toolLabel(e); num(ix, iy - 18, txt, col, e.tool === 'tests' ? 1.4 : 1.1);
   if (h.combo > 1) { num(h.x, h.y - ctx.HERO_H - 14, `COMBO x${h.combo}`, '#7fc8ff', .9); h.combo = 0; }
+  if(ctx.S.work?.has)for(const f of ctx.S.fx.slice(firstFx))f.task_ref=t.id;
 }
 function strike(h, t, e) {
   if (!ctx.canStrike(h,t,e)) return;
@@ -64,7 +66,8 @@ function strike(h, t, e) {
   if (a.kind !== 'proj') return landHit(h, t, e, a, ix, iy);
   const st = {...(h.st || ctx.NO_STYLE), ...heroAccent(h)}, sx = h.x + 22 * h.face, sy = h.y - 34, dur = Math.max(.12, Math.hypot(ix - sx, iy - sy) / (a.speed * st.speed));
   ctx.S.fx.push({k: 'proj', proj: a.proj, x0: sx, y0: sy, x1: ix, y1: iy, color: st.color, glow: st.glow, life: dur, max: dur, big: (h.eff || ctx.EFF.medium).mult,
-    arc: a.proj === 'arrow' ? 16 : a.proj === 'gear' ? 24 : 0});
+    arc: a.proj === 'arrow' ? 16 : a.proj === 'gear' ? 24 : 0,
+    ...(ctx.S.work?.has?{task_ref:t.id,bot_ref:h.bot}:{})});
   ctx.laterHero(h, dur, () => landHit(h, t, e, a, ix, iy));
 }
 const GESTURE = {read: ['📜', '#cfd8ea'], scout: ['🔍', '#cfd8ea'], tome: ['📖', '#c8b0ff'], crystal: ['🔮', '#9fd3ff'],

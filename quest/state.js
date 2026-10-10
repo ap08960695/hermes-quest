@@ -49,7 +49,11 @@ function parseWorkItem(raw) {
     started_at: toSeconds(raw.started_at), display_name: cleanText(raw.display_name), class_label: cleanText(raw.class_label),
     quest_label: cleanText(raw.quest_label), quest_kind: cleanText(raw.quest_kind), group_label: cleanText(raw.group_label) || 'Other work',
     parent_ref: typeof raw.parent_ref === 'string' && raw.parent_ref ? raw.parent_ref.slice(0, 128) : null,
-    worker_observed: raw.worker_observed === true};
+    worker_observed: raw.worker_observed === true,
+    // Internal render bindings only; never copied to DOM/labels.
+    bot_ref: typeof raw.bot_ref === 'string' ? raw.bot_ref : null,
+    task_ref: typeof raw.task_ref === 'string' ? raw.task_ref : null,
+    run_ref: typeof raw.run_ref === 'string' ? raw.run_ref : null};
 }
 function parseWorkingBlock(block) {
   if (block === undefined || block === null) return null;   // old backend: no Working view data
@@ -66,7 +70,9 @@ function parseWorkingBlock(block) {
     const o = block.latest_order, at = isObj(o) ? toSeconds(o.at) : null;
     if (at === null) throw new Error('Invalid working order');
     order = {at, action_label: cleanText(o.action_label), quest_label: cleanText(o.quest_label),
-      recipient_display_name: typeof o.recipient_display_name === 'string' ? o.recipient_display_name.slice(0, 80) : null};
+      recipient_display_name: typeof o.recipient_display_name === 'string' ? o.recipient_display_name.slice(0, 80) : null,
+      recipient_bot_ref: typeof o.recipient_bot_ref === 'string' ? o.recipient_bot_ref : null,
+      task_ref: typeof o.task_ref === 'string' ? o.task_ref : null};
   }
   const p = isObj(block.progress) ? block.progress : null;
   const fields = p && ['wins_today', 'xp', 'gold', 'level', 'level_progress'].map(k => nonNegInt(p[k]));
@@ -92,7 +98,7 @@ function planWork(block, {mode = 'delta', animate = false} = {}) {
     if (item.status !== 'done' || seen.has(item.ref)) continue;
     seen.add(item.ref); credits.push({ref: item.ref, at: baseline ? null : parsed.asOf});
     // First-ever snapshot is a baseline: already-finished work is credited silently (no fireworks at boot).
-    if (!baseline) fires.push({hook: 'onComplete', info: {ref: item.ref, display_name: item.display_name, class_label: item.class_label,
+    if (!baseline) fires.push({hook: 'onComplete', info: {ref: item.ref, bot_ref: item.bot_ref, task_ref: item.task_ref, display_name: item.display_name, class_label: item.class_label,
       quest_label: item.quest_label, quest_kind: item.quest_kind, group_label: item.group_label, at: parsed.asOf, animate, mode}});
   }
   let orderFire = null;
@@ -118,6 +124,7 @@ function applyWork(plan) {
 }
 // Listeners run only after the whole transaction committed; one throwing never blocks the others or the poll.
 function dispatchWork(plan) {
+  ctx.wireWork?.();
   for (const f of plan.fires) for (const fn of [...workHooks[f.hook]]) { try { fn({...f.info}); } catch (e) { workHooks.errors++; } }
 }
 const subscribe = set => fn => { if (typeof fn !== 'function') throw new TypeError('hook must be a function'); set.add(fn); return () => set.delete(fn); };

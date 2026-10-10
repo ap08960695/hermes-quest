@@ -21,10 +21,10 @@ import extract  # noqa: E402
 
 FIXTURE = json.loads((ROOT / 'tools/fixtures/working_snapshot.json').read_text(encoding='utf-8'))
 ITEM_KEYS = {'ref', 'status', 'started_at', 'display_name', 'class_label', 'quest_label',
-             'quest_kind', 'group_label', 'parent_ref', 'worker_observed'}
+             'quest_kind', 'group_label', 'parent_ref', 'worker_observed', 'bot_ref', 'task_ref', 'run_ref'}
 WORKING_KEYS = {'as_of', 'items', 'resting_count', 'latest_order', 'progress'}
 PROGRESS_KEYS = {'wins_today', 'xp', 'gold', 'level', 'level_progress'}
-ORDER_KEYS = {'at', 'action_label', 'quest_label', 'recipient_display_name'}
+ORDER_KEYS = {'at', 'action_label', 'quest_label', 'recipient_display_name', 'recipient_bot_ref', 'task_ref'}
 STATUSES = {'running', 'blocked', 'failed', 'done', 'archived', 'unknown'}
 QUEST_KINDS = {'planning', 'build', 'testing', 'review', 'deploy', 'verification', 'guild'}
 FORBIDDEN = re.compile(r't_[0-9a-f]{8}|[0-9a-f]{12,}|[a-z]+-demo\b|/srv|/media|/home|CUST-|Fictional|password',
@@ -152,14 +152,14 @@ class WorkingContractTests(unittest.TestCase):
         self.assertEqual(replay['working']['as_of'],
                          extract._iso(replay['meta']['as_of']))
 
-    # --- R1/R2: current running, one row per (task, run) ------------------------------
+    # --- R1/R2: current running, one row per current card ----------------------------
     def test_running_rows_come_from_current_board_not_events(self):
         s = self.scene()
         replay = s.replay()
         self.assertEqual(replay['events'] and len(replay['events']) >= 0, True)
         running = [i for i in replay['working']['items'] if i['status'] == 'running']
-        # 001,002,003,004 + unowned 005 + 2 open runs on 00d = 7 distinct (task, run) rows.
-        self.assertEqual(len(running), 7)
+        # 001,002,003,004 + unowned 005 + shared 00d = 6 distinct current cards.
+        self.assertEqual(len(running), 6)
         self.assertEqual(len({i['ref'] for i in replay['working']['items']}),
                          len(replay['working']['items']))
         # No task_events rows exist at all, yet every running card is present.
@@ -168,22 +168,18 @@ class WorkingContractTests(unittest.TestCase):
     def test_running_card_with_no_event_in_window_is_still_present(self):
         s = self.scene()
         old = s.replay(hours=0.001)  # window far shorter than every run
-        self.assertEqual(sum(i['status'] == 'running' for i in old['working']['items']), 7)
+        self.assertEqual(sum(i['status'] == 'running' for i in old['working']['items']), 6)
 
-    def test_two_open_runs_on_one_task_are_two_rows_with_own_worker(self):
+    def test_two_open_runs_on_one_task_are_one_row_with_newest_worker(self):
         w = self.scene().replay()['working']
         observed = [i for i in w['items'] if i['status'] == 'running' and i['worker_observed']]
-        # 001, 002, 003 (one open run each) + both open runs of the shared task = 5 rows;
+        # 001, 002, 003 (one open run each) + newest open run of the shared task = 4 rows;
         # t_a0000004 has no run row at all, so it is the "not observed" case.
-        self.assertEqual(len(observed), 5)
-        self.assertEqual(len({(i['display_name'], i['quest_label']) for i in observed}), 5)
-        # Exactly one quest label appears on two rows (the shared task), with two different workers.
-        by_quest = {}
-        for item in observed:
-            by_quest.setdefault(item['quest_label'], []).append(item['display_name'])
-        shared = [names for names in by_quest.values() if len(names) == 2]
+        self.assertEqual(len(observed), 4)
+        self.assertEqual(len({i['task_ref'] for i in observed}), 4)
+        shared = [i for i in observed if i['task_ref'] == 't_a000000d']
         self.assertEqual(len(shared), 1)
-        self.assertEqual(len(set(shared[0])), 2)
+        self.assertEqual(shared[0]['bot_ref'], extract._bot_id('tester-demo'))
 
     def test_running_without_run_or_assignee_keeps_one_unknown_row(self):
         w = self.scene().replay()['working']
@@ -201,6 +197,81 @@ class WorkingContractTests(unittest.TestCase):
         w2 = self.scene(mutate=drop_runs).replay()['working']
         self.assertEqual(sum(i['display_name'] == 'Worker not observed' for i in w2['items']), 2)
 
+    def test_internal_bindings_resolve_exact_entities_without_alias_matching(self):
+        fixture = copy.deepcopy(FIXTURE)
+        for meta in fixture['profiles'].values():
+            meta['display_name'] = 'Twin'
+        s = self.scene(fixture=fixture, show_profile_names=True)
+        payload = s.replay()
+        bots = {b['id']: b for b in payload['bots']}
+        tasks = {t['id']: t for t in payload['tasks']}
+        for row in payload['working']['items']:
+            self.assertIn(row['task_ref'], tasks)
+            if row['bot_ref']:
+                self.assertIn(row['bot_ref'], bots)
+            if row['worker_observed']:
+                self.assertEqual(row['display_name'], bots[row['bot_ref']]['display_name'])
+                self.assertRegex(row['run_ref'], r'^r-[0-9a-f]{20}$')
+            else:
+                self.assertIsNone(row['run_ref'])
+        tester = extract._bot_id('tester-demo')
+        self.assertEqual(sum(i['bot_ref'] == tester and i['status'] == 'running'
+                             for i in payload['working']['items']), 3)
+        self.assertEqual(s.delta(payload['cursor'])['working'], payload['working'])
+
+    def test_open_attempt_without_profile_does_not_invent_a_worker(self):
+        def lose_worker(db):
+            db.execute("UPDATE task_runs SET profile=NULL WHERE task_id='t_a0000001'")
+        payload = self.scene(mutate=lose_worker).replay()
+        row = next(i for i in payload['working']['items'] if i['task_ref'] == 't_a0000001')
+        self.assertFalse(row['worker_observed'])
+        self.assertEqual(row['display_name'], 'Worker not observed')
+        self.assertEqual(row['bot_ref'], extract._bot_id('developer-demo'))
+        self.assertRegex(row['run_ref'], r'^r-[0-9a-f]{20}$')
+
+    def test_nonstandard_source_task_id_uses_the_same_safe_payload_binding(self):
+        def odd_id(db):
+            db.execute("UPDATE tasks SET id='private-card-slug' WHERE id='t_a0000001'")
+            db.execute("UPDATE task_runs SET task_id='private-card-slug' WHERE task_id='t_a0000001'")
+        payload = self.scene(mutate=odd_id).replay()
+        safe_id = extract._bot_id('private-card-slug')
+        self.assertIn(safe_id, {t['id'] for t in payload['tasks']})
+        self.assertEqual(sum(i['task_ref'] == safe_id for i in payload['working']['items']), 1)
+        self.assertNotIn('private-card-slug', json.dumps(payload))
+
+    def test_card_ref_survives_retry_status_change_and_keyless_reordering(self):
+        s = self.scene()
+        before = s.replay()
+        first = next(i for i in before['working']['items'] if i['task_ref'] == 't_a0000001')
+        db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'kanban.db')
+        db.execute("INSERT INTO task_runs(task_id,profile,started_at) VALUES('t_a0000001','tester-demo',?)", (s.now - 1,))
+        db.commit(); db.close()
+        after = next(i for i in s.delta(before['cursor'])['working']['items'] if i['task_ref'] == first['task_ref'])
+        self.assertEqual(first['ref'], after['ref'])
+        self.assertNotEqual(first['run_ref'], after['run_ref'])
+        self.assertEqual(after['bot_ref'], extract._bot_id('tester-demo'))
+        (Path(s.cfg['hermes_home']) / 'hermes-quest/session-ref.key').unlink()
+        keyless = s.replay()
+        db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'kanban.db')
+        db.execute("UPDATE tasks SET status='blocked' WHERE id='t_a0000001'")
+        db.commit(); db.close()
+        again = s.delta(keyless['cursor'])
+        self.assertEqual({i['task_ref']: i['ref'] for i in keyless['working']['items']},
+                         {i['task_ref']: i['ref'] for i in again['working']['items']})
+        self.assertTrue(all(i['run_ref'] is None for i in again['working']['items']))
+
+    def test_key_rotation_changes_opaque_refs_but_not_entity_binding(self):
+        s = self.scene()
+        before = s.replay()
+        (Path(s.cfg['hermes_home']) / 'hermes-quest/session-ref.key').write_bytes(bytes(reversed(range(32))))
+        after = s.delta(before['cursor'])
+        self.assertNotEqual(before['meta']['config_revision'], after['meta']['config_revision'])
+        for a, b in zip(before['working']['items'], after['working']['items']):
+            self.assertNotEqual(a['ref'], b['ref'])
+            self.assertEqual((a['task_ref'], a['bot_ref']), (b['task_ref'], b['bot_ref']))
+            if a['run_ref']:
+                self.assertNotEqual(a['run_ref'], b['run_ref'])
+
     # --- R4: ordering and status mapping --------------------------------------------
     def test_status_classes_and_group_order(self):
         w = self.scene().replay()['working']
@@ -208,7 +279,7 @@ class WorkingContractTests(unittest.TestCase):
         self.assertEqual(order, sorted(order, key=lambda s: ['running', 'blocked', 'failed', 'unknown',
                                                               'done', 'archived'].index(s)))
         counts = {s: order.count(s) for s in set(order)}
-        self.assertEqual(counts, {'running': 7, 'blocked': 1, 'failed': 1, 'done': 2, 'archived': 1,
+        self.assertEqual(counts, {'running': 6, 'blocked': 1, 'failed': 1, 'done': 2, 'archived': 1,
                                   'unknown': 1})
         # ready/queued cards are not current work.
         self.assertFalse([i for i in w['items'] if i['quest_label'] in ('Queued lambda',)])
@@ -235,7 +306,7 @@ class WorkingContractTests(unittest.TestCase):
         db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'kanban.db')
         finish(db); db.commit(); db.close()
         after = s.delta(before['cursor'])['working']
-        self.assertEqual(sum(i['status'] == 'running' for i in after['items']), 6)
+        self.assertEqual(sum(i['status'] == 'running' for i in after['items']), 5)
         self.assertEqual(after['progress']['wins_today'], before['working']['progress']['wins_today'] + 1)
 
     # --- R5: names ------------------------------------------------------------------
@@ -356,6 +427,57 @@ class WorkingContractTests(unittest.TestCase):
         self.assertEqual(w['latest_order']['action_label'], 'Created quest')
         self.assertIsNone(w['latest_order']['recipient_display_name'])
 
+    def test_explicit_reassignment_stays_pinned_across_unchanged_polls(self):
+        s = self.scene()
+        db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'profiles/planner-demo/state.db')
+        db.executescript('''
+CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,parent_session_id TEXT,started_at REAL,title TEXT);
+CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,
+ tool_calls TEXT,tool_name TEXT,tool_call_id TEXT,timestamp REAL,token_count INTEGER);
+''')
+        db.execute("INSERT INTO sessions VALUES('captain','cli',NULL,?,'Captain')", (s.now - 100,))
+        calls = [{'id': 'order', 'function': {'name': 'kanban_reassign', 'arguments':
+                  json.dumps({'task_id': 't_a0000001', 'assignee': 'tester-demo'})}}]
+        db.execute("INSERT INTO messages VALUES(1,'captain','assistant',NULL,?,NULL,NULL,?,NULL)",
+                   (json.dumps(calls), s.now - 5))
+        db.commit(); db.close()
+        first = s.replay()
+        order = first['working']['latest_order']
+        self.assertEqual(order['action_label'], 'Reassigned quest')
+        self.assertEqual(order['recipient_display_name'], 'Test Ranger 1')
+        delta = s.delta(first['cursor'])
+        idle = s.delta(delta['cursor'])
+        self.assertEqual(idle['events'], [])
+        self.assertEqual(delta['working']['latest_order'], order)
+        self.assertEqual(idle['working']['latest_order'], order)
+        self.assertEqual(s.replay()['working']['latest_order'], order)
+
+    def test_session_parent_lineage_is_keyed_and_never_task_dependencies(self):
+        s = self.scene()
+        db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'profiles/developer-demo/state.db')
+        db.executescript('''
+CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,parent_session_id TEXT,started_at REAL,title TEXT);
+CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,
+ tool_calls TEXT,tool_name TEXT,tool_call_id TEXT,timestamp REAL,token_count INTEGER);
+''')
+        for sid, source, parent in [('root', 'kanban', None), ('child', 'subagent', 'root'),
+                                    ('orphan', 'subagent', 'missing')]:
+            db.execute('INSERT INTO sessions VALUES(?,?,?,?,?)', (sid, source, parent, s.now - 40, 'Worker'))
+        db.execute("INSERT INTO messages VALUES(1,'root','user','task t_a0000001',NULL,NULL,NULL,?,NULL)", (s.now - 40,))
+        db.commit(); db.close()
+        db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'kanban.db')
+        db.execute("INSERT INTO task_links VALUES('t_a0000002','t_a0000001')")
+        db.commit(); db.close()
+        payload = s.replay()
+        key = bytes(range(32))
+        ref = lambda sid: extract._session_digest(key, 'developer-demo', sid)[:20]
+        sessions = {row['session_ref']: row for row in payload['sessions']}
+        self.assertEqual(sessions[ref('child')]['parent_session_ref'], ref('root'))
+        self.assertEqual(sessions[ref('child')]['task'], 't_a0000001')
+        self.assertIsNone(sessions[ref('orphan')]['parent_session_ref'])
+        self.assertTrue(all(i['parent_ref'] is None for i in payload['working']['items']))
+        self.assertEqual(s.delta(payload['cursor'])['sessions'], payload['sessions'])
+
     # --- R7: rewards ----------------------------------------------------------------
     def test_progress_comes_from_done_tasks_with_the_agreed_formula(self):
         w = self.scene().replay()['working']
@@ -388,14 +510,19 @@ class WorkingContractTests(unittest.TestCase):
         self.assertEqual(w['progress'], dict(wins_today=0, xp=0, gold=0, level=1, level_progress=0))
 
     def test_wins_today_uses_the_backend_machine_timezone(self):
-        s = self.scene()
-        bangkok_today = s.replay()['working']['progress']['wins_today']
         fixture = copy.deepcopy(FIXTURE)
-        fixture['tz'] = 'Pacific/Kiritimati'  # UTC+14: day began 8 h before the 08:00 UTC now
-        with Scene(self, fixture=fixture) as other:
-            ahead = other.replay()['working']['progress']['wins_today']
-        self.assertEqual(bangkok_today, 2)
-        self.assertGreaterEqual(ahead, bangkok_today)
+        fixture['board']['tasks'][8]['completed_ago'] = 40000  # yesterday UTC, today Bangkok
+        with Scene(self, fixture=fixture) as bangkok:
+            self.assertEqual(bangkok.replay()['working']['progress']['wins_today'], 2)
+        fixture['tz'] = 'UTC'
+        with Scene(self, fixture=fixture) as utc:
+            self.assertEqual(utc.replay()['working']['progress']['wins_today'], 1)
+
+    def test_future_completion_does_not_earn_rewards(self):
+        def future(db):
+            db.execute("UPDATE tasks SET completed_at=? WHERE id='t_a0000008'", (FIXTURE['now'] + 1,))
+        w = self.scene(mutate=future).replay()['working']
+        self.assertEqual(w['progress'], dict(wins_today=1, xp=20, gold=2, level=1, level_progress=20))
 
     # --- R3: resting ----------------------------------------------------------------
     def test_resting_count_excludes_busy_workers_and_the_captain(self):
@@ -427,7 +554,7 @@ class WorkingContractTests(unittest.TestCase):
                     s.cfg['show_profile_names'] = names
                     w = s.replay()['working']
                     blob = json.dumps(w)
-                    self.assertNotRegex(blob, r't_[0-9a-f]{8}')
+                    self.assertNotRegex(' '.join(visible_strings(w)), r't_[0-9a-f]{8}')
                     self.assertNotRegex(blob, r'(?i)(?:developer|tester|reviewer|researcher|devops|planner)-demo')
                     self.assertNotRegex(blob, r'/srv|/media|/home|CUST-|Fictional|password')
                     self.assertNotRegex(blob, r'[0-9a-f]{32}')

@@ -134,7 +134,24 @@ function drawWorking() {
     ctx.UI?.screenLabel(pair.item.display_name+' · '+pair.item.quest_label,(v.ox+pair.x*v.Z)/ctx.DPR,(v.oy+(pair.y-110)*v.Z)/ctx.DPR);
   }
   // Ambient villagers are reserved for the no-work scene; no hidden idle heroes.
-  if(!ctx.workView.pairs.length&&window.NPCS)NPCS.ents(v,blit,shadowPx).slice(0,innerWidth<=760?8:innerWidth<=1100?14:20).forEach(e=>e.f());
+  const cap=innerWidth<=760?8:innerWidth<=1100?14:20;
+  const villagers=!ctx.workView.pairs.length&&window.NPCS?NPCS.ents(v,blit,shadowPx).slice(0,cap-1):[];
+  villagers.forEach(e=>e.f());
+  let couriers=0;
+  for(const f of ctx.S.fx)if(f.working || (!ctx.workView.pairs.length && f.src==='inn')){
+    if(f.k==='raven' && couriers++)continue;
+    fxDraw(v,f);
+  }
+  for(const f of ctx.S.fx){
+    const pair=f.task_ref&&ctx.workView.pairs.find(p=>p.item.task_ref===f.task_ref),t=pair&&ctx.S.tasks[f.task_ref];
+    if(!t)continue;
+    const mapped={...f},dx=pair.monster.x-t.x,dy=pair.monster.y-t.y;
+    for(const key of ['x','x0','x1'])if(Number.isFinite(mapped[key]))mapped[key]+=dx;
+    for(const key of ['y','y0','y1'])if(Number.isFinite(mapped[key]))mapped[key]+=dy;
+    if(f.bot_ref&&pair.hero){mapped.x0=pair.hero.x+22;mapped.y0=pair.hero.y-34;}
+    fxDraw(v,mapped);
+  }
+  ctx.workView.foreground={heroes:ctx.workView.pairs.filter(p=>p.hero).length,encounters:ctx.workView.pairs.length,npcs:villagers.length,couriers:Math.min(1,couriers)};
   ctx.UI?.flush();vignette();
 }
 function onScreen(v,x,y,w,h) {

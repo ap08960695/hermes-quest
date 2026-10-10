@@ -29,7 +29,7 @@ const server=http.createServer((req,res)=>{
       // Exercise the real B selector without altering another card's owned modules.
       if(process.env.SCENE_STATE_ROOT)for(const file of ['state.js','history.js'])await page.route('**/quest/'+file,r=>r.fulfill({path:path.join(process.env.SCENE_STATE_ROOT,'quest',file),contentType:'text/javascript'}));
       await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>typeof loop.last==='number');
-      await page.evaluate(()=>{cancelAnimationFrame(raf);S.play=false;S.t=Date.parse(D.working.as_of)/1000;hudT=1;hud(0);draw();});
+      await page.evaluate(()=>{cancelAnimationFrame(raf);S.play=false;S.t=S.work.asOf;hudT=1;hud(0);draw();});
       await page.waitForFunction(()=>document.querySelector('#working-count').textContent==='3 working');
       const baseline=await page.evaluate(()=>{
         draw();const d=UIPanels.diagnostics(),canvas=cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
@@ -73,6 +73,23 @@ const server=http.createServer((req,res)=>{
       assert.equal(await page.locator('#working-rows > section:first-child button').count(),24);
       assert((await page.evaluate(()=>{draw();return inspect.picks.length;}))<=cap);
       await page.locator('#working-rows > section:first-child button').last().click();assert.equal(await page.evaluate(()=>{draw();return inspect.picks.length;}),2);
+      const bindings=fixture();
+      bindings.working.items[0].bot_ref=demo.bots[0].id;bindings.working.items[0].task_ref=demo.tasks[0].id;
+      bindings.working.items[1].bot_ref=demo.bots[0].id;bindings.working.items[1].task_ref=demo.tasks[1].id;
+      const joined=await page.evaluate(data=>{
+        loadReplay(data);S.play=false;workView.focus=null;
+        const h=hero(data.bots[0].id);h.task=data.tasks[0].id;h.atk=.2;
+        const pairs=workingPairs();return {bound:pairs[0].hero.cls===h.cls,first:pairs[0].hero.atk,other:pairs[1].hero.atk};
+      },bindings);
+      assert.equal(joined.bound,true);assert.equal(joined.first,.2);assert.equal(joined.other,-1);
+      const fx=await page.evaluate(data=>{
+        draw();const before=S.soc.victories||0;
+        data.working.as_of=new Date(S.work.asOf*1000+1000).toISOString();data.working.items[0].status='done';
+        const delta={events:[],tasks:[],bots:[],cursor:null,working:data.working};liveFeed=true;following=true;S.play=true;mergeDelta(delta);
+        const after=S.soc.victories||0,visible=S.fx.filter(f=>f.working&&f.k==='coin').length;
+        mergeDelta(delta);draw();return {added:after-before,repeat:(S.soc.victories||0)-after,visible};
+      },bindings);
+      assert.equal(fx.added,1);assert.equal(fx.repeat,0);assert(fx.visible>0);
       const empty=fixture();empty.working.items=[];empty.working.latest_order=null;
       await page.evaluate(data=>{loadReplay(data);S.play=false;hudT=1;hud(0);draw();},empty);
       assert.equal(await page.locator('#working-count').textContent(),'0 working');assert.equal(await page.locator('#working-order').textContent(),'No recent Captain instruction');

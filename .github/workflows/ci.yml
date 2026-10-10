@@ -59,6 +59,8 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Node regression tests
         run: |
+          node tools/test_scene_state.cjs
+          node tools/test_idle_rewards.cjs
           node --test tools/test_mobile_measurement.cjs
           node tools/backtest.test.js
           node dashboard/test_game.cjs
@@ -94,6 +96,10 @@ jobs:
         run: node tools/test_ui_inventory.cjs "$RUNNER_TEMP/ui-regressions/inventory"
       - name: Selected rendering and private presentation (both engines)
         run: node tools/test_scene_selection.cjs "$RUNNER_TEMP/ui-regressions/selection"
+      - name: Working view focus and privacy (both engines, three viewports)
+        run: node tools/test_scene_focus.cjs "$RUNNER_TEMP/ui-regressions/working-focus"
+      - name: Working view 1-to-1, caps, overlap and 60 second observation (synthetic only)
+        run: node tools/test_scene_playtest.cjs "$RUNNER_TEMP/ui-regressions/working-playtest"
       - name: Native scene + hero interaction (region tap vs main, overflow/chooser identity, occlusion; both engines)
         run: node tools/test_scene_hero_interaction.cjs "$RUNNER_TEMP/ui-regressions/scene-hero"
       - name: Mobile smoke (Chromium, 8 viewports x 3 zooms)

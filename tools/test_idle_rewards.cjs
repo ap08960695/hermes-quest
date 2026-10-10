@@ -31,7 +31,7 @@ function game({working = {as_of: '2026-01-01T00:00:00Z', items: [], resting_coun
   const data = copy(demo); data.events = []; data.tasks = [];
   if (working) data.working = working; else delete data.working;
   const {G, timers} = load({root, data, seed});
-  G.S.speed = 120; G.S.play = false; G.reset(data.meta.from_);
+  G.loadReplay(data); G.S.speed = 120; G.S.play = false; G.reset(data.meta.from_);
   const step = (sec, each = () => {}) => {
     const dt = 1 / 60;
     for (let i = 0; i < Math.round(sec / dt); i++) {

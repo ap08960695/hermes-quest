@@ -1098,10 +1098,9 @@ CREATE TABLE session_model_usage(session_id TEXT,input_tokens INTEGER,output_tok
 # --- Long Captain history: lookup scaling and byte-identical output ---------------
 CAPTAIN_FIXTURE_MESSAGES = 20_000
 # sha256 (config_revision excluded: it hashes the random temp home) of the initial replay, the delta after the pending tasks appear, and the
-# following idle delta, produced by the pre-fix extractor (edf13c5, per-result
-# rescan of the session) on exactly this fixture. The lookup rewrite must not
-# change a single byte; do not regenerate it from the current code.
-CAPTAIN_FIXTURE_DIGEST = '0de15e0e61521c3fd9deba4d39b982f311fa632f148ff5afa0b5c19d13d79a65'
+# following idle delta. Working view intentionally adds the full bot inventory
+# and canonical role labels; event matching and the 10 s ceiling remain unchanged.
+CAPTAIN_FIXTURE_DIGEST = '4da9988dc6406299ff5a77eebb599066d95b52a599f9484ca553203e14bf7d3e'
 CAPTAIN_FIXTURE_CEILING_SECONDS = 10.0
 
 

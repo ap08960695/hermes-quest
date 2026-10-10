@@ -146,6 +146,7 @@ const facade = {
   get reset(){return ctx.reset}, set reset(v){ctx.reset=v},
   get ui(){return ctx.ui}, set ui(v){ctx.ui=v},
   boot, characterName: ctx.characterName, chooseCharacters: ctx.chooseCharacters, clearInspection: ctx.clearInspection, click: ctx.click, connectedStatus: ctx.connectedStatus,
+  workView:ctx.workView, workingPairs:ctx.workingPairs, focusWork:ctx.focusWork,
   draw: ctx.draw, engage: ctx.engage, eventKey: ctx.eventKey, finishRestMotion: ctx.finishRestMotion, followCharacter: ctx.followCharacter, formation: ctx.formation, friends: ctx.friends,
   goHome: ctx.goHome, goLive: ctx.goLive, hero: ctx.hero, heroDialog: ctx.heroDialog, heroStatus: ctx.heroStatus, hud: ctx.hud, inspectionLinks: ctx.inspectionLinks, json: ctx.json, later: ctx.later,
   laterHero: ctx.laterHero, loadReplay: ctx.loadReplay, loop, mergeDelta: ctx.mergeDelta, monster: ctx.monster, monsterPose: ctx.monsterPose, mstyle: ctx.mstyle, mtier: ctx.mtier, mtype: ctx.mtype,

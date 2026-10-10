@@ -122,15 +122,19 @@ function onOrder(order, {animate = true} = {}) {
   const to = order.bot || order.recipient_display_name || '';
   const key = 'order:' + (id ?? [order.at, to, order.action_label, order.quest_label].join('|'));
   if (!firstTime(key) || !animate) return false;
-  const h = heroFor(order.bot, order.recipient_display_name);
+  const pairs = ctx.workingPairs?.() || [];
+  const pair = pairs.find(p => order.task_ref && p.item.task_ref === order.task_ref) ||
+    pairs.find(p => order.recipient_bot_ref && p.item.bot_ref === order.recipient_bot_ref);
+  const h = pair?.hero || heroFor(order.recipient_bot_ref || order.bot, order.recipient_display_name);
   if (!h || ctx.restLocked(h)) return false;
-  const cap = ctx.S.heroes[ctx.captainId()], [x0, y0] = cap ? [cap.x, cap.y] : ctx.spotOf(ctx.regionOf(ctx.captainId()));
+  const cap = ctx.S.heroes[ctx.captainId()], [x0, y0] = pair ? [pair.x - 150, pair.y - 90] : cap ? [cap.x, cap.y] : ctx.spotOf(ctx.regionOf(ctx.captainId()));
   const act = safeLabel(order.action_label), what = safeLabel(order.quest_label);
   if (cap && !ctx.restLocked(cap)) { cap.bubble = {text: `📜 ${act || 'Order'} → ${h.name}`.slice(0, 40), until: 2.4}; cap.cheer = .5; }
   const flight = ctx.courier(x0, y0 - 50, h.x, h.y - 50, {icon: '📜'});
+  if(pair)ctx.S.fx[ctx.S.fx.length-1].working = true;
   ctx.laterHero(h, flight, () => {
     h.bubble = {text: what ? `📜 ${what}` : '📜 New order', until: 2.4}; h.cheer = .5;
-    ctx.S.fx.push({k: 'ring', x: h.x, y: h.y - 30, color: '#ffd36b', r: 16, life: .4, max: .4});
+    ctx.S.fx.push({k: 'ring', working:!!pair, x: h.x, y: h.y - 30, color: '#ffd36b', r: 16, life: .4, max: .4});
   });
   ctx.S.soc.couriers = (ctx.S.soc.couriers || 0) + 1;
   ctx.say(`📜 Captain sent a scroll to <span class="who">${ctx.esc(h.name)}</span>${what ? ': <b>' + ctx.esc(what) + '</b>' : ''}`, ctx.S.t, 'scroll:' + key);
@@ -141,9 +145,12 @@ function onComplete(item, {animate = true} = {}) {
   if (item.status != null && item.status !== 'done') return false;   // failed/blocked/archived earn nothing
   const ref = item.ref ?? item.task ?? item.id ?? (item.at != null ? [item.at, item.display_name, item.quest_label].join('|') : null);
   if (ref == null || ref === '' || !firstTime('win:' + ref) || !animate) return false;
-  const t = ctx.S.tasks[item.task ?? ref], h = heroFor(item.bot, item.display_name);
-  const [x, y] = t && t.alpha > 0 && !t.dying ? [t.x, t.y - 10] : h ? [h.x, h.y - 20] : ctx.W.regions.vault.spot;
+  const pair = ctx.workView?.pairs.find(p => p.item.ref === ref);
+  const t = ctx.S.tasks[item.task_ref ?? item.task ?? ref], h = heroFor(item.bot_ref || item.bot, item.display_name);
+  const [x, y] = pair ? [pair.x, pair.y - 20] : ctx.S.work?.has && !ctx.workView?.all ? ctx.plazaOf(ctx.defaultRegion()).center : t && t.alpha > 0 && !t.dying ? [t.x, t.y - 10] : h ? [h.x, h.y - 20] : ctx.W.regions.vault.spot;
+  const firstFx = ctx.S.fx.length;
   ctx.victory(x, y);
+  if(ctx.S.work?.has)for(const f of ctx.S.fx.slice(firstFx)){f.working=true;if(f.k==='coin'){f.x1=x+80;f.y1=y-60;}}
   ctx.cheerAround({x, y});
   if (h && !ctx.restLocked(h)) { h.cheer = .9; h.bubble = {text: '🎉', until: 1.6}; }
   ctx.S.soc.victories = (ctx.S.soc.victories || 0) + 1;
@@ -171,7 +178,7 @@ function wireWork() {
   w.onComplete(i => onComplete({...i, status: 'done'}, {animate: i.animate !== false}));
 }
 function innAmbient() {
-  if (!ctx.D || !ctx.D.working) return;               // no Working view: scene stays byte-identical to the old replay
+  if (!ctx.S.work?.has) return;                      // no Working view: legacy replay unchanged
   const soc = ctx.S.soc, rt = ctx.S.rt;
   if (soc.innNext == null || soc.innNext > rt + 6) soc.innNext = rt + 1;
   if (rt < soc.innNext) return;
@@ -204,5 +211,6 @@ return {
   get onOrder(){return onOrder}, set onOrder(v){onOrder=v},
   get onComplete(){return onComplete}, set onComplete(v){onComplete=v},
   get innAmbient(){return innAmbient}, set innAmbient(v){innAmbient=v}
+  ,get wireWork(){return wireWork}
 };
 };

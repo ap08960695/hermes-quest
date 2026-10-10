@@ -6,18 +6,13 @@ const fmt = t => { const d = new Date(t * 1000); return Number.isNaN(d.getTime()
 
 // Page-local presentation only. Never part of a replay checkpoint or live cursor.
 const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null, fit: false, zoom: null, fittedZoom: null};
-// B's selectors are authoritative when installed; raw snapshots are legacy fixtures only.
+// One reducer is authoritative; no raw snapshot/fixture adapter.
 const workView = {all:false, focus:null, key:'', pairs:[], savedCamera:null};
 function workingSnapshot() {
-  if(ctx.S.work)return ctx.S.work.has?{asOf:ctx.S.work.asOf,items:ctx.S.work.items(),resting:ctx.S.work.resting,latestOrder:ctx.S.work.latestOrder,progress:ctx.S.work.progress()}:null;
-  const value=ctx.S.working ?? ctx.D.working;
-  return value && Array.isArray(value.items) ? {asOf:value.as_of,items:value.items,resting:value.resting_count,latestOrder:value.latest_order,progress:value.progress}:null;
+  return ctx.S.work?.has?{asOf:ctx.S.work.asOf,items:ctx.S.work.items(),resting:ctx.S.work.resting,latestOrder:ctx.S.work.latestOrder,progress:ctx.S.work.progress()}:null;
 }
 function workBinding(item) {
-  const direct=ctx.S.heroes[item.ref];if(direct)return direct;
-  const rows=workingSnapshot()?.items||[],matches=ctx.D.bots.filter(b=>b.display_name&&b.display_name===item.display_name);
-  // A shared alias or multiple simultaneous runs cannot identify an event actor safely.
-  return matches.length===1&&rows.filter(i=>i.status==='running'&&i.display_name===item.display_name).length===1?ctx.S.heroes[matches[0].id]:null;
+  return item?.bot_ref ? ctx.S.heroes[item.bot_ref] || null : null;
 }
 function safeWorkText(value,fallback) {
   const text=String(value??'').trim();
@@ -29,7 +24,7 @@ const questKinds={planning:'Planning',plan:'Planning',build:'Build',testing:'Tes
 function workItems() {
   const items=workingSnapshot()?.items||[],seen=new Set();
   return items.filter(item=>item && typeof item.ref==='string' && !seen.has(item.ref) && seen.add(item.ref)).map((item,i)=>{
-    const cls=safeWorkText(item.class_label,'Guild Worker'),binding=workBinding(item),bot=binding&&ctx.D.bots.find(b=>b.id===binding.bot),role=cls+' '+(bot?ctx.D.bots.indexOf(bot)+1:i+1);
+    const cls=safeWorkText(item.class_label,'Guild Worker'),role=cls+' '+(i+1);
     const generic=(questKinds[item.quest_kind]||'Guild')+' quest #'+(i+1);
     let quest=ctx.D.meta.show_titles===true?safeWorkText(item.quest_label,generic):/^(?:Planning|Build|Testing|Review|Deploy|Verification|Guild) quest(?: #\d+)?$/.test(item.quest_label)?item.quest_label:generic;
     quest=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(quest),s=>s.segment).slice(0,30).join('');
@@ -38,7 +33,7 @@ function workItems() {
   });
 }
 function workElapsed(item) {
-  const start=typeof item.started_at==='number'?item.started_at:Date.parse(item.started_at)/1000;
+  const start=item.started_at==null?NaN:typeof item.started_at==='number'?item.started_at:Date.parse(item.started_at)/1000;
   return Number.isFinite(start)?Math.floor(Math.max(0,ctx.S.t-start)/60)+' min':'Elapsed unknown';
 }
 function workDetails(ref) {
@@ -99,15 +94,17 @@ function renderWorking() {
 }
 function workingPairs() {
   const running=workItems().filter(i=>i.status==='running'),cap=innerWidth<=760?8:innerWidth<=1100?14:20;
-  const focus=running.find(i=>i.ref===workView.focus),visible=focus?[focus]:running.slice(0,Math.floor(cap/2));
+  const focus=running.find(i=>i.ref===workView.focus),visible=focus?[focus]:running.slice(0,Math.floor((cap-1)/2));
   const center=ctx.plazaOf(ctx.defaultRegion()).center,cols=innerWidth<=760?1:3;
   return visible.map((item,i)=>{
     // Resolve real animation when unambiguous; never move simulation actors.
-    const raw=workingSnapshot().items.find(r=>r.ref===item.ref),source=workBinding(raw);
+    const raw=workingSnapshot().items.find(r=>r.ref===item.ref),bound=workBinding(raw);
+    // A bot can own multiple cards. Never lend one card another card's attack.
+    const source=bound?.task===raw.task_ref?bound:null;
     const x=center[0]+(i%cols-(Math.min(cols,visible.length)-1)/2)*260,y=center[1]+Math.floor(i/cols)*140;
-    const hero=item.worker_observed===false?null:{...(source||{}),bot:item.ref,name:item.display_name,cls:source?.cls||'warrior',x:x-60,y,face:1,
+    const hero=item.worker_observed===false?null:{...(bound||{}),bot:item.ref,name:item.display_name,cls:bound?.cls||'warrior',x:x-60,y,face:1,
       path:[],placement:null,homeK:i,atk:source?.atk??-1,hurt:source?.hurt||0,charge:source?.charge||0,cheer:source?.cheer||0,fam:[],bubble:null,gest:null,sleep:false,down:0,rest:source?.rest||{},task:null};
-    const sourceTask=ctx.S.tasks[item.ref]||(source?.task&&ctx.S.tasks[source.task]);
+    const sourceTask=raw.task_ref&&ctx.S.tasks[raw.task_ref];
     const monster={...(sourceTask||{}),id:item.ref,bot:null,title:item.quest_label,x:x+60,y,mx:x+60,my:y,alpha:1,emerge:0,slot:0,
       placement:null,mpath:null,region:ctx.defaultRegion(),stage:sourceTask?.stage||'BUILD',state:'fight',hp:sourceTask?.hp??1,flash:sourceTask?.flash||0};
     return {item,hero,monster,x,y};
@@ -115,7 +112,8 @@ function workingPairs() {
 }
 function fitWorking() {
   if(!workingSnapshot()||workView.all)return;
-  const pairs=workingPairs();workView.pairs=pairs;if(!pairs.length)return;
+  const pairs=workingPairs();workView.pairs=pairs;
+  if(!pairs.length){const [x,y]=ctx.W.regions.inn?.spot||ctx.plazaOf(ctx.defaultRegion()).center;Object.assign(ctx.cam,{x,y,tx:x,ty:y,zi:.8});return;}
   const panel=ctx.$('#working-panel').getBoundingClientRect(),bar=ctx.$('#focus-bar').getBoundingClientRect();
   const frame={left:12,top:bar.bottom+24,right:innerWidth<=760?innerWidth-12:panel.left-20,bottom:innerWidth<=760?panel.top-20:innerHeight-12};
   const box={left:Math.min(...pairs.map(p=>p.x))-150,right:Math.max(...pairs.map(p=>p.x))+150,top:Math.min(...pairs.map(p=>p.y))-130,bottom:Math.max(...pairs.map(p=>p.y))+30};
@@ -126,8 +124,7 @@ function fitWorking() {
 function characterName(id) {
   const b = ctx.D.bots.find(b => b.id === id);
   if(workingSnapshot()){
-    const rows=workItems(),matched=rows.find(i=>i.ref===id)||rows.find(i=>workBinding(workingSnapshot().items.find(raw=>raw.ref===i.ref))?.bot===id)||
-      rows.find(i=>b?.display_name&&workingSnapshot().items.find(raw=>raw.ref===i.ref)?.display_name===b.display_name);
+    const rows=workItems(),matched=rows.find(i=>i.ref===id)||rows.find(i=>i.bot_ref===id);
     return matched?.display_name||
       (ctx.D.meta.show_profile_names===true?safeWorkText(b?.display_name,'Guild Worker '+(ctx.D.bots.indexOf(b)+1)):'Guild Worker '+(ctx.D.bots.indexOf(b)+1));
   }
@@ -150,7 +147,7 @@ function parentLabel(s) {
   return parent ? 'Parent: '+(ctx.S.heroes[parent.bot]?characterName(parent.bot):'Character unavailable') : 'Parent unknown';
 }
 function observedTasks(id) {
-  if(workingSnapshot()){const b=ctx.D.bots.find(b=>b.id===id);return workItems().filter(i=>workingSnapshot().items.find(r=>r.ref===i.ref)?.display_name===b?.display_name).map(i=>i.quest_label+' · '+i.status);}
+  if(workingSnapshot())return workItems().filter(i=>i.bot_ref===id).map(i=>i.quest_label+' · '+i.status);
   return ctx.D.tasks.filter(t => ctx.S.tasks[t.id] ? ctx.S.tasks[t.id].bot === id : ctx.S.t >= ctx.D.meta.generated && t.bot === id).map(t => {
     const current = ctx.S.tasks[t.id];
     const status = current ? TASK_STATES[current.state] || 'Status unobserved' :

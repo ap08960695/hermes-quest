@@ -64,7 +64,9 @@ WORK_ORDER = {'running': 0, 'blocked': 1, 'failed': 2, 'unknown': 3, 'done': 4, 
 FAILED_OUTCOMES = {'failed', 'crashed', 'timed_out', 'spawn_failed'}
 RETRY_STATUSES = {'ready', 'todo', 'scheduled', 'triage'}
 ORDER_LABEL = {'create': 'Assigned quest', 'create_unassigned': 'Created quest',
-               'reassign': 'Reassigned quest', 'unblock': 'Unblocked quest'}
+               'reassign': 'Reassigned quest', 'unblock': 'Unblocked quest',
+               'block': 'Blocked quest', 'extend': 'Extended quest runtime',
+               'link': 'Linked quests', 'unlink': 'Unlinked quests', 'note': 'Sent quest instruction'}
 GROUP_LABEL = 'Other work'     # no safe project mapping exists yet (Captain decision 2026-10-11)
 XP_PER_WIN, GOLD_PER_WIN, XP_PER_LEVEL = 10, 1, 100
 QUEST_TEXT_MAX = 30            # grapheme clusters
@@ -684,8 +686,10 @@ def _empty_working(as_of):
 def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, captain_events, key):
     """Read-only projection of CURRENT Kanban state (same snapshot as meta.as_of).
 
-    One row per (task, open run) for running work; one row per task otherwise. Strings are
-    generated here or sanitized; `ref` is an HMAC (or ordinal without a session key)."""
+    One row per current card, including cards with multiple open runs. The newest
+    open run (started_at, then id) supplies the observed worker. Internal bot_ref/task_ref
+    match the existing public payload IDs; run_ref is keyed, never a raw run ID.
+    No binding/ref may be rendered or stored in DOM attributes."""
     cutoff = as_of - hours * 3600
     labels = _display_labels(bot_rows, set(profiles), captain)
     ordered = sorted(tasks.values(), key=lambda t: t['seq'])
@@ -707,7 +711,7 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
 
     rows, busy = [], set()
     for t in ordered:
-        rs = sorted(runs.get(t['id'], []), key=lambda r: r['id'])
+        rs = sorted(runs.get(t['id'], []), key=lambda r: (r['started_at'] or 0, r['id']))
         last = rs[-1] if rs else None
         status = t['status']
         if status == 'failed' or (status in RETRY_STATUSES and last and last['ended_at'] and
@@ -726,22 +730,28 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
         if status == 'done' and not t['completed_at']:
             status = 'unknown'  # contradictory source state never earns a win
         open_runs = [r for r in rs if r['ended_at'] is None]
-        for run in (open_runs if status == 'running' and open_runs else [last if status != 'running' else None]):
+        # Count cards, not attempts. Stale concurrent attempts never duplicate a card.
+        for run in [open_runs[-1] if status == 'running' and open_runs else
+                    last if status != 'running' else None]:
             prof = (run['profile'] if run and run['profile'] else None) or t['assignee'] or None
-            observed = run is not None
+            observed = bool(run and run['profile'])
             if status == 'running' and not observed:
                 name = 'Worker not observed' if t['assignee'] else 'Unassigned'
-                class_label = ROLE_LABEL.get(class_of(t['assignee'])) if t['assignee'] else 'Unassigned'
+                class_label = ROLE_LABEL.get(class_of(t['assignee']) or '', 'Unassigned')
             else:
                 name = labels.get(prof) or 'Unassigned'
                 class_label = ROLE_LABEL.get(class_of(prof), 'Unassigned') if prof else 'Unassigned'
             if status == 'running':
                 busy.add(prof)
                 busy.add(t['assignee'])
+                busy.update(r['profile'] for r in open_runs if r['profile'])
             rows.append(dict(
                 _order=(WORK_ORDER.get(status, 3), -(((run or {}).get('started_at') or t['started_at'] or 0)),
                         t['seq'], (run or {}).get('id') or 0),
                 _key=(t['id'], (run or {}).get('id')),
+                bot_ref=_bot_id(prof) or None,
+                task_ref=t['id'] if re.fullmatch(r'(?:t_[0-9a-f]{8}|e_[0-9a-f]{64}|bot-[0-9a-f]{20})', t['id']) else _bot_id(t['id']),
+                run_ref=('r-' + _session_digest(key, '', f"run:{t['id']}:{run['id']}")[:20]) if key and run else None,
                 status=status, started_at=_iso((run or {}).get('started_at') or t['started_at']),
                 display_name=name, class_label=class_label, quest_label=quest_label(t),
                 quest_kind=t['kind'], group_label=GROUP_LABEL, parent_ref=None,
@@ -751,7 +761,9 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
     for index, row in enumerate(rows, 1):
         task_id, run_id = row.pop('_key')
         row.pop('_order')
-        ref = ('w-' + _session_digest(key, '', f'work:{task_id}:{run_id}')[:20]) if key else f'w-{index}'
+        # Card identity survives retries, completion and ordering changes. Without a
+        # key, the immutable board ordinal is the permitted non-hash fallback.
+        ref = ('w-' + _session_digest(key, '', f'work:{task_id}')[:20]) if key else f"w-{tasks[task_id]['seq']}"
         items.append(dict(ref=ref, **row))
 
     candidates = []
@@ -759,17 +771,21 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
         candidates += [(t['created_at'], 'create', t['id'], t['assignee']) for t in ordered
                        if t['created_by'] == captain and t['created_at']]
     candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'])
-                   for e in captain_events if e.get('act') in ('create', 'reassign', 'unblock')
+                   for e in captain_events if e.get('act') in ORDER_LABEL
                    and e['task'] in tasks]
-    candidates = [c for c in candidates if cutoff <= c[0] <= as_of + 60]
+    candidates = [c for c in candidates if cutoff <= c[0] <= as_of]
     latest_order = None
     if candidates:
         at, act, tid, recipient = max(candidates, key=lambda c: (c[0], c[1]))
         latest_order = dict(
             at=_iso(at), action_label=ORDER_LABEL[act if recipient or act != 'create' else 'create_unassigned'],
-            quest_label=quest_label(tasks[tid]), recipient_display_name=labels.get(recipient) if recipient else None)
+            quest_label=quest_label(tasks[tid]), recipient_display_name=labels.get(recipient) if recipient else None,
+            recipient_bot_ref=_bot_id(recipient) or None,
+            task_ref=next((i['task_ref'] for i in items if i['ref'] ==
+                           (('w-' + _session_digest(key, '', f'work:{tid}')[:20]) if key else f"w-{tasks[tid]['seq']}")), None))
 
-    done = [t for t in ordered if t['status'] == 'done' and t['completed_at']]
+    done = [t for t in ordered if t['status'] == 'done' and t['completed_at']
+            and t['completed_at'] <= as_of]
     midnight = datetime.datetime.fromtimestamp(as_of).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
     xp = len(done) * XP_PER_WIN
     progress = dict(wins_today=sum(1 for t in done if midnight <= t['completed_at'] <= as_of),
@@ -876,6 +892,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     task_activity, active_tasks = {}, set()
     commenters = set()
     raw_tasks, raw_runs = {}, {}   # unsanitized current rows, consumed only by _build_working
+    working_captain_events = []   # retained observations, independent of delta delivery
     try:
         commenters = {r[0] for r in k.execute('SELECT DISTINCT author FROM task_comments') if r[0]}
         captain = cfg['captain']
@@ -1133,6 +1150,25 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     tok = s.execute('SELECT coalesce(sum(input_tokens+output_tokens),0) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
                     tasks[tid]['tokens'] = tasks[tid].get('tokens', 0) + tok
             if prof == captain:
+                # A latest-order snapshot cannot be built from just newly delivered
+                # events: otherwise every unchanged poll forgets an explicit order.
+                # Read only projected Captain calls; never comments/results/prose.
+                for m in s.execute(f'SELECT session_id,timestamp,{_tool_calls_sql(True, json1)} AS tool_calls '
+                                   "FROM messages WHERE role='assistant' AND timestamp>=? AND timestamp<=? "
+                                   'AND tool_calls IS NOT NULL ORDER BY rowid', (as_of - hours * 3600, as_of)):
+                    if m['session_id'] in mapping:
+                        continue
+                    for call in _json(m['tool_calls'], []):
+                        fn = call.get('function') or {}
+                        act = CAP_ACT.get(fn.get('name'))
+                        args = _json(fn.get('arguments'), {})
+                        if not isinstance(args, dict):
+                            continue
+                        tid = args.get('task_id') or args.get('child_id')
+                        if act and isinstance(tid, str) and tid in tasks:
+                            recipient = args.get('assignee')
+                            working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act,
+                                                               bot=recipient if isinstance(recipient, str) else None))
                 deferred = previous.get('captain_pending', {})
                 call_indexes = {}
                 def call_index(session_id):
@@ -1281,14 +1317,28 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         if p not in raw_bots and re.fullmatch(r'[\w-]+', p):
             raw_bots[p] = _bot(p, cfg, captain, 'profile' if p in profiles else 'actor')
     working = _build_working(cfg, as_of, hours, captain, raw_tasks, raw_runs, raw_bots,
-                             profiles, events, session_key)
+                             profiles, working_captain_events + events, session_key)
+    # Generated fallback names must survive names-off sanitization, and duplicate
+    # alias disambiguation must agree between bot surfaces and working rows.
+    display_labels = _display_labels(raw_bots, set(profiles), captain)
+    bot_ids.update(raw_bots)
     bots = [raw_bots[p] for p in sorted(bot_ids) if p in raw_bots]
     tasks = [safe(t) for t in tasks.values()]
     bots = safe(bots)
+    labels_by_id = {raw_bots[p]['id']: label for p, label in display_labels.items()}
+    for bot in bots:
+        bot['display_name'] = labels_by_id[bot['id']]
     # Event high-water marks, not task fingerprints, deduplicate events. Keep a
     # snapshot fingerprint/delivery bit only while active, recent or referenced
     # by this response, so a returning task's snapshot accompanies its new event.
-    referenced = {e['task'] for e in events if e.get('task')} | {e['other'] for e in events if e.get('other') and e.get('task')}
+    # Retention/fingerprint lookups must use the same safe IDs as payload tasks.
+    # Nonstandard source IDs are supported, not silently dropped after sanitizing.
+    public_task_id = lambda tid: safe(tid, 'id')
+    task_activity = {public_task_id(tid): stamp for tid, stamp in task_activity.items()}
+    task_keys = {public_task_id(tid): seq for tid, seq in task_keys.items()}
+    active_tasks = {public_task_id(tid) for tid in active_tasks}
+    referenced = {public_task_id(e['task']) for e in events if e.get('task')} | {
+        public_task_id(e['other']) for e in events if e.get('other') and e.get('task')}
     retained_tasks = {t['id'] for t in tasks if t['id'] in active_tasks or
                       task_activity.get(t['id'], 0) >= cutoff or t['id'] in referenced or
                       (t['tombstone'] and task_keys[t['id']] in previous.get('tasks', {}) and
