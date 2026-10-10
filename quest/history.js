@@ -120,6 +120,9 @@ function loadReplay(replay, live = null, at = null) {
     throw new Error('Invalid replay');
   // Rebase is transactional: a failed snapshot must not destroy the old cursor/history.
   const previous = {D: ctx.D, checkpoint, cursor: ctx.cursor, state: {...ctx.S}, keys: [...eventKeys]};
+  // Validate the Working snapshot before anything is touched; a malformed one rejects the whole rebase.
+  const workPlan = ctx.planWork(replay.working, {mode: 'rebase', animate: !!(live && ctx.liveFeed && ctx.following && ctx.S.play)});
+  let undoWork = () => {};
   ctx.clearInspection();
   if (ctx.UI) ctx.UI.privacy();
   try {
@@ -140,11 +143,14 @@ function loadReplay(replay, live = null, at = null) {
     if (at !== null) ctx.reset(at, new Set()); // Clean, silent migration commits atomically.
     ctx.cursor = ctx.D.cursor ?? '';
     privacyPending = false;
+    undoWork = ctx.applyWork(workPlan);
   } catch (e) {
+    undoWork();
     ctx.D = previous.D; checkpoint = previous.checkpoint; ctx.cursor = previous.cursor;
     Object.assign(ctx.S, previous.state); eventKeys.clear(); previous.keys.forEach(k => eventKeys.add(k)); ctx.FRIENDS = null;
     throw e;
   }
+  ctx.dispatchWork(workPlan);   // listeners only see the committed rebase
 }
 function mergeDelta(delta) {
   if (!Array.isArray(delta.events) || !Array.isArray(delta.tasks) || !Array.isArray(delta.bots) || delta.cursor === undefined)
@@ -159,6 +165,7 @@ function mergeDelta(delta) {
       (delta.meta?.config_revision !== undefined && delta.meta.config_revision !== ctx.D.meta.config_revision) ||
       (delta.meta?.captain !== undefined && delta.meta.captain !== ctx.D.meta.captain))
     throw new IdentityChanged('Replay identity changed');
+  const workPlan = ctx.planWork(delta.working, {mode: 'delta', animate: !!(ctx.liveFeed && ctx.following && ctx.S.play)});
   delta = {...delta, events: [...delta.events, ...archiveSnapshots(delta)]};
   // Known metadata refreshes do not change history. A newly created task is
   // provably new; unknown older identities still require the bounded-history safeguard.
@@ -204,6 +211,7 @@ function mergeDelta(delta) {
   if (cut > applied || (checkpoint && ctx.S.t < checkpoint.t)) ctx.reset(playhead);
   ctx.D.meta.to = delta.events.reduce((to, e) => Math.max(to, e.t), Math.max(ctx.D.meta.to, Date.now() / 1000));
   ctx.cursor = delta.cursor;
+  ctx.applyWork(workPlan); ctx.dispatchWork(workPlan);
 }
 return {
   get redactCharacterNames(){return redactCharacterNames}, set redactCharacterNames(v){redactCharacterNames=v},
