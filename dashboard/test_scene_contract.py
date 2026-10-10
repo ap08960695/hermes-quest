@@ -24,7 +24,7 @@ ITEM_KEYS = {'ref', 'status', 'started_at', 'display_name', 'class_label', 'ques
              'quest_kind', 'group_label', 'parent_ref', 'worker_observed', 'bot_ref', 'task_ref', 'run_ref'}
 WORKING_KEYS = {'as_of', 'items', 'resting_count', 'latest_order', 'progress'}
 PROGRESS_KEYS = {'wins_today', 'xp', 'gold', 'level', 'level_progress'}
-ORDER_KEYS = {'at', 'action_label', 'quest_label', 'recipient_display_name', 'recipient_bot_ref', 'task_ref'}
+ORDER_KEYS = {'at', 'source_action_ref', 'action_label', 'quest_label', 'recipient_display_name', 'recipient_bot_ref', 'task_ref'}
 STATUSES = {'running', 'blocked', 'failed', 'done', 'archived', 'unknown'}
 QUEST_KINDS = {'planning', 'build', 'testing', 'review', 'deploy', 'verification', 'guild'}
 FORBIDDEN = re.compile(r't_[0-9a-f]{8}|[0-9a-f]{12,}|[a-z]+-demo\b|/srv|/media|/home|CUST-|Fictional|password',
@@ -129,7 +129,11 @@ class WorkingContractTests(unittest.TestCase):
             with self.subTest(mode=mode):
                 s = self.scene(show_titles=titles)
                 s.cfg['show_profile_names'] = names
-                self.assertEqual(s.replay()['working'], FIXTURE['expected'][mode])
+                working = s.replay()['working']
+                # Additive internal source identity does not change the frozen display fixture.
+                ref = working['latest_order'].pop('source_action_ref')
+                self.assertRegex(ref, r'^o-[0-9a-f]{20}$')
+                self.assertEqual(working, FIXTURE['expected'][mode])
 
     # --- schema ---------------------------------------------------------------------
     def test_schema_matches_frozen_contract_in_replay_and_delta(self):
@@ -519,7 +523,7 @@ CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content T
             projected = [dict(r) for r in db.execute(extract._latest_order_sql(), (0, 20))]
             self.assertEqual(len(projected), 4)
             self.assertEqual(set(projected[0]),
-                             {'session_id', 'timestamp', 'name', 'task_id', 'child_id', 'assignee'})
+                             {'seq', 'call_index', 'session_id', 'timestamp', 'name', 'task_id', 'child_id', 'assignee'})
             self.assertEqual(projected[0]['child_id'], 't_a0000001')
             self.assertEqual(projected[1]['task_id'], 't_a0000002')
             self.assertEqual(projected[1]['assignee'], 'tester-demo')

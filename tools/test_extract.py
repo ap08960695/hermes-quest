@@ -1215,6 +1215,10 @@ def captain_fixture_digest(extract_module, n=CAPTAIN_FIXTURE_MESSAGES, timings=N
         # excluding it keeps this digest proving every pre-existing byte is unchanged.
         part = {key: value for key, value in part.items() if key != 'working'}
         part = dict(part, meta={k: v for k, v in part['meta'].items() if k != 'config_revision'})
+        # R-F8 adds internal immutable action refs; preserve the byte-for-byte
+        # oracle for every pre-existing event field rather than replacing its digest.
+        part = dict(part, events=[{k: v for k, v in e.items() if k != 'source_action_ref'}
+                                  for e in part['events']])
         digest.update(json.dumps(part, sort_keys=True, ensure_ascii=False).encode())
     return digest.hexdigest(), initial, delta, idle
 

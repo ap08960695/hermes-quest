@@ -117,7 +117,8 @@ function heroFor(bot, name) {                        // existing heroes only: ne
 }
 function onOrder(order, {animate = true} = {}) {
   if (!order || typeof order !== 'object') return false;
-  const id = order.key ?? order.id;
+  const id = typeof order.source_action_ref === 'string' && /^o-[0-9a-f]{20}$/.test(order.source_action_ref)
+    ? order.source_action_ref : order.key ?? order.id;
   if (id == null && order.at == null) return false;   // nothing to dedupe on: do not animate
   const key = 'order:' + (id ?? JSON.stringify([order.at, order.action_label, order.task_ref ?? null, order.recipient_bot_ref ?? order.bot ?? null]));
   if (!firstTime(key) || !animate) return false;

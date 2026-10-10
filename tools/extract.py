@@ -371,6 +371,7 @@ def _tool_calls_sql(captain=False, json1=True):
     consumers = {'terminal', 'patch', 'write_file'} | (set(CAP_ACT) if captain else set())
     names = ','.join("'" + name + "'" for name in sorted(consumers))
     return f"""(SELECT json_group_array(json_object(
+        '_source_index',key,
         'id',json_extract(value,'$.id'), 'call_id',json_extract(value,'$.call_id'),
         'function',json_object('name',json_extract(value,'$.function.name'),
         'arguments',CASE WHEN json_extract(value,'$.function.name') IN ({names})
@@ -381,7 +382,7 @@ def _tool_calls_sql(captain=False, json1=True):
 
 def _latest_order_sql(json1=True):
     # Repeated snapshot reads have no prose consumer. Project only known action
-    # names and string bindings in SQLite, never full arguments or call IDs.
+    # names, row/call coordinates and string bindings in SQLite, never full arguments or call IDs.
     window = "FROM messages WHERE role='assistant' AND timestamp>=? AND timestamp<=?"
     if not json1:
         return 'SELECT session_id,timestamp,NULL AS name,NULL AS task_id,' \
@@ -401,7 +402,7 @@ def _latest_order_sql(json1=True):
                CASE WHEN json_valid(json_extract(call,'$.function.arguments'))
                     THEN json_extract(call,'$.function.arguments') ELSE '{{}}' END AS args
         FROM calls WHERE json_extract(call,'$.function.name') IN ({names})
-    ) SELECT session_id,timestamp,name,{fields} FROM actions ORDER BY seq,call_index"""
+    ) SELECT seq,call_index,session_id,timestamp,name,{fields} FROM actions ORDER BY seq,call_index"""
 
 
 def _message_columns(captain=False, json1=True):
@@ -646,6 +647,12 @@ def _iso(stamp):
         timespec='seconds').replace('+00:00', 'Z')
 
 
+def _order_ref(key, source):
+    # Domain-separated keyed identity: no session/call IDs or prose reach the UI.
+    # Without the privacy key leave identity absent (legacy clients use their tuple).
+    return ('o-' + _session_digest(key, '', 'order:' + json.dumps(source))[:20]) if key else None
+
+
 def _graphemes(text):
     """Approximate grapheme clusters: a base character plus marks/modifiers/joiners."""
     clusters = []
@@ -793,16 +800,24 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
 
     candidates = []
     if captain:
-        candidates += [(t['created_at'], 'create', t['id'], t['assignee']) for t in ordered
+        candidates += [(t['created_at'], 'create', t['id'], t['assignee'],
+                        _order_ref(key, ['create', t['id']])) for t in ordered
                        if t['created_by'] == captain and t['created_at']]
-    candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'])
+    def action_ref(e):
+        if e['act'] == 'create':
+            return _order_ref(key, ['create', e['task']])
+        return e.get('source_action_ref') or (_order_ref(key, ['event', e['id']]) if e.get('id') else None)
+
+    candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'], action_ref(e))
                    for e in captain_events if e.get('act') in ORDER_LABEL
                    and e['task'] in tasks]
     candidates = [c for c in candidates if cutoff <= c[0] <= as_of]
     latest_order = None
     if candidates:
-        at, act, tid, recipient = max(candidates, key=lambda c: (c[0], c[1]))
+        # Calls are projected in row/call order; the last source action wins ties.
+        _, (at, act, tid, recipient, source_ref) = max(enumerate(candidates), key=lambda c: (c[1][0], c[1][1], c[0]))
         latest_order = dict(
+            source_action_ref=source_ref,
             at=_iso(at), action_label=ORDER_LABEL[act if recipient or act != 'create' else 'create_unassigned'],
             quest_label=quest_label(tasks[tid]), recipient_display_name=labels.get(recipient) if recipient else None,
             recipient_bot_ref=_bot_id(recipient) or None,
@@ -846,6 +861,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     captain = cfg['captain'] if cfg['captain'] != 'auto' else ''
     def safe(value, key=''):
         if isinstance(value, str):
+            if key == 'source_action_ref':
+                return value if re.fullmatch(r'o-[0-9a-f]{20}', value) else None
             if key in ('session_ref', 'parent_session_ref'):
                 return value if re.fullmatch(r'[0-9a-f]{20}', value) else None
             if key in ('profile_name', 'display_name', 'pet_name'):
@@ -1185,7 +1202,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     tid = m['task_id'] or m['child_id']
                     if act and tid in tasks:
                         working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act,
-                                                           bot=m['assignee']))
+                                                           bot=m['assignee'], source_action_ref=_order_ref(
+                                                               session_key, ['call', prof, m['session_id'], m['seq'], m['call_index']])))
                 deferred = previous.get('captain_pending', {})
                 call_indexes = {}
                 def call_index(session_id):
@@ -1244,6 +1262,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                             state['captain_pending'].setdefault(str(m['seq']), []).append(i)
                         if tid in tasks:
                             e = dict(t=m['timestamp'], task=tid, kind='captain', act=act,
+                                     source_action_ref=_order_ref(session_key, ['create', tid] if act == 'create' else
+                                                                 ['call', prof, m['session_id'], m['seq'], call['_source_index']]),
                                      **lineage(m['session_id']))
                             if args.get('assignee'):
                                 e['bot'] = args['assignee']

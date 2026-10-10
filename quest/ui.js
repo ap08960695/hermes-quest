@@ -28,7 +28,7 @@ function workItems() {
     const generic=(questKinds[item.quest_kind]||'Guild')+' quest #'+(i+1);
     let quest=ctx.D.meta.show_titles===true?safeWorkText(item.quest_label,generic):/^(?:Planning|Build|Testing|Review|Deploy|Verification|Guild) quest(?: #\d+)?$/.test(item.quest_label)?item.quest_label:generic;
     quest=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(quest),s=>s.segment).slice(0,30).join('');
-    return {...item,display_name:item.status==='running'&&item.worker_observed===false?(item.display_name==='Unassigned'?'Unassigned':'Worker not observed'):ctx.D.meta.show_profile_names===true?safeWorkText(item.display_name,role):item.display_name?.startsWith(cls+' ')&&/^\d+$/.test(item.display_name.slice(cls.length+1))?item.display_name:role,
+    return {...item,display_name:item.status==='running'&&item.worker_observed===false?(item.display_name==='Unassigned'?'Unassigned':'Worker not observed'):ctx.D.meta.show_profile_names===true?safeWorkText(item.display_name,role):(item.display_name==='Captain'&&cls==='Captain')||(item.display_name?.startsWith(cls+' ')&&/^\d+$/.test(item.display_name.slice(cls.length+1)))?item.display_name:role,
       class_label:cls,quest_label:quest,group_label:safeWorkText(item.group_label,'Other work')};
   });
 }
@@ -47,7 +47,7 @@ function focusWork(ref,details=false) {
   if(!workItems().some(i=>i.ref===ref))return;
   clearInspection();workView.focus=ref;workView.key='';ctx.UI?.menu(false);
   if(workView.all){workView.all=false;workView.savedCamera=null;}
-  if(details)ctx.UI?.detail(workDetails(ref),'Working quest',{refresh:()=>workDetails(ref)});
+  if(details)ctx.UI?.detail(workDetails(ref),'Working quest',{refresh:()=>workDetails(ref),focus:()=>workView.buttons.get(ref)||ctx.$('#working-toggle')});
   renderWorking();fitWorking();
 }
 function toggleWorking() {
@@ -75,7 +75,7 @@ function renderWorking() {
   const p=snap.progress;
   ctx.$('#working-rewards').textContent=p?'Wins today '+p.wins_today+' · Guild XP '+p.xp+' · Game gold '+p.gold+' · Level '+p.level:'Guild progress unavailable';
   ctx.$('#guild-progress').value=p?.level_progress||0;
-  const list=ctx.$('#working-rows'),key=JSON.stringify([rows,workView.focus,Math.floor(workClock()/60)]);
+  const list=ctx.$('#working-rows'),key=JSON.stringify([rows,workView.focus,rows.map(workElapsed)]);
   // privacy/rebase may have cleared the DOM without changing the snapshot.
   if(key===workView.key&&list.childElementCount)return;workView.key=key;
   const active=document.activeElement,owned=list.contains(active),focusedRef=[...workView.buttons].find(([,button])=>button===active)?.[0];
@@ -129,9 +129,10 @@ function fitWorking() {
 function characterName(id) {
   const b = ctx.D.bots.find(b => b.id === id);
   if(workingSnapshot()){
-    const rows=workItems(),matched=rows.find(i=>i.ref===id)||rows.find(i=>i.bot_ref===id);
+    // Virtual work identities can be placeholders; real bots use canonical bot metadata.
+    const matched=workItems().find(i=>i.ref===id);
     const role='Guild Worker '+(ctx.D.bots.indexOf(b)+1),canonical=safeWorkText(b?.display_name,role);
-    return matched?.display_name||(ctx.D.meta.show_profile_names===true||/^(?:Build Warrior|Test Ranger|Review Paladin|Deploy Engineer|Research Mage|Analyst Sage|Captain) \d+$/.test(canonical)?canonical:role);
+    return matched?.display_name||(ctx.D.meta.show_profile_names===true||/^(?:Captain|(?:Build Warrior|Test Ranger|Review Paladin|Deploy Engineer|Research Mage|Analyst Sage|Captain) \d+)$/.test(canonical)?canonical:role);
   }
   return ctx.D.meta.show_profile_names === true && b ? b.display_name || b.profile_name || b.pet_name || 'Hero' :
     'Hero '+Math.max(1,ctx.D.bots.findIndex(b => b.id === id)+1);
@@ -257,7 +258,7 @@ function renderInspection() {
   const content = ctx.$('#character-content'), active = document.activeElement, owns = content.contains(active);
   ctx.$('#character-heading').textContent = heading; content.replaceChildren();
   for (const line of lines) { const p=document.createElement('div');p.textContent=line;p.style.overflowWrap='anywhere';content.append(p); }
-  if (inspect.choices) for (const pick of inspect.choices) cardButton(content,pick.type === 'hero' ? characterName(pick.id) : 'Monster · '+(ctx.STAGE_TH[ctx.S.tasks[pick.id]?.stage] || 'Unknown stage'),()=>{
+  if (inspect.choices) for (const pick of inspect.choices) cardButton(content,pick.type === 'hero' ? characterName(pick.id) : 'Monster · '+(workingSnapshot()?sceneName({id:pick.id}):ctx.STAGE_TH[ctx.S.tasks[pick.id]?.stage] || 'Unknown stage'),()=>{
     if (pick.type === 'hero') showInspection(pick.id); else {clearInspection();if(ctx.S.tasks[pick.id])quest(ctx.S.tasks[pick.id]);}
   });
   else if (h && rows.length > 1) rows.forEach((row,i)=>cardButton(content,'Session '+(i+1)+' · '+parentLabel(row),()=>{

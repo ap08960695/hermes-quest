@@ -21,7 +21,7 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/data/demo.json',r=>r.fulfill({json:fixture()}));await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>typeof loop.last==='number');
  await page.evaluate(()=>cancelAnimationFrame(raf));
- const load=async(d=fixture(),invalidate=true)=>page.evaluate(({d,invalidate})=>{loadReplay(d,null,Date.parse(d.working.as_of)/1000);S.play=false;liveFeed=false;following=false;workView.all=false;workView.focus=null;if(invalidate)workView.key='';hudT=1;hud(0);draw();},{d,invalidate});
+ const load=async(d=fixture(),invalidate=true)=>page.evaluate(({d,invalidate})=>{UIPanels.close();loadReplay(d,null,Date.parse(d.working.as_of)/1000);S.play=false;liveFeed=false;following=false;workView.all=false;workView.focus=null;if(invalidate)workView.key='';hudT=1;hud(0);draw();},{d,invalidate});
  const check=async(name,fn)=>{try{await load();await fn();records.push({engine,name,pass:true});}catch(e){records.push({engine,name,pass:false,error:e.message});}};
  await check('F1 identical rebase retains usable rows',async()=>{
  assert.equal(await page.locator('#working-rows button').count(),3);await load(fixture(),false);assert.equal(await page.locator('#working-rows button').count(),3);
@@ -55,10 +55,14 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  await check('F6 replay elapsed follows playhead in row and detail',async()=>{
  await page.evaluate(()=>{S.t-=1800;hudT=1;hud(0);focusWork(S.work.items()[0].ref,true);});assert((await page.locator('#working-rows button').first().textContent()).includes('30 min'));assert((await page.locator('#quest').textContent()).includes('30 min'));
  });
- await check('F6 paused live row updates with the same snapshot clock as detail',async()=>{
- await page.evaluate(()=>{liveFeed=true;following=true;S.play=false;const working={as_of:S.work.asOf+120,items:S.work.items(),resting_count:0,latest_order:null,progress:S.work.progress()};mergeDelta({events:[],tasks:[],bots:[],cursor:null,working});hudT=1;hud(0);});
- assert((await page.locator('#working-rows button').first().textContent()).includes('62 min'));
- await page.evaluate(()=>focusWork(S.work.items()[0].ref,true));assert((await page.locator('#quest').textContent()).includes('62 min'));
+ await check('F6 real Pause control freezes elapsed across live polls',async()=>{
+ const d=fixture();d.meta.to=Date.parse(d.working.as_of)/1000;await load(d);
+ await page.evaluate(()=>{liveFeed=true;const now=Date.now;Date.now=()=>S.work.asOf*1000;try{goLive();}finally{Date.now=now;}UIPanels.menu(true);document.querySelector('#group-playback').open=true;hudT=1;hud(0);});
+ await page.locator('#play').click();assert.equal(await page.evaluate(()=>following),false);assert.equal(await page.evaluate(()=>S.play),false);
+ const before=await page.locator('#working-rows button').first().textContent();
+ await page.evaluate(()=>{mergeDelta({events:[],tasks:[],bots:[],cursor:null,working:{as_of:S.work.asOf+120,items:S.work.items(),resting_count:0,latest_order:null,progress:S.work.progress()}});hudT=1;hud(0);});
+ assert.equal(await page.locator('#working-rows button').first().textContent(),before);
+ await page.evaluate(()=>focusWork(S.work.items()[0].ref,true));assert((await page.locator('#quest').textContent()).includes('60 min'));
  });
  await check('F8 immutable order dedup ignores alias and quest presentation',async()=>{
  const result=await page.evaluate(()=>{let fires=0;const off=S.work.onOrder(()=>fires++);const i=S.work.items()[0],order={at:S.work.asOf+10,action_label:'Assign work',quest_label:i.quest_label,recipient_display_name:i.display_name,recipient_bot_ref:i.bot_ref,task_ref:i.task_ref};
@@ -70,6 +74,46 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  const d=fixture();d.working.items.forEach(i=>i.status='done');await load(d);await page.evaluate(()=>{UIPanels.menu(true);document.querySelector('#group-overview').open=true;hudT=1;hud(0);});
  assert.equal(await page.locator('#tasks-list details').count(),1);assert.equal(await page.locator('#tasks-list details').evaluate(el=>el.open),false);assert.equal(await page.locator('#tasks-list .item-summary').first().isVisible(),false);
  await page.locator('#tasks-list summary').click();assert.equal(await page.locator('#tasks-list .item-summary').first().isVisible(),true);await page.locator('#tasks-list button').first().click();assert((await page.locator('#quest').textContent()).includes('Nova 1'));
+ });
+ for(const mode of ['replay','live-follow'])await check('R-F6 relative-minute boundary '+mode,async()=>{
+ const d=fixture();d.working.items[0].started_at='2026-10-11T02:00:10Z';await load(d);
+ const r=await page.evaluate(mode=>{
+ const base=Date.parse('2026-10-11T02:00:00Z')/1000;
+ const advance=sec=>{if(mode==='replay')S.t=sec;else mergeDelta({events:[],tasks:[],bots:[],cursor:null,working:{as_of:sec,items:S.work.items(),resting_count:0,latest_order:null,progress:S.work.progress()}});hudT=1;hud(0);};
+ // Rebase the synthetic snapshot before enabling live-follow, so deltas are newer.
+ if(mode==='live-follow'){const d=structuredClone(D);d.working={as_of:base+60,items:S.work.items(),resting_count:0,latest_order:null,progress:S.work.progress()};loadReplay(d,null,base+60);liveFeed=true;goLive();}
+ advance(base+60);const initial=workView.buttons.get('opaque-work-0').textContent;
+ advance(base+70);return {initial,row:workView.buttons.get('opaque-work-0').textContent,detail:reviewUI.questLines({id:S.work.items()[0].task_ref})};
+ },mode);
+ assert(r.initial.includes('0 min'));assert(r.row.includes('1 min'));assert(r.detail.includes('1 min'));
+ });
+ await check('R-F5a names-off Captain retains canonical safe label',async()=>{
+ const d=fixture();d.meta.show_profile_names=false;d.bots.forEach((b,i)=>b.display_name='Research Mage '+(i+1));d.bots[3].display_name='Captain';d.bots[4].display_name='PRIVATE_ALIAS_SENTINEL';d.working.items=[{...d.working.items[1],display_name:'Research Mage 2'}];await load(d);
+ assert.equal(await page.evaluate(()=>characterName(D.bots[3].id)),'Captain');assert.equal(await page.evaluate(()=>D.bots[3].display_name),'Captain');assert.equal(await page.evaluate(()=>D.bots[4].display_name??null),null);
+ const active=structuredClone(d);active.working.items.push({...d.working.items[0],ref:'opaque-captain',bot_ref:d.bots[3].id,display_name:'Captain',class_label:'Captain'});await load(active);assert.equal(await page.evaluate(()=>reviewUI.workItems().find(i=>i.ref==='opaque-captain').display_name),'Captain');
+ });
+ await check('R-F5b real bot alias survives shared unobserved running row',async()=>{
+ const d=fixture();Object.assign(d.working.items[1],{status:'done',bot_ref:d.bots[0].id,display_name:'Nova 1'});await load(d);
+ assert.equal(await page.evaluate(()=>characterName(D.bots[0].id)),'Nova 1');
+ await page.evaluate(()=>{const items=S.work.items();Object.assign(items[0],{worker_observed:false,display_name:'Worker not observed'});mergeDelta({events:[],tasks:[],bots:[],cursor:null,working:{as_of:S.work.asOf+10,items,resting_count:0,latest_order:null,progress:S.work.progress()}});hudT=1;hud(0);});
+ assert.equal(await page.evaluate(()=>characterName(D.bots[0].id)),'Nova 1');assert.equal(await page.evaluate(()=>characterName('opaque-work-0')),'Worker not observed');assert.equal(await page.evaluate(()=>reviewUI.workItems()[1].display_name),'Nova 1');
+ });
+ await check('R-F2 chooser distinguishes same-stage tasks and selection',async()=>{
+ const r=await page.evaluate(()=>{UIPanels.menu(false);document.querySelector('#working-toggle').click();const items=S.work.items().slice(0,2);for(const i of items)Object.assign(task(i.task_ref),{stage:'BUILD',state:'fight',alpha:1});reviewUI.chooseCharacters(items.map(i=>({type:'monster',id:i.task_ref})));return [...document.querySelectorAll('#character-content button')].map(b=>b.textContent);});
+ assert.deepEqual(r,['Monster · Build quest #1','Monster · Build quest #2']);await page.locator('#character-content button').nth(1).click();assert((await page.locator('#quest').textContent()).includes('Build quest #2'));
+ });
+ await check('R-K1 Completed disclosure preserves focus and expanded state on poll',async()=>{
+ const d=fixture();d.working.items[0].status='done';await load(d);await page.evaluate(()=>{UIPanels.menu(true);document.querySelector('#group-overview').open=true;hudT=1;hud(0);});await page.locator('#tasks-list summary').click();
+ await page.evaluate(()=>{const items=S.work.items();items[1].status='blocked';mergeDelta({events:[],tasks:[],bots:[],cursor:null,working:{as_of:S.work.asOf+10,items,resting_count:0,latest_order:null,progress:S.work.progress()}});hudT=1;hud(0);});
+ assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#tasks-list summary')),true);assert.equal(await page.locator('#tasks-list details').evaluate(el=>el.open),true);
+ });
+ await check('R-K2 completed dialog restores retained work identity or toggle after eviction',async()=>{
+ const d=fixture();d.working.items[0].status='done';await load(d);await page.locator('#working-rows summary').click();await page.locator('#working-rows details button').first().click();await page.locator('#quest .close').click();
+ assert.equal(await page.evaluate(()=>document.activeElement===workView.buttons.get('opaque-work-0')),true);
+ await page.locator('#working-rows details button').first().click();await page.evaluate(()=>{const items=S.work.items().filter(i=>i.ref!=='opaque-work-0');mergeDelta({events:[],tasks:[],bots:[],cursor:null,working:{as_of:S.work.asOf+10,items,resting_count:0,latest_order:null,progress:S.work.progress()}});hudT=1;hud(0);});
+ // The refreshed dialog can close automatically, or its Close button still owns focus.
+ if(await page.locator('#quest .close').isVisible())await page.locator('#quest .close').click();
+ assert.equal(await page.evaluate(()=>document.activeElement.id),'working-toggle');
  });
  records.push({engine,name:'no page errors',pass:errors.length===0,errors});
  }finally{await browser.close();}

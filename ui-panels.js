@@ -186,6 +186,7 @@
   function focusTarget() {
     if(returnFocus?.isConnected&&visible(returnFocus))return returnFocus;
     if(returnSpec){
+      if(returnSpec.focus){const own=returnSpec.focus();return visible(own)?own:$('#menu-toggle');}
       const row=Array.from(document.querySelectorAll(returnSpec.container+' .item-summary')).find(e=>e.dataset.key===returnSpec.key);
       const own=row?.querySelector('button'), all=$(returnSpec.all);
       if(visible(own))return own;if(visible(all))return all;
@@ -199,7 +200,7 @@
   // live (optional): {refresh} returns null when the subject left retained history (dialog closes and
   // focus returns to its opener), undefined to keep the current content, or new lines to show.
   function detail(lines,label='Details',binding=null) {
-    if($('#quest').hidden)remember(document.activeElement);
+    if($('#quest').hidden){remember(document.activeElement);if(binding?.focus)returnSpec={focus:binding.focus};}
     const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);live=null;
     const button=document.createElement('button');button.className='close';button.setAttribute('aria-label','Close');
     button.append(iconImage('close').cloneNode(true)); // Canvas pixels do not clone; paint explicitly below.
@@ -276,10 +277,11 @@
   function keepListFocus(listSelector,allSelector,rebuild) {
     const list=$(listSelector), active=document.activeElement, owned=list?.contains(active)&&active!==list;
     const key=owned?active.closest('.item-summary')?.dataset.key:undefined;
+    const disclosure=owned&&active===list.querySelector('summary');
     rebuild();
     if(!owned||document.activeElement===active)return;
     const row=Array.from(list.querySelectorAll('.item-summary')).find(e=>e.dataset.key===key);
-    const own=row?.querySelector('button'), all=$(allSelector);
+    const own=disclosure?list.querySelector('summary'):row?.querySelector('button'), all=$(allSelector);
     (visible(own)?own:visible(all)?all:$('#menu-toggle')).focus();
   }
   function overview(data) {overviewView(data);refreshDialog();} // Dialog last: list rows exist again for focus return.

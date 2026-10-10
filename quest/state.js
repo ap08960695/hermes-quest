@@ -69,7 +69,8 @@ function parseWorkingBlock(block) {
   if (block.latest_order != null) {
     const o = block.latest_order, at = isObj(o) ? toSeconds(o.at) : null;
     if (at === null) throw new Error('Invalid working order');
-    order = {at, action_label: cleanText(o.action_label), quest_label: cleanText(o.quest_label),
+    order = {at, source_action_ref: typeof o.source_action_ref === 'string' && /^o-[0-9a-f]{20}$/.test(o.source_action_ref) ? o.source_action_ref : null,
+      action_label: cleanText(o.action_label), quest_label: cleanText(o.quest_label),
       recipient_display_name: typeof o.recipient_display_name === 'string' ? o.recipient_display_name.slice(0, 80) : null,
       recipient_bot_ref: typeof o.recipient_bot_ref === 'string' ? o.recipient_bot_ref : null,
       task_ref: typeof o.task_ref === 'string' ? o.task_ref : null};
@@ -79,7 +80,8 @@ function parseWorkingBlock(block) {
   return {asOf, items, order, resting: nonNegInt(block.resting_count) ?? 0,
     progress: fields && fields.every(v => v !== null) ? {wins_today: fields[0], xp: fields[1], gold: fields[2], level: fields[3], level_progress: fields[4]} : null};
 }
-const orderKey = o => JSON.stringify([o.at, o.action_label, o.task_ref, o.recipient_bot_ref]);
+// New producers identify the immutable source action; old payloads retain tuple behavior.
+const orderKey = o => o.source_action_ref ?? JSON.stringify([o.at, o.action_label, o.task_ref, o.recipient_bot_ref]);
 const dayKey = sec => { const d = new Date(sec * 1000); return d.getFullYear() * 10000 + d.getMonth() * 100 + d.getDate(); };
 // Pure: nothing is mutated until applyWork. mode 'delta' ignores an older snapshot (out-of-order
 // poll); 'rebase' is an authoritative reload and always wins.
