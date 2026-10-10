@@ -65,7 +65,7 @@
     let label=text.toUpperCase(),im=numericImage(label,'#ffd36b');
     if(im.width>maxWidth){
       const parts=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(label),s=>s.segment);
-      while(parts.length&&im.width>maxWidth){parts.pop();im=numericImage(parts.join('')+'…','#ffd36b');}
+      while(parts.length&&im.width>maxWidth){parts.pop();im=numericImage(parts.join('')+'...','#ffd36b');}
     }
     x=Math.round(x-im.width/2);y=Math.round(y-im.height);
     if(pin){x=Math.round(Math.max(8,Math.min(innerWidth-im.width-8,x)));
