@@ -545,11 +545,16 @@ async function runSceneTruth(browser,base) {
         views.push(metric);check(metric.totalBodies===25,'standing fixture lost or hid an entity: '+metric.totalBodies);
         check(metric.bodyPairs.length<=2,region+' idle body pairs '+metric.bodyPairs.length);
         check(metric.labelPairs===0,'overlapping scene overlays');check(!metric.scroll,'scene horizontal overflow');check(metric.marching===0,'monsters did not settle');
-        check(metric.labels.some(l=>l.drawn&&l.text===({forge:'FORGE CITY',port:'STEAM PORT',castle:'ROYAL CASTLE'})[region]),'region name missing: '+region+' '+width+' z'+zoom);
+        // Decorative region labels may yield to real quests or be offscreen at high zoom.
+        // Their names must remain accessible through the real World control at every size.
         check(metric.labels.every(l=>!/t_[a-f\d]+|[a-f\d]{8,}/i.test(l.text)),'opaque scene name');
         check(await page.evaluate(canvasColours)>20,'scene canvas blank before capture');
         await page.screenshot({path:path.join(outDir,`${browserName}-scene-${width}-${region}-z${zoom}.png`)});
         check(await page.evaluate(canvasColours)>20,'resize erased the scene capture');
+        await page.locator('#menu-toggle').click();await page.locator('#group-world').evaluate(el=>el.open=true);
+        await page.locator('#world').click();
+        check((await page.locator('#quest').textContent()).toUpperCase().includes(({forge:'FORGE CITY',port:'STEAM PORT',castle:'ROYAL CASTLE'})[region]),'region name inaccessible from World');
+        await page.locator('#quest .close').click();await page.locator('#menu-toggle').click();
       }
     }
     for(const width of [1280,375,320])for(const zoom of [1,3]){
@@ -827,6 +832,18 @@ async function runInspectionRegressions(browser,base,vp) {
           zoomDisclosed:cam.zi===zoom||$('#character-content').textContent.includes('Zoom adjusted to fit this screen.')});
       };
       for(const stale of [false,true])for(const zoom of [1,3,4])for(const pose of ['standing','attack','rest'])capture(stale,zoom,pose);
+      if(innerWidth===568&&innerHeight===320){
+        const nativeNow=performance.now.bind(performance);let clock=0;
+        try{
+          Object.defineProperty(performance,'now',{configurable:true,value:()=>clock});
+          for(const start of [0,100,200,300,400,500,600,700,800,900])for(const shift of [200,400,600,800]){
+            clock=start;UI.status('Replay file','file');cam.zi=4;Object.assign(S.heroes.child,{atk:-1,sleep:false,down:0});
+            for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}
+            clock=start+shift;draw();const p=inspect.picks.find(p=>p.type==='hero'&&p.id==='child'),c=$('#character-card').getBoundingClientRect(),bar=$('#focus-bar').getBoundingClientRect();
+            rows.push({pose:'idle phase transition',zoom:4,start,shift,body:p?.body,card:c.toJSON(),bar:bar.toJSON(),clear:!!p&&clear(p.body,c)&&clear(p.body,bar)&&p.body.left>=8&&p.body.top>=8&&p.body.right<=innerWidth-8&&p.body.bottom<=innerHeight-8,warning:true,zoomDisclosed:cam.zi===4||$('#character-content').textContent.includes('Zoom adjusted to fit this screen.')});
+          }
+        }finally{Object.defineProperty(performance,'now',{configurable:true,value:nativeNow});}
+      }
       if(innerWidth===320){
         // System-font metrics vary across hosts. A wrapped warning must still fit.
         const style=document.createElement('style');style.textContent='#focus-bar,#focus-bar *{font-size:15px!important}';document.head.append(style);

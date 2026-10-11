@@ -14,7 +14,7 @@ function spriteBox(im, sx, sy, w, h) {
   }
   const box = right ? {left, top, right, bottom} : null; boxes.set(key, box); return box;
 }
-function registerCharacter(v, type, id, box) {
+function registerCharacter(v, type, id, box, framingWorld) {
   if (!box) return;
   const r = ctx.cv.getBoundingClientRect(), scale = r.width / ctx.cv.width;
   const body = {left:r.left+(v.ox+box.left*v.Z)*scale, top:r.top+(v.oy+box.top*v.Z)*scale,
@@ -22,12 +22,17 @@ function registerCharacter(v, type, id, box) {
   if (body.right < r.left || body.left > r.right || body.bottom < r.top || body.top > r.bottom) return;
   const dx = Math.max(0, (44 - (body.right-body.left))/2), dy = Math.max(0, (44 - (body.bottom-body.top))/2);
   const h=ctx.workView?.pairs.find(p=>p.item.ref===id)?.hero || ctx.S.heroes[id];
-  ctx.inspect.picks.push({type,id,world:box,body,anchor:type==='hero'&&h?[h.x,h.y]:null,order:ctx.inspect.picks.length,
+  ctx.inspect.picks.push({type,id,world:box,framingWorld,body,anchor:type==='hero'&&h?[h.x,h.y]:null,order:ctx.inspect.picks.length,
     hit:{left:body.left-dx,right:body.right+dx,top:body.top-dy,bottom:body.bottom+dy}});
 }
-function registerSprite(v, type, id, im, sx, w, h, nx, ny, flip) {
+function registerSprite(v, type, id, im, sx, w, h, nx, ny, flip, framingFrames = []) {
   const b = spriteBox(im, sx, 0, w, h); if (!b) return;
-  registerCharacter(v,type,id,{left:nx+(flip?w-b.right:b.left),right:nx+(flip?w-b.left:b.right),top:ny+b.top,bottom:ny+b.bottom});
+  const world=b=>({left:nx+(flip?w-b.right:b.left),right:nx+(flip?w-b.left:b.right),top:ny+b.top,bottom:ny+b.bottom});
+  // Follow must fit the whole breathing cycle, not yesterday's painted frame.
+  // Hit-testing and body evidence remain the exact current frame.
+  const frames=framingFrames.map(fr=>spriteBox(im,fr*w,0,w,h)).filter(Boolean).map(world);
+  const framing=frames.length?{left:Math.min(...frames.map(b=>b.left)),right:Math.max(...frames.map(b=>b.right)),top:Math.min(...frames.map(b=>b.top)),bottom:Math.max(...frames.map(b=>b.bottom))}:undefined;
+  registerCharacter(v,type,id,world(b),framing);
 }
 function inspectionLinks(v) {
   const s = ctx.selectedSession(); if (!s || !ctx.inspect.bot) return;
@@ -322,7 +327,8 @@ function heroDraw(v, h) {
       ctx.cx.globalAlpha = (h.sleep && !walking) ? .9 : 1;
     }
     blit(v, sheet, fr * M.fw, 0, M.fw, M.fh, nx, ny, h.face < 0);
-    registerSprite(v,'hero',h.bot,img,fr*M.fw,M.fw,M.fh,nx,ny,h.face<0);
+    const idleFollow=ctx.inspect.follow&&ctx.inspect.bot===h.bot&&!walking&&h.atk<0&&!h.spar&&!h.preparing;
+    registerSprite(v,'hero',h.bot,img,fr*M.fw,M.fw,M.fh,nx,ny,h.face<0,idleFollow?ctx.HMETA.idle:[]);
     levelFront(v, h, bx, by, st, lv);
   }
   ctx.cx.filter = 'none'; ctx.cx.globalAlpha = 1;

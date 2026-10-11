@@ -331,8 +331,9 @@ function renderInspection() {
   if (!ctx.$('#quest').hidden || !ctx.$('#menu').hidden) { clearInspection(); return; }
   card.hidden = false;
   const selectedPick=inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
-  const height=selectedPick?selectedPick.world.bottom-selectedPick.world.top:70;
-  const width=selectedPick?selectedPick.world.right-selectedPick.world.left:48;
+  const bounds=selectedPick?.framingWorld||selectedPick?.world;
+  const height=bounds?bounds.bottom-bounds.top:70;
+  const width=bounds?bounds.right-bounds.left:48;
   // A sprite wider than the viewport itself cannot be framed by translation.
   // Disclose that camera fit explicitly, rather than silently scaling the actor.
   if (inspect.follow) {
@@ -383,7 +384,8 @@ function followCharacter(dt) {
   if (!inspect.follow || !inspect.bot) return;
   const h = ctx.S.heroes[inspect.bot]; if (!h || ctx.privacyPending) {stopInspectionFollow();return;}
   const pick = inspect.picks.find(p=>p.type==='hero'&&p.id===inspect.bot);
-  const box = pick?.world ? {...pick.world} : {left:h.x-24,right:h.x+24,top:h.y-70,bottom:h.y};
+  const bounds=pick?.framingWorld||pick?.world;
+  const box = bounds ? {...bounds} : {left:h.x-24,right:h.x+24,top:h.y-70,bottom:h.y};
   if(pick?.anchor){const dx=h.x-pick.anchor[0],dy=h.y-pick.anchor[1];box.left+=dx;box.right+=dx;box.top+=dy;box.bottom+=dy;}
   const {top,left,right,bottom}=layoutInspection((box.right-box.left)*ctx.cam.zi,(box.bottom-box.top)*ctx.cam.zi);
   const targetX = (left+right)/2, targetY = (top+bottom)/2;

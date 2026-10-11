@@ -230,7 +230,7 @@
     if($('#quest').hidden){remember(document.activeElement);if(binding?.focus)returnSpec={focus:binding.focus};}
     label=({'Quest':'Quest details','Task details':'Quest details','Working quest':'Quest details','Hero':'Hero details','Helper':'Hero details','World':'World locations','Region':'Location details','All tasks':'All quests'})[label]||label;
     const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);el.setAttribute('aria-labelledby','dialog-heading');live=null;
-    el.classList.toggle('scene-sheet',binding?.sceneSheet===true);
+    el.classList[binding?.sceneSheet?'add':'remove']('scene-sheet');
     if(binding?.sceneSheet)menu(false); // Do not leave Menu covering the battle behind an edge sheet.
     const button=document.createElement('button');button.className='close text-button';button.textContent='Close';button.setAttribute('aria-label','Close '+label);
     el.append(button);button.onclick=close;
