@@ -64,12 +64,18 @@ function renderIdle() {
   const snap=workingSnapshot(),p=snap?.progress;
   const hall=globalThis.QuestIdleCity?.guildhallModel(p?.level,ctx.W?.props);
   if(!hall)return;
-  const next=globalThis.QuestIdleProgression.evaluate(p).next;
-  const summary=hall.label+' · '+(next?'next milestone at level '+next.level:hall.known?'milestones reached':'progress unknown');
-  const label=ctx.$('#guild-summary');if(label)label.textContent=summary;
+  // Replace the existing detail row, not the XP ratio or another scene label.
+  // Use the board-level tier model only: absent level never implies completion.
+  const goal=!hall.known?'Next Guildhall tier · unknown':hall.next_level!==null?
+    'Next Guildhall tier · Level '+hall.next_level:'Guildhall tiers complete';
+  const summary=goal+' · on this board';
+  const label=ctx.$('#guild-summary');if(label)label.textContent=hall.label+' · '+summary;
   for(const id of ['guild-details','working-guild']){const b=ctx.$('#'+id);if(b){
     b.onclick=()=>{if(!ctx.privacyPending)ctx.UI?.detail(guildLines(),'Guildhall, trophies and stage tokens',{refresh:guildLines,sceneSheet:true});};
-    if(id==='working-guild')b.textContent=summary+' · Trophies & tokens';
+    if(id==='working-guild'){
+      b.textContent=summary;
+      b.title='Completed work on this board determines Guild level. Archiving or reopening tasks can change it. Open Guildhall, trophies and stage tokens.';
+    }
   }}
 }
 function workBinding(item) {
