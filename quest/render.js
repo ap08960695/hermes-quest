@@ -141,7 +141,7 @@ function drawWorking() {
     const a=pair.monster.activity;
     if(a?.hit>0){
       const x=v.ox+pair.monster.x*v.Z,y=v.oy+(pair.y-50-(1.1-a.hit)*22)*v.Z;
-      ctx.UI?.screenLabel('1 DMG',x/ctx.DPR,y/ctx.DPR);
+      ctx.UI?.screenLabel(a.damage+' DMG',x/ctx.DPR,y/ctx.DPR);
       if(a.hitCombo>1)ctx.UI?.screenLabel('COMBO X'+a.hitCombo,x/ctx.DPR,y/ctx.DPR-22);
       if(a.flash>0)fxDraw(v,{k:'slash',x:pair.monster.x-6,y:pair.y-22,dir:1,color:'#fff',glow:'#ffd36b',life:a.flash,max:.18,big:1});
     }

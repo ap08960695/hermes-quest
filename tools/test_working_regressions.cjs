@@ -129,6 +129,16 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  });
  assert.equal(r.foreign,null);assert.equal(r.silent,null);assert.equal(r.windup.total,0);assert.equal(r.contact.total,1);assert(r.contact.flash>0);assert.equal(r.contact.hitCombo,1);assert.deepEqual(r.paused,r.contact);assert.equal(r.second.total,2);assert.equal(r.second.hitCombo,2);assert.equal(r.hp,null);assert.equal(r.seek,null);
  });
+ await check('Working feel large real-action burst retains damage with bounded animation storage',async()=>{
+ const d=fixture();await load(d);const r=await page.evaluate(()=>{
+ const row=S.work.active().find(i=>i.worker_observed),state=()=>workingPairs().find(p=>p.item.ref===row.ref).monster.activity;
+ S.play=true;D.meta.to=S.t+3600;
+ for(let i=0;i<1000;i++)apply({t:S.t+i/10000,kind:'tool',tool:'terminal',bot:row.bot_ref,task:row.task_ref},true);
+ update(.01);const queued=state().pending.length;
+ for(let i=0;i<80;i++){update(.7);update(.01);}
+ return {queued,total:state().total,pending:state().pending.length,combo:state().hitCombo,damage:state().damage};
+ });assert(r.queued<=64);assert.equal(r.total,1000);assert.equal(r.pending,0);assert.equal(r.combo,1000);assert(r.damage>1);
+ });
  await check('Working feel sticky order, stable quest number and helper parent link',async()=>{
  const d=fixture();const i=d.working.items[0];d.sessions=[{session_ref:'aaaaaaaaaaaaaaaaaaaa',bot:i.bot_ref,task:i.task_ref,is_subagent:false,started_at:d.meta.from_,ended_at:null},{session_ref:'bbbbbbbbbbbbbbbbbbbb',parent_session_ref:'aaaaaaaaaaaaaaaaaaaa',bot:i.bot_ref,task:i.task_ref,is_subagent:true,started_at:d.meta.from_,ended_at:null}];await load(d);
  assert.equal(await page.locator('.work-helper').count(),1);assert((await page.locator('.work-helper').textContent()).includes('Open parent'));await page.locator('.work-helper').click();assert((await page.locator('#quest').textContent()).includes(i.quest_label));await page.locator('#quest .close').click();

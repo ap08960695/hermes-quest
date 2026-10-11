@@ -19,7 +19,10 @@ function stepWorkCombat(dt) {
     if(!item||(item.started_at!=null&&e.t<item.started_at))continue;
     let a=workCombat.get(item.ref);
     if(!a||a.run!==item.run_ref){a={run:item.run_ref,pending:[],atk:-1,flash:0,hit:0,combo:0,last:-Infinity,total:0};workCombat.set(item.ref,a);}
-    a.combo=e.t-a.last<=5&&e.t>=a.last?a.combo+1:1;a.last=e.t;a.pending.push(a.combo);
+    a.combo=e.t-a.last<=5&&e.t>=a.last?a.combo+1:1;a.last=e.t;
+    // Bound burst storage without discarding observed calls or inventing damage.
+    if(a.pending.length<32)a.pending.push({combo:a.combo,damage:1});
+    else {const tail=a.pending[a.pending.length-1];tail.combo=a.combo;tail.damage++;}
   }
   workEvents=[];
   for(const [ref,a] of workCombat){
@@ -27,9 +30,9 @@ function stepWorkCombat(dt) {
     if(!item||item.status!=='running'||item.run_ref!==a.run){workCombat.delete(ref);continue;}
     if(!ctx.S.play)continue;
     a.flash=Math.max(0,a.flash-dt);a.hit=Math.max(0,a.hit-dt);
-    if(a.atk<0){if(a.pending.length){a.currentCombo=a.pending.shift();a.atk=0;}}
+    if(a.atk<0){if(a.pending.length){a.current=a.pending.shift();a.atk=0;}}
     else {const before=a.atk;a.atk+=dt;
-      if(before<.22&&a.atk>=.22){a.flash=.18;a.hit=1.1;a.total++;a.hitCombo=a.currentCombo;}
+      if(before<.22&&a.atk>=.22){a.flash=.18;a.hit=1.1;a.damage=a.current.damage;a.total+=a.damage;a.hitCombo=a.current.combo;}
       if(a.atk>=.65)a.atk=-1;
     }
   }
