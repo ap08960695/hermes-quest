@@ -108,7 +108,8 @@ const server=http.createServer((req,res)=>{
       assert.equal(await page.evaluate(()=>{draw();return inspect.picks.filter(p=>p.type==='hero').length;}),width<=760?0:2);
       const attention=fixture();attention.working.items.push({...attention.working.items[0],ref:'opaque-unknown',status:'unknown'});
       await page.evaluate(data=>{loadReplay(data);S.play=false;hudT=1;hud(0);draw();},attention);
-      assert((await page.locator('#working-rows').textContent()).includes('Failed · 2 quests'));
+      assert((await page.locator('#working-rows').textContent()).includes('Failed · 1 quests'));
+      assert((await page.locator('#working-rows').textContent()).includes('Unknown · 1 quests'));
       assert((await page.locator('#working-rows').textContent()).includes('Unknown · Next: check the source'));
       if(process.env.SCENE_STATE_ROOT){
         await page.evaluate(()=>{S.work.clear();hudT=1;hud(0);});
