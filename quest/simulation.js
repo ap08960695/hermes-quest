@@ -8,7 +8,7 @@ function later(sec, f) { ctx.S.later.push({at: ctx.S.rt + sec, f}); }
 
 // ---------- update ----------
 function update(dt) {
-  if (ctx.S.stop > 0) { ctx.stepWorkCombat?.(0); ctx.S.stop -= dt; return; } // drain observations during hit-stop
+  if (ctx.S.stop > 0) { ctx.stepWorkCombat?.(dt); ctx.S.stop -= dt; return; } // Working feedback has its own cosmetic clock
   if (ctx.S.play) {
     if (ctx.liveFeed && ctx.following) { ctx.S.t = Math.max(ctx.S.t, Date.now() / 1000); ctx.D.meta.to = Math.max(ctx.D.meta.to, ctx.S.t); }
     else ctx.S.t += dt * ctx.S.speed;

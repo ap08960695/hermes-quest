@@ -140,14 +140,14 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  Object.defineProperty(document,'hidden',{configurable:true,value:true});for(let i=0;i<1000;i++)apply({...e,id:'hidden-'+i},true);
  delete document.hidden;update(.01);const hidden=workingPairs()[0].monster.activity||null;
  S.play=true;S.stop=100;for(let i=0;i<1000;i++){apply({...e,id:'hit-stop-'+i},true);update(.01);}
- const a=workingPairs()[0].monster.activity;return {hidden,total:a.total,pending:a.pending.length,damage:a.pending.reduce((n,p)=>n+p.damage,0)+(a.current?.damage||0)};});
- assert.equal(r.hidden,null);assert.equal(r.total,0);assert(r.pending<=32);assert.equal(r.damage,1000);
+ const a=workingPairs()[0].monster.activity;return {hidden,total:a.total,pending:a.pending.length,damage:a.total+a.pending.reduce((n,p)=>n+p.damage,0)+(a.atk>=0&&a.atk<.22?a.current.damage:0)};});
+ assert.equal(r.hidden,null);assert(r.total>0);assert(r.pending<=32);assert.equal(r.damage,1000);
  });
  await check('R2 sparring 60 seconds changes no HP, damage, actions, mana or rewards; pause and reduced motion',async()=>{
  const d=fixture();Object.assign(d.working.items[0],{action_count:12,last_action_at:Date.parse(d.working.as_of)/1000-8});await load(d);
  const r=await page.evaluate(()=>{S.play=true;S.speed=1;D.meta.to=S.t+3600;
  const values=()=>JSON.stringify({progress:S.work.progress(),items:S.work.items(),mana:S.mana,vault:S.vault,hp:workingPairs().map(p=>p.monster.hp),damage:workingPairs().map(p=>p.monster.activity?.total||0)});
- const before=values();let gap=0,maxGap=0,beats=0;for(let i=0;i<600;i++){update(.1);const p=workingPairs()[0];if(p.hero.spar>0){gap=0;beats++;}else{gap+=.1;maxGap=Math.max(maxGap,gap);}}
+ const before=values();let gap=0,maxGap=0,beats=0;for(let i=0;i<600;i++){if(i<100)S.stop=1;else S.stop=0;update(.1);const p=workingPairs()[0];if(p.hero.spar>0){gap=0;beats++;}else{gap+=.1;maxGap=Math.max(maxGap,gap);}}
  const after=values();S.play=false;const paused=workingPairs()[0].hero.spar;update(10);const freeze=workingPairs()[0].hero.spar;
  document.querySelector('#calm').click();const calm=workingPairs()[0].hero.spar;document.querySelector('#calm').click();
  S.t=Date.parse('2026-10-11T03:00:00Z')/1000;hudT=1;hud(0);return {before,after,maxGap,beats,paused,freeze,calm,row:document.querySelector('#working-rows button').textContent};});
