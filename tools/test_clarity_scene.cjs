@@ -90,10 +90,12 @@ const server=http.createServer((req,res)=>{
  await filter('all');
  for(const [selector,heading] of [['#feed section button','Activity details'],['#camps section button','Campaign details']]){
    await page.locator(selector).first().evaluate(el=>el.click());assert.equal(await page.locator('#dialog-heading').textContent(),heading);
+   await page.evaluate(()=>UIPanels.menu(false)); // The open data panel outlives its drawer.
    const fail=async()=>page.evaluate(async()=>{liveFeed=true;lastPollOk=Date.now();pollFailures=0;const old=fetch;for(const status of [422,503,503]){window.fetch=async()=>({ok:false,status});await pollEvents();clearTimeout(pollTimer);}hudT=1;hud(0);window.fetch=old;});
    await fail();
    let text=await page.locator('#quest').textContent();for(const copy of ['Stale data','Last successful update:','Reason:','Retrying in'])assert(text.includes(copy),heading+' '+copy);
    assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#quest .close')),true,'stale does not steal focus');await privacy();
+   await page.evaluate(()=>UIPanels.menu(true));
    await page.locator('#quest .close').click();await page.locator(selector).first().evaluate(el=>el.click());assert((await page.locator('#quest').textContent()).includes('Stale data'),'open while stale');
    await page.evaluate(async()=>{const old=fetch;window.fetch=async()=>({ok:true,json:async()=>({state:'online',events:[],bots:[],tasks:[],cursor:null})});await pollEvents();clearTimeout(pollTimer);hudT=1;hud(0);window.fetch=old;});
    text=await page.locator('#quest').textContent();for(const copy of ['Stale data','Last successful update:','Reason:','Retrying in'])assert(!text.includes(copy),'recovery clears '+copy);

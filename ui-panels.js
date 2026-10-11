@@ -450,6 +450,11 @@
   function status(text,state,extra) {
     const was=connectionState;
     connectionState=state;connectionText=text;staleInfo=state==='stale'?(extra||{updated:null,reason:'update failed'}):null;mode(extra?.source||sourceMode);
+    // Activity rendering can be skipped while Menu is closed. Its open detail
+    // still follows connection transitions, independently of drawer visibility.
+    feedOptions={...feedOptions,stale:state==='stale',staleInfo};
+    campOptions={...campOptions,stale:state==='stale',staleInfo};
+    refreshDialogStatus();
     control('#connection',({online:'connected',file:'snapshot',stale:'offline'})[state]||state,text,state==='offline'||state==='stale'?'alert':'normal');
     $('#connection .control-name').textContent=state==='offline'&&extra?.status?'Server error ('+extra.status+')':({loading:'Loading',online:'Connected',file:'Data source',snapshot:'Live paused',offline:'Offline',stale:'Live paused'})[state]||'Connection details';
     $('#connection').title=text;
