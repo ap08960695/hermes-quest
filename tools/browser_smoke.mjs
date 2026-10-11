@@ -248,7 +248,7 @@ async function runLiveMenu(browser,base) {
     state='legacy-fallback';await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});
     check((await page.locator('#connection .control-name').textContent()).includes('Live paused'),'Saved snapshot falsely connected');
     state='offline';await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});
-    check((await page.locator('#connection .control-name').textContent()).includes('Offline'),'Offline falsely connected');
+    check((await page.locator('#connection .control-name').textContent()).includes('Server error (503)'),'Server error falsely connected or confused with network Offline');
     await page.click('#menu-toggle');check(await page.locator('#issues').isVisible(),'Offline/blocked hidden in focus mode');
     await page.screenshot({path:path.join(outDir,browserName+'-synthetic-live-focus.png')});
     check(errors.length===0,errors.join('; '));
@@ -374,8 +374,8 @@ async function runRetention(browser,base) {
       S.play=false;cancelAnimationFrame(raf);clearTimeout(pollTimer);
       const d=structuredClone(D),base=d.meta.from_,old=d.tasks[0],oldBot=d.bots[0];
       old.id='retention-old';old.title='SYNTHETIC_EVICTED_TITLE';old.parents=[];old.bot=oldBot.id;
-      const hero={...oldBot,id:'retention-hero-old',name:'SYNTHETIC_EVICTED_HERO'};
-      d.meta.show_titles=true;d.bots=[hero,...Array.from({length:257},(_,i)=>({...oldBot,id:'retention-hero-'+i,name:'Synthetic hero '+i}))];
+      const hero={...oldBot,id:'retention-hero-old',name:'SYNTHETIC_EVICTED_HERO',display_name:'SYNTHETIC_EVICTED_HERO'};
+      d.meta.show_titles=true;d.meta.show_profile_names=true;d.bots=[hero,...Array.from({length:257},(_,i)=>({...oldBot,id:'retention-hero-'+i,name:'Synthetic hero '+i,display_name:'Synthetic hero '+i}))];
       d.tasks=[old,...Array.from({length:257},(_,i)=>({...old,id:'retention-'+i,title:'Synthetic task '+i,bot:'retention-hero-0'}))];
       d.events=[{id:'retention-old-event',t:base+1,task:old.id,bot:hero.id,kind:'created'},
         {id:'retention-old-hero',t:base+1.5,bot:hero.id,kind:'heartbeat'},{id:'retention-new-event',t:base+2,task:'retention-256',kind:'created'}];
@@ -508,6 +508,7 @@ async function runSceneTruth(browser,base) {
   try {
     await page.goto(base+'/',{waitUntil:'load'});
     await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Sample data normal',null,{polling:100});
+    await page.locator('#hint-dismiss').click();
     await page.evaluate(()=>{reset(0);
       // Hold idle social timers for this standing fixture, not product behavior:
       // all 25 entities must settle in their assigned yards, not wander out of
