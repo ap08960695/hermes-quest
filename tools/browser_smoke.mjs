@@ -175,7 +175,7 @@ async function runLoadStates(browser,base) {
         check((await page.locator('#connection').getAttribute('aria-label')).includes('Loading'),'Loading confused with empty');
         await page.click('#menu-toggle');check(await page.locator('#menu').isVisible(),'Loading Menu unavailable');release();
       } else if(state==='error'){
-        await page.waitForFunction(()=>document.querySelector('#issues').textContent==='Offline');
+        await page.waitForFunction(()=>document.querySelector('#issues').textContent==='Unable to load data · reload to retry');
         check((await page.locator('#connection').getAttribute('aria-label')).includes('Unable to load data'),'Error confused with empty');
         await page.click('#issues');check((await page.locator('#quest').textContent()).includes('Unable to load data'),'Boot error details unavailable');
       } else {
@@ -257,6 +257,13 @@ async function runLiveStale(browser,base) {
   // Synthetic fake server: failing polls must raise the compact warning (also with the Menu closed),
   // leak nothing internal, leave playback/camera/cursor alone, and one success must restore Live.
   const check=(v,m)=>{if(!v)throw Error(m);},demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json')));
+  const configHint='Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)';
+  const reasonFor=failure=>failure===401?'sign-in needed':typeof failure==='number'&&failure<500?'server rejected':failure==='network'?'offline':'server error';
+  const checkStale=(v,failure,message)=>{
+    const reason=reasonFor(failure),hint=failure===503?' · '+configHint:'';
+    check(v.stale&&/ · Paused$/.test(v.mode||'')&&new RegExp('^Last update \\d\\d:\\d\\d · '+reason+'$').test(v.note||'')&&
+      v.issues==='Live paused · not updating · '+v.note.replace(/^Last update/,'last update')+hint,message+': '+JSON.stringify(v));
+  };
   for(const [width,height] of [[1280,800],[375,667],[320,568]]){
     const ctx=await browser.newContext({viewport:{width,height}}),page=await ctx.newPage(),errors=[];let mode='ok',seq=0;
     page.on('pageerror',e=>errors.push(e.message));
@@ -273,17 +280,24 @@ async function runLiveStale(browser,base) {
       const poll=async next=>{mode=next;await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});};
       const view=()=>page.evaluate(()=>{const h=s=>{const e=document.querySelector(s);return e&&!e.hidden?e.textContent:null;},r=document.querySelector('#focus-bar').getBoundingClientRect();
         return {mode:h('#mode'),issues:h('#issues'),note:h('#live-note'),announce:document.querySelector('#live-announce').textContent,
+          stale:pollStale,failures:pollFailures,boundary:cursor,
           live:document.querySelector('#live-announce').getAttribute('aria-live'),role:document.querySelector('#live-announce').getAttribute('role'),
           menuClosed:document.querySelector('#menu').hidden,fits:r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,
           overflow:document.documentElement.scrollWidth>innerWidth+1,state:JSON.stringify([S.speed,S.play,following,cam.tx,cam.ty,cam.zi])};});
       await poll('ok');const online=await view();
       check(online.menuClosed&&!online.issues&&!online.note&&/Connected/.test(online.mode),'baseline not a quiet Live');
       const raf1=await page.evaluate(()=>S.t);
-      // Two transient failures: still the old quiet Offline; third: the warning.
-      await poll(503);await poll(503);let v=await view();
-      check(v.issues==='Offline'&&!v.note,'warning raised before 3 consecutive failures');
+      // Data 503 explains configuration immediately, without declaring stale before failure three.
+      const cursorBefore=online.boundary;let v;
+      for(let n=1;n<=2;n++){
+        await poll(503);v=await view();
+        check(v.issues===configHint&&!v.note&&!v.stale&&v.failures===n&&/ · Offline$/.test(v.mode||''),'failure '+n+' guidance/stale threshold: '+JSON.stringify(v));
+        check(v.boundary===cursorBefore&&v.state===online.state&&!/resumed/i.test(v.announce),'transient failure reset playback/cursor or announced recovery');
+      }
       await poll(503);v=await view();
-      check(v.menuClosed&&v.issues==='Live paused · not updating'&&/^Last update \d\d:\d\d · server error$/.test(v.note),'3rd failure: '+JSON.stringify(v));
+      checkStale(v,503,'3rd failure');
+      check(v.menuClosed&&v.failures===3&&v.boundary===cursorBefore&&v.state===online.state,'3rd failure reset playback/cursor');
+      check(!/CANARY|events\?|\/api\/|HTTP|[\\/]/.test(v.issues+v.note+v.announce),'503 leaked response/path data');
       check(/^Live paused\./.test(v.announce)&&v.live==='polite'&&v.role==='status','warning not announced politely');
       check(v.fits&&!v.overflow,'warning overflows at '+width);
       await page.waitForTimeout(600);
@@ -291,11 +305,12 @@ async function runLiveStale(browser,base) {
       if(width===320||width===1280)await page.screenshot({path:path.join(outDir,browserName+'-live-stale-'+width+'.png')});
       // Recovery on one success; transitions announce once and clear.
       await poll('ok');v=await view();
-      check(!v.issues&&!v.note&&/Connected/.test(v.mode)&&v.announce==='Live updates resumed.','one success did not restore Live: '+JSON.stringify(v));
+      check(!v.issues&&!v.note&&!v.stale&&v.failures===0&&/Connected/.test(v.mode)&&v.announce==='Live updates resumed.','one success did not restore Live: '+JSON.stringify(v));
       // A 4xx warns at once with the human reason, and never prints payload/URL/cursor.
       for(const [code,reason] of [[401,'sign-in needed'],[422,'server rejected']]){
         const before=await view();await poll(code);v=await view();
-        check(v.issues==='Live paused · not updating'&&v.note.endsWith(' · '+reason),code+' reason: '+JSON.stringify(v));
+        checkStale(v,code,code+' immediate warning');
+        check(v.failures===1&&v.note.endsWith(' · '+reason),code+' reason: '+JSON.stringify(v));
         check(v.state===before.state,code+' reset speed/follow/camera');
         await page.click('#issues');const dialog=await page.locator('#quest').textContent();
         check(/Reason: /.test(dialog)&&!/CANARY|events\?|\/api\/|cursor|HTTP/i.test(dialog+JSON.stringify(v)),'internal data leaked in '+code+': '+dialog);
@@ -312,7 +327,8 @@ async function runLiveStale(browser,base) {
         await poll('ok');
         for(const failure of seqn){
           await poll(failure);v=await view();
-          check(v.issues==='Live paused · not updating'&&/^Last update \d\d:\d\d · /.test(v.note||''),'mixed '+seqn+' dropped warning at '+failure+': '+JSON.stringify(v));
+          checkStale(v,failure,'mixed '+seqn+' dropped warning at '+failure);
+          check(!/CANARY|events\?|\/api\/|HTTP|[\\/]/.test(v.issues+v.note+v.announce),'mixed failure leaked response/path data');
           check(!/resumed/i.test(v.announce),'resumed announced on failed poll after '+failure+': '+v.announce);
           check(v.menuClosed&&v.fits&&!v.overflow,'mixed layout at '+width);
         }
@@ -321,10 +337,11 @@ async function runLiveStale(browser,base) {
       }
       // 4xx -> failure -> 200, and a fresh transient run after recovery is quiet for 1-2 failures, stale on the 3rd.
       await poll(404);await poll(503);v=await view();
-      check(v.issues==='Live paused · not updating'&&!/resumed/i.test(v.announce),'4xx->503 lost warning: '+JSON.stringify(v));
+      checkStale(v,503,'4xx->503 lost warning');
+      check(!/resumed/i.test(v.announce),'4xx->503 announced recovery');
       await poll('ok');await poll(503);v=await view();
-      check(v.issues==='Offline'&&!v.note,'fresh transient 1 not quiet: '+JSON.stringify(v));
-      await poll(500);v=await view();check(v.issues==='Offline'&&!v.note,'fresh transient 2 not quiet');
+      check(v.issues===configHint&&!v.note&&!v.stale&&v.failures===1,'fresh transient 1 guidance/threshold: '+JSON.stringify(v));
+      await poll(500);v=await view();check(v.issues==='Offline · retrying in 10s'&&!v.note&&!v.stale&&v.failures===2,'fresh transient 2 not quiet');
       await poll('network');v=await view();check(/^Live paused/.test(v.issues||'')&&!!v.note,'fresh transient 3 not stale');
       await poll('ok');
       // Hidden-tab behaviour is unchanged: no poll and no scheduling while hidden.
