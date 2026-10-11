@@ -23,19 +23,42 @@ function observeWork(e, animate) {
 }
 function stepWorkCombat(dt) {
   if(ctx.S.play)sparTime+=dt;
+  const changed=new Set();
   for(const e of workEvents){
     const item=ctx.S.work.active().find(i=>i.worker_observed&&i.task_ref===e.task&&i.bot_ref===e.bot);
     if(!item||(item.started_at!=null&&e.t<item.started_at))continue;
     let a=workCombat.get(item.ref);
-    if(!a||a.run!==item.run_ref){a={run:item.run_ref,pending:[],seen:new Set(),atk:-1,flash:0,hit:0,combo:0,last:-Infinity,total:0,cooldown:0};workCombat.set(item.ref,a);}
+    if(!a||a.run!==item.run_ref){a={run:item.run_ref,pending:[],incoming:[],seen:new Set(),atk:-1,flash:0,hit:0,combo:0,last:-Infinity,total:0,cooldown:0};workCombat.set(item.ref,a);}
     const key=ctx.eventKey(e);if(a.seen.has(key))continue;a.seen.add(key);
     if(a.seen.size>4000)a.seen.delete(a.seen.values().next().value);
-    a.combo=e.t-a.last<=5&&e.t>=a.last?a.combo+1:1;a.last=e.t;
-    // Bound burst storage without discarding observed calls or inventing damage.
-    if(a.pending.length<32)a.pending.push({combo:a.combo,damage:1,at:e.t});
-    else {const tail=a.pending[a.pending.length-1];tail.combo=a.combo;tail.damage++;}
+    // Keep only ordering metadata until contact. Counts/ranges alone cannot
+    // losslessly split a coalesced burst when an older action arrives inside it.
+    const {t,id,bot,session_ref,source_seq,source_slot}=e;
+    a.incoming.push({t,id,bot,session_ref,source_seq,source_slot});changed.add(a);
   }
   workEvents=[];
+  for(const a of changed){
+    const windup=a.atk>=0&&a.atk<.22,limit=windup?33:32;
+    const pending=windup?[a.current,...a.pending]:[...a.pending];
+    a.incoming.sort(ctx.eventOrder);
+    for(const e of a.incoming){
+      const range=pending.find(p=>p.events.length>1&&ctx.eventOrder(p.events[0],e)<=0&&ctx.eventOrder(e,p.events.at(-1))<=0);
+      if(range){range.events.push(e);range.events.sort(ctx.eventOrder);}
+      else pending.push({events:[e]});
+      pending.sort((x,y)=>ctx.eventOrder(x.events[0],y.events[0]));
+      // Preserve existing coalesced cohorts instead of expanding their cadence.
+      if(pending.length>limit){const tail=pending.pop();pending.at(-1).events.push(...tail.events);}
+    }
+    a.incoming=[];let combo=a.combo,last=a.last;
+    for(const p of pending){
+      for(const e of p.events){combo=e.t-last<=5&&e.t>=last?combo+1:1;last=e.t;}
+      Object.assign(p,{combo,damage:p.events.length,at:p.events[0].t,last});
+    }
+    // Wind-up is not a completed hit. Replace its payload, not its clock;
+    // contacted work stays immutable and is never included in reconciliation.
+    if(windup)a.current=pending.shift();
+    a.pending=pending;
+  }
   for(const [ref,a] of workCombat){
     const item=ctx.S.work.item(ref);
     if(!item||item.status!=='running'||item.run_ref!==a.run){workCombat.delete(ref);continue;}
@@ -44,7 +67,8 @@ function stepWorkCombat(dt) {
     a.cooldown=Math.max(0,a.cooldown-dt);
     if(a.atk<0){if(a.pending.length&&!a.cooldown){a.current=a.pending.shift();a.atk=0;a.cooldown=.9;}}
     else {const before=a.atk;a.atk+=dt;
-      if(before<.22&&a.atk>=.22){a.flash=.18;a.hit=1.1;a.damage=a.current.damage;a.total+=a.damage;a.hitCombo=a.current.combo;}
+      if(before<.22&&a.atk>=.22){a.flash=.18;a.hit=1.1;a.damage=a.current.damage;a.total+=a.damage;a.hitCombo=a.current.combo;
+        a.combo=a.current.combo;a.last=a.current.last;delete a.current.events;}
       if(a.atk>=.65)a.atk=-1;
     }
   }

@@ -1150,7 +1150,9 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     for i, call in enumerate(_json(m['tool_calls'], [])):
                         fn = call.get('function') or {}
                         name = fn.get('name') or 'tool'
-                        e = dict(base, kind='tool', tool=name)
+                        # Safe source ordinals, independent of opaque event IDs. The
+                        # existing keyed session_ref + bot distinguish independent DBs.
+                        e = dict(base, kind='tool', tool=name, source_seq=m['seq'], source_slot=i)
                         if sub:
                             e['sub'] = sub
                         if name in ('terminal', 'patch', 'write_file'):
@@ -1168,7 +1170,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                             e.update(plus=len(re.findall(r'\\n\+', args)) or args.count('\\n'), minus=len(re.findall(r'\\n-', args)))
                         emit(source, f'{m["seq"]}:tool:{i}', e)
                     if m['role'] == 'assistant' and not _json(m['tool_calls'], []) and m['chars']:
-                        emit(source, f'{m["seq"]}:activity', dict(base, kind='activity'))
+                        emit(source, f'{m["seq"]}:activity', dict(base, kind='activity', source_seq=m['seq'], source_slot=0))
                     if m['role'] == 'tool' and m['tool_name'] == 'terminal':
                         content = m['content'] or ''
                         fail = re.search(r'"exit_code"\s*:\s*(-?\d+)', content)
@@ -1425,7 +1427,9 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         changed_tasks += [t for t in tasks if t['id'] in referenced and t['id'] not in changed_ids and task_keys[t['id']] not in delivered]
     state['delivered'] = sorted((delivered | {task_keys[t['id']] for t in changed_tasks}) & set(state['tasks']))
     events = safe(events)
-    events.sort(key=lambda e: (e['t'], e['id']))
+    events.sort(key=lambda e: (e['t'],
+                              (1, e['bot'], e['session_ref'], e['source_seq'], e['source_slot'])
+                              if 'source_seq' in e else (0, e['id']), e['id']))
     return dict(meta=meta(), session_data=session_data, tasks=changed_tasks, bots=changed_bots,
                 sessions=safe(list(session_entities.values())), events=events, working=working,
                 cursor=_cursor(state))

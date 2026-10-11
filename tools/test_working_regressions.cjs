@@ -17,7 +17,7 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  try{for(const [engine,type] of Object.entries({chromium,firefox})){
  const browser=await type.launch({headless:true});
  try{const context=await browser.newContext({viewport:{width:1440,height:900}});
- await context.addInitScript(()=>{window.__questTestGlobals=true;let factory;Object.defineProperty(window.HQModules={},'createGameUI',{get:()=>ctx=>(window.reviewUI=factory(ctx)),set:v=>factory=v});});
+ await context.addInitScript(()=>{window.__questTestGlobals=true;window.HQModules={};for(const [name,expose] of [['createGameUI','reviewUI'],['createHistory','reviewHistory']]){let factory;Object.defineProperty(window.HQModules,name,{get:()=>ctx=>(window[expose]=factory(ctx)),set:v=>factory=v});}});
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/data/demo.json',r=>r.fulfill({json:fixture()}));await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>typeof loop.last==='number');
  await page.evaluate(()=>cancelAnimationFrame(raf));
@@ -165,6 +165,40 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  // Trigger one source-aged hit for the visible disclosure oracle.
  apply({...e,id:'action-four'},true);update(.01);update(.3);UIPanels.screenLabel=(s,...args)=>{labels.push(s);old(s,...args);};draw();UIPanels.screenLabel=old;
  return {total:last,contacts,labels};});assert.equal(r.total,3);assert.equal(r.contacts.length,3);for(let i=1;i<r.contacts.length;i++)assert(r.contacts[i]-r.contacts[i-1]>=.8);assert(r.labels.some(s=>/^Observed action · \d+s ago$/.test(s)));
+ });
+ for(const contacted of [false,true])await check('R3 late batch sorts uncontacted work; completed contact immutable '+contacted,async()=>{
+ const r=await page.evaluate(contacted=>{const row=S.work.active()[0];liveFeed=true;following=true;S.play=true;S.speed=1;
+ const t=S.t-10,e={t,kind:'tool',bot:row.bot_ref,task:row.task_ref,session_ref:'aaaaaaaaaaaaaaaaaaaa',source_seq:2,source_slot:0,id:'z-first'};
+ const delta=events=>({events,bots:[],tasks:[],cursor:null,working:{as_of:S.work.asOf+1,items:S.work.items(),resting_count:0,latest_order:null,progress:S.work.progress()}});
+ mergeDelta(delta([e,{...e,id:'a-next',t:t+1,source_seq:3}]));update(.01);
+ const contacts=[];let last=0;const step=dt=>{update(dt);const a=workingPairs()[0].monster.activity;if(a.total!==last){contacts.push({at:a.current.at,combo:a.hitCombo,damage:a.damage});last=a.total;}};
+ if(contacted)step(.23);
+ mergeDelta(delta([{...e,id:'late',t:t-1,source_seq:1}]));
+ mergeDelta(delta([e,{...e,id:'a-next',t:t+1,source_seq:3},{...e,id:'late',t:t-1,source_seq:1}]));
+ for(let i=0;i<200;i++)step(.02);
+ const before=last,snapshot=structuredClone(D);snapshot.working={as_of:S.work.asOf,items:S.work.items(),resting_count:0,latest_order:null,progress:S.work.progress()};loadReplay(snapshot,null,S.t);update(.3);
+ return {t,contacts,before,reload:workingPairs()[0].monster.activity||null};},contacted);
+ assert.deepEqual(r.contacts.map(c=>c.at),contacted?[r.t,r.t-1,r.t+1]:[r.t-1,r.t,r.t+1]);
+ assert.deepEqual(r.contacts.map(c=>c.combo),contacted?[1,1,2]:[1,2,3]);assert.equal(r.before,3);assert.equal(r.contacts.reduce((n,c)=>n+c.damage,0),3);assert.equal(r.reload,null);
+ });
+ await check('R3 equal-time ordinals beat IDs and mixed legacy rows have total order',async()=>{
+ const r=await page.evaluate(()=>{const row=S.work.active()[0];S.play=true;D.meta.to=S.t+3600;
+ const e={t:S.t,kind:'tool',bot:row.bot_ref,task:row.task_ref,session_ref:'aaaaaaaaaaaaaaaaaaaa',source_seq:1,source_slot:0,id:'z-read'};
+ const events=[{...e,id:'a-terminal',source_slot:1},e,{...e,id:'q-message',source_seq:2},{...e,id:'b-independent',session_ref:'bbbbbbbbbbbbbbbbbbbb'}, {t:e.t,id:'legacy-z'}, {t:e.t,id:'legacy-a'}];
+ const sorted=[...events].sort(reviewHistory.eventOrder),reverse=[...events].reverse().sort(reviewHistory.eventOrder);
+ apply(events[0],true);update(.01);apply(e,true);update(.01);
+ const a=workingPairs()[0].monster.activity;const first=a.current.combo;update(.23);const contact=a.current.at;
+ return {ids:sorted.map(e=>e.id),reverse:reverse.map(e=>e.id),first,contact,total:a.total};});
+ assert.deepEqual(r.ids,['legacy-a','legacy-z','z-read','a-terminal','q-message','b-independent']);assert.deepEqual(r.ids,r.reverse);assert.equal(r.first,1);assert.equal(r.total,1);
+ });
+ await check('R3 late action inside coalesced burst retains exact source ranges and damage',async()=>{
+ const r=await page.evaluate(()=>{const row=S.work.active()[0];S.play=true;D.meta.to=S.t+3600;const t=S.t;
+ const e={kind:'tool',bot:row.bot_ref,task:row.task_ref};for(let i=0;i<100;i++)apply({...e,id:'burst-'+i,t:t+i/100},true);
+ update(.01);apply({...e,id:'inside-tail',t:t+.5},true);apply({...e,id:'earliest',t:t-.01},true);update(.01);
+ const a=workingPairs()[0].monster.activity;const first=a.current.at,queued=a.pending.length;
+ let last=0;const contacts=[];for(let i=0;i<2000;i++){update(.02);if(a.total!==last){contacts.push({at:a.current.at,damage:a.damage,combo:a.hitCombo});last=a.total;}}
+ return {t,first,queued,contacts,total:a.total,waiting:a.pending.reduce((n,p)=>n+p.events.length,0)+(a.current?.events?.length||0)};});
+ assert.equal(r.first,r.t-.01);assert(r.queued<=32);assert.equal(r.total,102);assert.equal(r.waiting,0);assert.equal(r.contacts.reduce((n,c)=>n+c.damage,0),102);assert.equal(r.contacts.at(-1).combo,102);assert(r.contacts.at(-1).damage>1);for(let i=1;i<r.contacts.length;i++)assert(r.contacts[i].at>=r.contacts[i-1].at);
  });
  await check('Working feel large real-action burst retains damage with bounded animation storage',async()=>{
  const d=fixture();await load(d);const r=await page.evaluate(()=>{

@@ -56,6 +56,10 @@ synthetic.
   (`messages` table); memory query/result prose is not materialized. The non-JSON1 fallback preserves the
   same privacy boundary. The extractor does not open or query any memory store.
 - Tool arguments are not exported. Patch and write calls report only approximate added/removed line counts.
+- Tool/activity events carry numeric `source_seq` (message row order) and `source_slot` (call array position).
+  At equal timestamps, replay orders these by bot, keyed session reference, then ordinals; independent
+  sources have a deterministic tie-break, not an inferred causal relationship. Old events without ordinals
+  retain their ID tie-break. These fields contain no tool names, arguments, message text or raw session IDs.
 - Database access is read-only (`mode=ro`, `PRAGMA query_only`).
 
 ## What redaction masks (opt-in text)

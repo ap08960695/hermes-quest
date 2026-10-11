@@ -74,8 +74,21 @@ function eventKey(e) {
   return e.id !== undefined ? String(e.id) : JSON.stringify(canonical(e));
 }
 function eventOrder(a, b) {
+  const ordinal = e => Number.isSafeInteger(e.source_seq) && e.source_seq >= 0 &&
+    Number.isSafeInteger(e.source_slot) && e.source_slot >= 0 && typeof e.bot === 'string' &&
+    ctx.validSessionRef(e.session_ref);
+  const ao=ordinal(a),bo=ordinal(b);
+  if(a.t!==b.t)return a.t-b.t;
+  // A total ordering (including mixed old/new payloads), never pairwise fallback
+  // to IDs between ordinal rows: that would make the comparator non-transitive.
+  if(ao!==bo)return ao?1:-1;
+  if(ao){
+    for(const key of ['bot','session_ref','source_seq','source_slot']){
+      if(a[key]!==b[key])return a[key]<b[key]?-1:1;
+    }
+  }
   const x = String(a.id ?? ''), y = String(b.id ?? '');
-  return a.t - b.t || (x < y ? -1 : x > y ? 1 : 0);
+  return x < y ? -1 : x > y ? 1 : 0;
 }
 function restoreCheckpoint() {
   Object.assign(ctx.S, ctx.emptyState(), checkpoint ? cloneState(checkpoint.state) : {});
