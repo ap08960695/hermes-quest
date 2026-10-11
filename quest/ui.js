@@ -13,11 +13,19 @@ function workingSnapshot() {
 }
 // Recap is a visit snapshot, not a replay reward or an all-time completion ledger.
 let visitRecap=null, recapStorage=true;
-function initIdleRecap({events=ctx.D.events,meta=ctx.D.meta,progress=ctx.D.working?.progress}={}) {
+function invalidateIdleRecap() {
+  visitRecap=null;
+  const button=ctx.$('#idle-recap');
+  if(button){button.hidden=true;button.onclick=null;button.textContent='';}
+}
+function initIdleRecap({events=ctx.D.events,meta=ctx.D.meta,progress=ctx.S.work?.has?ctx.S.work.progress():ctx.D.working?.progress}={}) {
   const R=globalThis.QuestIdleRecap,button=ctx.$('#idle-recap');
   if(!R||!button)return;
-  let seen=[];
+  let seen=[];recapStorage=true;
   try {seen=R.decodeSeen(window.localStorage.getItem(R.STORAGE_KEY));} catch (_) {recapStorage=false;}
+  // Snapshot arrays/metadata: later polls must not change what this visit shows
+  // or what explicit presentation acknowledges.
+  events=events.map(e=>({...e}));meta={...meta};
   const history={eventOrder:ctx.eventOrder,eventKey:ctx.eventKey};
   visitRecap=R.summarize({events,meta,seen,progress},history);
   button.hidden=ctx.privacyPending;
@@ -603,7 +611,7 @@ function heroDetails(h) {
 }
 return {
   get CLOCK_FORMAT(){return CLOCK_FORMAT},
-  get initIdleRecap(){return initIdleRecap}, get guildLines(){return guildLines},
+  get initIdleRecap(){return initIdleRecap}, get invalidateIdleRecap(){return invalidateIdleRecap}, get guildLines(){return guildLines},
   get workingSnapshot(){return workingSnapshot}, get workItems(){return workItems}, get workView(){return workView},
   get workingPairs(){return workingPairs}, get fitWorking(){return fitWorking}, get renderWorking(){return renderWorking}, get focusWork(){return focusWork},
   get fmt(){return fmt},

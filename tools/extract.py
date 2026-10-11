@@ -711,46 +711,27 @@ def _display_labels(bot_rows, profiles, captain):
 
 
 def _done_days_7d(db, as_of):
-    """Calendar-day observations, independent of replay retention and cursors.
+    """Unknown until Kanban supplies trustworthy coverage provenance.
 
-    Kanban can prune events or delete cards without a coverage watermark. Only
-    an intact AUTOINCREMENT history plus creation records for every card proves
-    coverage here. Legacy/imported/pruned boards are unknown, never guessed zero.
-    This log is deletable, so it is NOT a durable career-XP source.
+    Migration/import can renumber surviving rows after pruning. Even contiguous
+    AUTOINCREMENT IDs and creation records for all remaining cards cannot prove
+    seven-day coverage (including an empty board). Do not invent a watermark or
+    career ledger in this read-only projection.
     """
-    schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='task_events'").fetchone()
-    if not schema or not re.search(r'\bAUTOINCREMENT\b', schema[0], re.I):
+    return None
+
+
+def _recap_source(cfg, key):
+    """Keyed DB incarnation, never a raw path or a backend seen-state ledger."""
+    if not key:
         return None
-    count, lo, hi = db.execute('SELECT count(*),min(id),coalesce(max(id),0) FROM task_events').fetchone()
-    sequence = db.execute("SELECT seq FROM sqlite_sequence WHERE name='task_events'").fetchone()
-    if count != hi or (count and lo != 1) or hi != (sequence[0] if sequence else 0):
-        return None  # Includes missing prefix, interior, tail, or all rows after GC.
-    if db.execute("SELECT 1 FROM tasks t WHERE NOT EXISTS "
-                  "(SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.kind='created') LIMIT 1").fetchone():
+    path = (Path(cfg['hermes_home']) / 'kanban.db').resolve()
+    try:
+        info = path.stat()
+    except FileNotFoundError:
         return None
-    if db.execute("SELECT 1 FROM tasks t WHERE (t.status='done' AND t.completed_at IS NULL) OR "
-                  "(t.completed_at<=? AND NOT EXISTS (SELECT 1 FROM task_events e "
-                  "WHERE e.task_id=t.id AND e.kind='completed' AND e.created_at<=?)) LIMIT 1",
-                  (as_of, as_of)).fetchone():
-        return None  # A status snapshot cannot stand in for missing completion history.
-    today = datetime.datetime.fromtimestamp(as_of).date()
-    first = today - datetime.timedelta(days=6)
-    days = set()
-    for row in db.execute("SELECT e.created_at,t.id FROM task_events e LEFT JOIN tasks t ON t.id=e.task_id "
-                          "WHERE e.kind='completed'"):
-        stamp, task_id = row
-        if (task_id is None or isinstance(stamp, bool) or not isinstance(stamp, (int, float))
-                or not math.isfinite(stamp) or stamp <= 0):
-            return None
-        if stamp > as_of:
-            continue
-        try:
-            day = datetime.datetime.fromtimestamp(stamp).date()
-        except (ValueError, OverflowError, OSError):
-            return None
-        if first <= day <= today:
-            days.add(day)  # Repeated events/cards on one date never earn another day.
-    return len(days)
+    return _session_digest(key, 'recap-source-v1',
+                           [str(path), info.st_dev, info.st_ino])
 
 
 def _empty_working(as_of):
@@ -898,8 +879,10 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     hours = window_hours if window_hours is not None else previous.get('window_hours', 12)
     session_key, key_reason = _session_key_state(cfg)
     session_data = dict(status='available' if session_key else 'unavailable', reason=key_reason)
+    recap_source = _recap_source(cfg, session_key)
     identity = _session_digest(session_key, '', 'identity-epoch')[:20] if session_key else None
-    if previous and (previous.get('identity') != identity or 'identity' not in previous):
+    if previous and (previous.get('identity') != identity or 'identity' not in previous or
+                     (recap_source is not None and previous.get('recap_source') != recap_source)):
         # One authoritative window reset. The client checks config_revision before
         # applying any delta, so old and new mana histories are never added together.
         previous = {}
@@ -907,7 +890,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     old = previous.get('marks', {})
     cutoff = time.time() - hours * 3600 - CURSOR_GRACE
     state: dict = dict(v=1, marks=dict(old), runs={}, tasks={}, bots={}, pending=[],
-                 window_hours=hours, identity=identity,
+                 window_hours=hours, identity=identity, recap_source=recap_source,
                  captain_pending={}, compression_pending=[],
                  mana=dict(previous.get('mana', {})),
                  mana_versions=dict(previous.get('mana_versions', {})))
@@ -918,6 +901,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     captain = cfg['captain'] if cfg['captain'] != 'auto' else ''
     def safe(value, key=''):
         if isinstance(value, str):
+            if key == 'recap_id':
+                return value if re.fullmatch(r'e_[0-9a-f]{64}', value) else None
             if key == 'source_action_ref':
                 return value if re.fullmatch(r'o-[0-9a-f]{20}', value) else None
             if key in ('session_ref', 'parent_session_ref'):
@@ -956,7 +941,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                        for key in ('classes', 'regions', 'stage_regions')},
                     show_titles=cfg['show_titles'], show_profile_names=cfg.get('show_profile_names', False),
                     as_of=as_of, source='live', mock=False,
-                    config_revision=_hash([cfg, captain, 'truth-identity-hmac-v2', identity]))
+                    config_revision=_hash([cfg, captain, 'truth-identity-hmac-v2', identity, recap_source]))
     if previous and 'mana' not in previous:
         # Legacy cursors cannot reconstruct yesterday's evolving usage totals.
         # The revision change makes the production client rebase before accepting
@@ -975,6 +960,12 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     working=_empty_working(as_of), cursor=_cursor(previous or state))
     def emit(source, seq, event):
         event['id'] = 'e_' + _hash([source, seq])
+        # Additive, recap-only identity: preserve combat/dedup IDs and ordering.
+        # Bind the row's immutable identity too, so reindex/reused ordinals cannot
+        # acknowledge a different task/time. Prose/privacy toggles are excluded.
+        event['recap_id'] = ('e_' + _session_digest(session_key, 'recap-event-v1',
+                             [recap_source, source, seq, event['t'], event.get('task'), event['kind']])
+                             if recap_source else None)
         if t0 is None or event['t'] >= t0:
             events.append(event)
     def rows(db, table, source, timestamp, deferred=(), columns='*'):
@@ -995,6 +986,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     working_captain_events = []   # retained observations, independent of delta delivery
     working_actions = {}
     try:
+        if _recap_source(cfg, session_key) != recap_source:
+            raise RuntimeError('Board changed during snapshot')
         done_days_7d = _done_days_7d(k, as_of)
         commenters = {r[0] for r in k.execute('SELECT DISTINCT author FROM task_comments') if r[0]}
         captain = cfg['captain']

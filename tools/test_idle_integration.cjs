@@ -9,7 +9,7 @@ let returning=false;
 function fixture(known=true,level=5){
   const d=structuredClone(demo);Object.assign(d.meta,{source:'live',from_:now-600,to:now,as_of:now,show_titles:false,show_profile_names:false});
   d.cursor='synthetic-idle';d.sessions=[];d.session_data={status:'available'};
-  d.events=[{id:id(1),t:now-300,kind:'created'},{id:id(2),t:now-200,kind:'completed'},...(returning?[{id:id(3),t:now-100,kind:'blocked'}]:[])];
+  d.events=[{id:id(1),recap_id:id(1),t:now-300,kind:'created'},{id:id(2),recap_id:id(2),t:now-200,kind:'completed'},...(returning?[{id:id(3),recap_id:id(3),t:now-100,kind:'blocked'}]:[])];
   d.working={as_of:now,resting_count:2,latest_order:null,progress:{wins_today:4,xp:(level-1)*100,gold:40,level,level_progress:0,...(known?{done_days_7d:3}:{})},
     items:d.tasks.slice(0,3).map((t,i)=>({ref:'synthetic-work-'+i,task_ref:t.id,bot_ref:d.bots[i%d.bots.length].id,status:i?'done':'running',
       started_at:now-60,display_name:'Build Warrior '+(i+1),class_label:'Build Warrior',quest_kind:['build','testing','review'][i],quest_label:'Build quest #'+(i+1),worker_observed:true}))};

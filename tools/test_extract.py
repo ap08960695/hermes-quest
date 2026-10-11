@@ -1217,14 +1217,73 @@ def captain_fixture_digest(extract_module, n=CAPTAIN_FIXTURE_MESSAGES, timings=N
         part = dict(part, meta={k: v for k, v in part['meta'].items() if k != 'config_revision'})
         # R-F8 adds internal immutable action refs; preserve the byte-for-byte
         # oracle for every pre-existing event field rather than replacing its digest.
-        part = dict(part, events=[{k: v for k, v in e.items() if k != 'source_action_ref'}
+        part = dict(part, events=[{k: v for k, v in e.items() if k not in ('source_action_ref', 'recap_id')}
                                   for e in part['events']])
+        # Source-bound recap identity is additive, not a combat/mana change.
+        cursor_state = extract_module._decode(part['cursor'])
+        cursor_state.pop('recap_source', None)
+        part = dict(part, cursor=extract_module._cursor(cursor_state))
         digest.update(json.dumps(part, sort_keys=True, ensure_ascii=False).encode())
     return digest.hexdigest(), initial, delta, idle
 
 
+class RecapIdentityTests(unittest.TestCase):
+    k: sqlite3.Connection
+    home: Path
+    cfg: dict
+    setUp = ExtractTests.setUp
+    add_task = ExtractTests.add_task
+    event = ExtractTests.event
+    message = ExtractTests.message
+    tool = ExtractTests.tool
+
+    def board_event(self, payload):
+        return next(e for e in payload['events'] if e['kind']=='claimed')
+
+    def test_shared_key_copied_board_cannot_collide_and_same_source_is_stable(self):
+        a = extract.build_replay(self.cfg, 12)
+        event_a = self.board_event(a)
+        same = extract.build_replay(dict(self.cfg, show_titles=True), 12)
+        self.assertEqual(event_a['recap_id'], self.board_event(same)['recap_id'])
+        other = self.home / 'other-board'
+        other.mkdir()
+        db = sqlite3.connect(other / 'kanban.db')
+        self.k.backup(db); db.close()
+        cfg = dict(self.cfg, hermes_home=str(other), profiles=[], history_dir=str(self.home / 'hermes-quest'))
+        b = extract.build_replay(cfg, 12)
+        event_b = self.board_event(b)
+        self.assertEqual(event_a['id'], event_b['id'])  # old global collision
+        self.assertNotEqual(event_a['recap_id'], event_b['recap_id'])
+        self.assertRegex(event_b['recap_id'], r'^e_[0-9a-f]{64}$')
+        self.assertNotIn(str(self.home), json.dumps(b)+json.dumps(extract._decode(b['cursor'])))
+
+    def test_replaced_db_rebases_cursor_and_changed_row_cannot_reuse_boundary(self):
+        a = extract.build_replay(self.cfg, 12)
+        before = self.board_event(a)
+        db = sqlite3.connect(self.home / 'replacement.db')
+        self.k.backup(db); db.close()
+        (self.home / 'replacement.db').replace(self.home / 'kanban.db')
+        b = extract.collect_since(self.cfg, a['cursor'])
+        self.assertNotEqual(a['meta']['config_revision'], b['meta']['config_revision'])
+        self.assertEqual(before['id'], self.board_event(b)['id'])
+        self.assertNotEqual(before['recap_id'], self.board_event(b)['recap_id'])
+        db = sqlite3.connect(self.home / 'kanban.db')
+        db.execute('UPDATE task_events SET created_at=created_at-1'); db.commit(); db.close()
+        c = extract.build_replay(self.cfg, 12)
+        self.assertNotEqual(self.board_event(b)['recap_id'], self.board_event(c)['recap_id'])
+
+    def test_missing_key_has_no_claim_of_source_bound_identity(self):
+        (self.home / 'hermes-quest' / 'session-ref.key').unlink()
+        payload = extract.build_replay(self.cfg, 12)
+        self.assertIsNone(self.board_event(payload)['recap_id'])
+
+
 class WeeklyProgressTests(unittest.TestCase):
-    """Real lifecycle observations, never browser-window or current-status counts."""
+    """Even plausible complete histories lack provenance; never guess totals.
+
+    The former calendar-count fixtures are now negative coverage fixtures. A
+    contiguous DB is indistinguishable from imported/pruned/reindexed history.
+    """
     now: float
     k: sqlite3.Connection
     home: Path
@@ -1265,7 +1324,7 @@ class WeeklyProgressTests(unittest.TestCase):
                    '2026-10-11T12:00:00', '2026-10-11T12:00:01'):
             self.event('completed', self.stamp(at))
         progress = self.weekly(as_of)
-        self.assertEqual(progress['done_days_7d'], 3)
+        self.assertNotIn('done_days_7d', progress)
         self.assertNotIn('career_xp', progress)
 
     def test_backend_timezone_not_utc(self):
@@ -1274,18 +1333,18 @@ class WeeklyProgressTests(unittest.TestCase):
         self.event('completed', self.stamp('2026-10-04T18:00:00+00:00'))
         self.event('completed', self.stamp('2026-10-06T02:00:00+00:00'))
         self.timezone('UTC')
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 1)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
         self.timezone('Asia/Bangkok')
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
 
-    def test_all_seven_dates_and_no_completions_are_known(self):
+    def test_all_seven_dates_and_no_completions_still_lack_provenance(self):
         self.timezone('UTC')
         self.full_history()
         as_of = self.stamp('2026-10-11T12:00:00')
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 0)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
         for day in range(5, 12):
             self.event('completed', self.stamp(f'2026-10-{day:02d}T00:00:00'))
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 7)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
 
     def test_dst_uses_calendar_dates_not_fixed_168_hours(self):
         self.timezone('America/New_York')
@@ -1295,7 +1354,7 @@ class WeeklyProgressTests(unittest.TestCase):
         self.event('completed', self.stamp('2026-10-28T00:00:00'))
         self.event('completed', self.stamp('2026-11-01T01:30:00-04:00'))
         self.event('completed', self.stamp('2026-11-01T01:30:00-05:00'))
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
 
     def test_archive_reopen_retries_and_duplicate_completions(self):
         self.timezone('UTC')
@@ -1306,13 +1365,13 @@ class WeeklyProgressTests(unittest.TestCase):
         self.event('completed', done)
         self.event('archived', self.stamp('2026-10-06T12:00:00'))
         self.k.execute("UPDATE tasks SET status='archived',completed_at=?", (done,))
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 1)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
         self.k.execute("UPDATE tasks SET status='running',completed_at=NULL")
         self.event('status', self.stamp('2026-10-07T12:00:00'))
         self.event('run_end', self.stamp('2026-10-08T12:00:00'))
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 1)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
         self.event('completed', self.stamp('2026-10-09T12:00:00'))
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
         other = 't_87654321'
         self.add_task(other)
         self.k.execute('INSERT INTO task_events(task_id,kind,created_at) VALUES(?,?,?)',
@@ -1320,7 +1379,7 @@ class WeeklyProgressTests(unittest.TestCase):
         self.k.execute('INSERT INTO task_events(task_id,kind,created_at) VALUES(?,?,?)',
                        (other, 'archived', as_of))
         self.k.execute("UPDATE tasks SET status='archived' WHERE id=?", (other,))
-        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+        self.assertNotIn('done_days_7d', self.weekly(as_of))
 
     def test_missing_prefix_interior_tail_and_entire_history_are_unknown(self):
         for deletion in ('id=1', 'id=2', 'id=3', '1=1'):
@@ -1339,7 +1398,7 @@ class WeeklyProgressTests(unittest.TestCase):
         self.k.execute("UPDATE tasks SET status='done',completed_at=?", (self.now,))
         self.assertNotIn('done_days_7d', self.weekly())
         self.event('completed', self.now)
-        self.assertEqual(self.weekly()['done_days_7d'], 1)
+        self.assertNotIn('done_days_7d', self.weekly())
         self.k.execute("UPDATE tasks SET completed_at=NULL")
         self.assertNotIn('done_days_7d', self.weekly())
         self.k.execute("UPDATE tasks SET status='running'")
@@ -1354,7 +1413,7 @@ class WeeklyProgressTests(unittest.TestCase):
         self.k.commit()
         before = (self.home / 'kanban.db').read_bytes()
         first = extract.build_replay(self.cfg, 1)
-        self.assertEqual(first['working']['progress']['done_days_7d'], 1)
+        self.assertNotIn('done_days_7d', first['working']['progress'])
         self.assertFalse(any(e['kind'] == 'completed' for e in first['events']))
         delta = extract.collect_since(self.cfg, first['cursor'])
         self.assertEqual(delta['events'], [])
@@ -1362,14 +1421,38 @@ class WeeklyProgressTests(unittest.TestCase):
         self.assertEqual(before, (self.home / 'kanban.db').read_bytes())
         self.assertNotIn('career_xp', delta['working']['progress'])
 
-    def test_absent_board_is_unknown_but_existing_empty_board_is_zero(self):
+    def test_absent_and_existing_empty_boards_are_unknown(self):
         self.k.execute('DELETE FROM tasks')
         self.k.execute('DELETE FROM task_events')
         self.k.execute("DELETE FROM sqlite_sequence WHERE name='task_events'")
-        self.assertEqual(self.weekly()['done_days_7d'], 0)
+        self.assertNotIn('done_days_7d', self.weekly())
         self.assertNotIn('done_days_7d', extract._empty_working(self.now)['progress'])
         cfg = dict(self.cfg, hermes_home=str(self.home / 'absent'), profiles=[])
         self.assertNotIn('done_days_7d', extract.build_replay(cfg, 1)['working']['progress'])
+
+
+    def test_prune_before_migration_and_import_reindex_are_unknown(self):
+        for identity_type in ('TEXT PRIMARY KEY', 'INTEGER PRIMARY KEY AUTOINCREMENT'):
+            with self.subTest(identity_type=identity_type):
+                db = sqlite3.connect(':memory:')
+                self.addCleanup(db.close)
+                db.executescript('CREATE TABLE tasks(id TEXT PRIMARY KEY,status TEXT,completed_at REAL);'
+                    f'CREATE TABLE task_events(id {identity_type},task_id TEXT,kind TEXT,created_at REAL);'
+                    "INSERT INTO tasks VALUES('remaining','running',NULL);"
+                    "INSERT INTO tasks VALUES('deleted','done',100);")
+                db.executemany('INSERT INTO task_events VALUES(?,?,?,?)',
+                    [(1,'remaining','created',1),(2,'deleted','created',2),(3,'deleted','completed',100)])
+                db.execute("DELETE FROM task_events WHERE task_id='deleted'")
+                db.execute("DELETE FROM tasks WHERE id='deleted'")
+                self.assertIsNone(extract._done_days_7d(db, self.now))
+                # Legacy migration and import INSERT survivors with new IDs.
+                db.executescript('ALTER TABLE task_events RENAME TO old_events;'
+                    'CREATE TABLE task_events(id INTEGER PRIMARY KEY AUTOINCREMENT,task_id TEXT,kind TEXT,created_at REAL);'
+                    'INSERT INTO task_events(task_id,kind,created_at) SELECT task_id,kind,created_at FROM old_events ORDER BY id;'
+                    'DROP TABLE old_events;')
+                self.assertEqual(tuple(db.execute('SELECT count(*),min(id),max(id) FROM task_events').fetchone()), (1,1,1))
+                self.assertEqual(db.execute("SELECT seq FROM sqlite_sequence WHERE name='task_events'").fetchone()[0], 1)
+                self.assertIsNone(extract._done_days_7d(db, self.now))
 
 
 class CaptainLongHistoryTests(unittest.TestCase):

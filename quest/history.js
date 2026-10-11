@@ -142,6 +142,9 @@ function loadReplay(replay, live = null, at = null) {
   // Validate the Working snapshot before anything is touched; a malformed one rejects the whole rebase.
   const workPlan = ctx.planWork(replay.working, {mode: 'rebase', animate: !!(live && ctx.liveFeed && ctx.following && ctx.S.play)});
   let undoWork = () => {};
+  const recapChanged = privacyPending || previous.D?.meta.config_revision !== replay.meta?.config_revision ||
+    previous.D?.meta.show_titles !== replay.meta?.show_titles || previous.D?.meta.show_profile_names !== replay.meta?.show_profile_names;
+  if (recapChanged) ctx.invalidateIdleRecap?.();
   ctx.clearInspection();
   if (ctx.UI) ctx.UI.privacy();
   try {
@@ -170,6 +173,7 @@ function loadReplay(replay, live = null, at = null) {
     throw e;
   }
   ctx.dispatchWork(workPlan);   // listeners only see the committed rebase
+  if (recapChanged) ctx.initIdleRecap?.(); // reads only; never acknowledges a poll
 }
 function mergeDelta(delta) {
   if (!Array.isArray(delta.events) || !Array.isArray(delta.tasks) || !Array.isArray(delta.bots) || delta.cursor === undefined)

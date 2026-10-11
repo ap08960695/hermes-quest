@@ -14,7 +14,7 @@ const mk = () => { const {G} = load({root, data: demo()}); G.loadReplay(G.D); re
 vm.runInContext(fs.readFileSync(path.join(root, 'quest/history.js'), 'utf8'), sandbox);
 const H = sandbox.HQModules.createHistory({validSessionRef: ref => typeof ref === 'string' && /^[a-f0-9]{20}$/.test(ref)});
 const id = n => 'e_' + n.toString(16).padStart(64, '0');
-const event = (n, t, kind = 'completed', extra = {}) => ({id: id(n), t, kind, ...extra});
+const event = (n, t, kind = 'completed', extra = {}) => ({id: id(n), recap_id: id(n), t, kind, ...extra});
 const windowMeta = {from_: 0, as_of: 10000};
 const recap = (events, seen, extra = {}) => R.summarize({events, seen, meta: windowMeta, ...extra}, H);
 let n = 0;
@@ -108,6 +108,20 @@ test('weekly is backend-only: 0 and 7 known, absent/null/invalid unknown', () =>
   }
   for (const days of [undefined, null, -1, 8, 1.5, '4', false, NaN]) {
     assert.equal(R.weekly({done_days_7d: days}).days, null); assert.equal(R.weekly({done_days_7d: days}).status, 'unknown');
+  }
+});
+test('global event IDs cannot acknowledge another board or a reindexed row', () => {
+  const a = [event(1, 1, 'created'), event(2, 2)];
+  const seen = R.acknowledge(a, [], H);
+  const b = [event(1, 3, 'created', {recap_id:id(101)}), event(2, 4, 'completed', {recap_id:id(102)})];
+  equal(a.map(e=>e.id), b.map(e=>e.id));
+  assert.equal(recap(b, seen).coverage, 'unknown');
+  assert.equal(recap(b, seen).counts.completed, null);
+  equal(R.acknowledge(b, seen, H).slice(-2), [id(101), id(102)]);
+  for(const recap_id of [undefined, null, 't_12345678']) {
+    const rows = a.map(e=>({...e,recap_id}));
+    assert.equal(recap(rows, seen).coverage, 'unknown');
+    equal(R.acknowledge(rows, [], H), []);
   }
 });
 test('reducer keeps existing counters with A omitted, null or malformed; valid weekly replaced not accumulated', () => {

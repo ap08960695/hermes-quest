@@ -109,6 +109,8 @@ jobs:
         run: node tools/test_clarity_scene.cjs "$RUNNER_TEMP/ui-regressions/clarity-scene"
       - name: Idle UI, visit acknowledgement and Desktop bootstrap (synthetic only)
         run: node tools/test_idle_integration.cjs "$RUNNER_TEMP/ui-regressions/idle"
+      - name: Recap source continuity and authoritative replay failures (both engines)
+        run: node tools/test_idle_source_switch.cjs "$RUNNER_TEMP/ui-regressions/idle-source"
       - name: Time bar label and explicit units (both engines)
         run: node tools/test_time_bar_label.cjs "$RUNNER_TEMP/ui-regressions/time-bar"
       - name: Shared-worker quest context and partial session availability (both engines)

@@ -64,6 +64,7 @@ async function pollEvents() {
     try { ctx.mergeDelta(delta); } catch (e) {
       if (!(e instanceof ctx.HistoryExpired)) throw e;
       if (e instanceof ctx.IdentityChanged) {
+        ctx.invalidateIdleRecap?.();
         ctx.clearInspection();
         ctx.privacyPending = true;
         ctx.D.meta.show_profile_names = false;
