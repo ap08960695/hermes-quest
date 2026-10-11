@@ -6,6 +6,30 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## v0.1.4 - 2026-10-11
+
+### Security
+
+- Use only public Desktop SDK connection/profile state; registry and SSH remote
+  connections fail closed with "Desktop update needed" until the SDK exposes a
+  lifecycle/generation hook covering same-ID endpoint changes.
+- Show profile names only from host-verified request session/token state;
+  unsupported hosts retain pseudonyms without private authentication imports.
+- The optional post-deploy helper uses ordinary host-issued cookies/tokens or
+  public Basic login, never dashboard signing secrets or private providers.
+
+### Fixed
+
+- Reject malformed guest channel messages without an unhandled rejection.
+- Extend hostile replay coverage so HTML markers reach feed fields.
+- Document effective Quest state paths and inspect them before uninstalling;
+  moving keys/history to plugin-data is deferred pending a safe migration.
+
+### Known limitations
+
+- The optional Desktop page supports explicit local connections only. Use the
+  web dashboard for SSH/remote deployments; no new macOS renderer certification.
+
 ### Documentation
 
 - Docs: custom HERMES_HOME ต้องตั้ง HERMES_QUEST_CONFIG; หน้า Quest แสดงวิธีแก้เมื่อโหลดข้อมูลไม่ได้
