@@ -130,6 +130,7 @@ function draw() {
     empty.textContent=empty.hidden?'':'No quests yet — when a bot starts a Kanban task it appears here. Start a task in Hermes Kanban, or load saved history with tasks.';}
   if(ctx.workingSnapshot?.()&&!ctx.workView.all)return drawWorking();
   const v = view();
+  countTimeBars(v);
   if (!ctx.privacyPending) sceneOverflow(v);
   if (ctx.UI) ctx.UI.clear();
   ctx.cx.imageSmoothingEnabled = false;
@@ -462,8 +463,49 @@ function monster(v, t) {
     const w = 36, x0 = bx - w / 2;
     ctx.cx.fillStyle = '#141824'; ctx.cx.fillRect(v.ox + (x0 - 2) * v.Z, v.oy + (top - 2) * v.Z, (w + 4) * v.Z, 6 * v.Z);
     ctx.cx.fillStyle = t.chained ? '#e0503c' : t.hp > .4 ? '#e8c04a' : '#e0503c'; ctx.cx.fillRect(v.ox + x0 * v.Z, v.oy + top * v.Z, Math.max(1, Math.round(w * t.hp)) * v.Z, 2 * v.Z);
-
+    timeBarLabel(v, t, bx, top);
   }
+}
+// The gold bar is a countdown, not health. Name it where it is drawn: canvas pixels from the bundled
+// 5x7 bitmap alphabet only (no URL font, which the Desktop guest bridge rejects), so it reads everywhere.
+// Shown for the selected quest, when zoomed in (Z >= 2), or when at most 4 bars are on screen, so a
+// crowded Show all scene is not covered in text. The values are m/s only; unknown stays unlabelled-unit-free.
+function timeBarDuration(sec) {
+  if (!Number.isFinite(sec) || sec < 0) return null;
+  const s = Math.ceil(sec);
+  return s >= 60 ? Math.ceil(s / 60) + 'M' : s + 'S';
+}
+function timeBarText(t) {
+  const budget = Number(t.max_rt) > 0 ? Number(t.max_rt) : 1800;
+  if (t.state === 'fight' && Number.isFinite(t.runStart)) {
+    const left = timeBarDuration(Math.max(0, budget - (ctx.S.t - t.runStart)));
+    return left ? 'TIME LEFT ' + left : 'TIME LEFT';
+  }
+  const limit = timeBarDuration(budget);
+  return limit ? 'TIME LIMIT ' + limit : 'TIME LIMIT';
+}
+let barLabelCrowded = false;
+function countTimeBars(v) {
+  let n = 0;
+  for (const t of Object.values(ctx.S.tasks)) {
+    if (Number.isFinite(t.hp) && t.alpha > .5 && !t.dying && t.region !== 'camp' && onScreen(v, t.mx ?? t.x, t.my ?? t.y, 120, 160)) n++;
+  }
+  barLabelCrowded = n > 4;
+}
+function timeBarLabel(v, t, bx, top) {
+  const T = typeof window === 'object' ? window.UIText : null;
+  if (!T || typeof T.draw !== 'function' || !ctx.cx) return;
+  if (barLabelCrowded && t !== ctx.selectedEntity() && v.Z / ctx.DPR < 2) return;
+  const text = timeBarText(t), sc = Math.max(1, Math.round(ctx.DPR)) * 2;
+  const wpx = T.measure(text, sc), hpx = 7 * sc, pad = 3 * sc / 2 | 0;
+  const cw = ctx.cv.width, ch = ctx.cv.height;
+  let x = Math.round(v.ox + bx * v.Z - wpx / 2), y = Math.round(v.oy + (top - 2) * v.Z - hpx - pad * 2 - 2 * ctx.DPR);
+  x = Math.max(pad + 2, Math.min(cw - wpx - pad - 2, x)); y = Math.max(pad + 2, Math.min(ch - hpx - pad - 2, y));
+  ctx.cx.save();
+  ctx.cx.fillStyle = 'rgba(13,20,35,.92)'; ctx.cx.fillRect(x - pad - 1, y - pad - 1, wpx + pad * 2 + 2, hpx + pad * 2 + 2);
+  ctx.cx.fillStyle = '#99783b'; ctx.cx.fillRect(x - pad - 1, y + hpx + pad, wpx + pad * 2 + 2, Math.max(1, ctx.DPR));
+  T.draw(ctx.cx, text, x, y, {scale: sc, color: '#ffd36b'});
+  ctx.cx.restore();
 }
 function dragon(v) {
   const [x, y] = ctx.W.regions.volcano.spot, b = Math.floor(performance.now() / 700) % 2;
