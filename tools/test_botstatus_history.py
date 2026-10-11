@@ -303,8 +303,9 @@ class EstimatedManaTests(unittest.TestCase):
         for m in estimated:
             self.assertEqual(m['basis'], 'chars')
             self.assertIs(m['estimated'], True)
-            self.assertEqual(set(m) - {'t', 'task', 'bot', 'kind', 'tokens', 'estimated', 'basis', 'id',
+            self.assertEqual(set(m) - {'t', 'task', 'bot', 'kind', 'tokens', 'estimated', 'basis', 'id', 'recap_id',
                                       'session_ref', 'parent_session_ref'}, set())
+            self.assertRegex(m['recap_id'], r'^e_[0-9a-f]{64}$')
             self.assertRegex(m['session_ref'], r'^[0-9a-f]{20}$')
             self.assertIsNone(m['parent_session_ref'])
         self.assertNotIn(marker, json.dumps(result))
