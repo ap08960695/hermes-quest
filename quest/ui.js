@@ -28,7 +28,7 @@ function initIdleRecap({events=ctx.D.events,meta=ctx.D.meta,progress=ctx.S.work?
   events=events.map(e=>({...e}));meta={...meta};
   const history={eventOrder:ctx.eventOrder,eventKey:ctx.eventKey};
   visitRecap=R.summarize({events,meta,seen,progress},history);
-  button.hidden=ctx.privacyPending;
+  button.hidden=!workingSnapshot()||ctx.privacyPending;
   button.textContent=visitRecap.coverage==='complete'?'Since last visit · '+visitRecap.counts.completed+' completed':'Since last visit · unknown';
   button.onclick=()=>{
     if(ctx.privacyPending)return;

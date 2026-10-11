@@ -86,6 +86,14 @@ const server=http.createServer((req,res)=>{try{
       assert.equal(await page.evaluate(()=>document.querySelector('#idle-recap').onclick),null);
       replayMode='normal';await page.evaluate(async()=>{await pollEvents();clearTimeout(pollTimer);});await ready();
       assert.equal(await stored(),beforeFail);assert((await show()).includes('3 of last 7 days'));
+      await page.locator('#quest .close').click();
+      // Rebase may run while the animation loop is stopped. No Working data
+      // must hide the rebuilt button immediately, not on a future HUD frame.
+      const withoutWorking=fixture('A');delete withoutWorking.working;
+      withoutWorking.meta.show_profile_names=!withoutWorking.meta.show_profile_names;
+      const beforeEmpty=await stored();
+      await page.evaluate(replay=>loadReplay(replay),withoutWorking);
+      assert(await page.locator('#idle-recap').isHidden());assert.equal(await stored(),beforeEmpty);
       assert.deepEqual(errors,[]);records.push({engine,hot,reload,failedReplayInvalidated:true,noAutomaticAcknowledgement:true});
     }finally{await context.close();await browser.close();}
   }}finally{server.close();}
