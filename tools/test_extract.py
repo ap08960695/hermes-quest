@@ -1223,6 +1223,155 @@ def captain_fixture_digest(extract_module, n=CAPTAIN_FIXTURE_MESSAGES, timings=N
     return digest.hexdigest(), initial, delta, idle
 
 
+class WeeklyProgressTests(unittest.TestCase):
+    """Real lifecycle observations, never browser-window or current-status counts."""
+    now: float
+    k: sqlite3.Connection
+    home: Path
+    cfg: dict
+    setUp = ExtractTests.setUp
+    add_task = ExtractTests.add_task
+    event = ExtractTests.event
+    message = ExtractTests.message
+    tool = ExtractTests.tool
+
+    def timezone(self, name):
+        env = patch.dict(os.environ, {'TZ': name})
+        env.start()
+        time.tzset()
+        def restore():
+            env.stop()
+            time.tzset()
+        self.addCleanup(restore)
+
+    def stamp(self, value):
+        return extract.datetime.datetime.fromisoformat(value).timestamp()
+
+    def full_history(self):
+        self.event('created', self.now - 20 * 86400)
+        self.k.commit()
+
+    def weekly(self, as_of=None, hours=1):
+        self.k.commit()
+        with patch.object(extract.time, 'time', return_value=as_of or self.now):
+            return extract.build_replay(self.cfg, hours)['working']['progress']
+
+    def test_local_midnight_window_and_inclusive_as_of(self):
+        self.timezone('Asia/Bangkok')
+        self.full_history()
+        as_of = self.stamp('2026-10-11T12:00:00')
+        for at in ('2026-10-04T23:59:59', '2026-10-05T00:00:00',
+                   '2026-10-05T23:59:59', '2026-10-10T23:59:59',
+                   '2026-10-11T12:00:00', '2026-10-11T12:00:01'):
+            self.event('completed', self.stamp(at))
+        progress = self.weekly(as_of)
+        self.assertEqual(progress['done_days_7d'], 3)
+        self.assertNotIn('career_xp', progress)
+
+    def test_backend_timezone_not_utc(self):
+        self.full_history()
+        as_of = self.stamp('2026-10-11T12:00:00+00:00')
+        self.event('completed', self.stamp('2026-10-04T18:00:00+00:00'))
+        self.event('completed', self.stamp('2026-10-06T02:00:00+00:00'))
+        self.timezone('UTC')
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 1)
+        self.timezone('Asia/Bangkok')
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+
+    def test_all_seven_dates_and_no_completions_are_known(self):
+        self.timezone('UTC')
+        self.full_history()
+        as_of = self.stamp('2026-10-11T12:00:00')
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 0)
+        for day in range(5, 12):
+            self.event('completed', self.stamp(f'2026-10-{day:02d}T00:00:00'))
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 7)
+
+    def test_dst_uses_calendar_dates_not_fixed_168_hours(self):
+        self.timezone('America/New_York')
+        self.full_history()
+        as_of = self.stamp('2026-11-03T12:00:00')
+        self.event('completed', self.stamp('2026-10-27T23:59:59'))
+        self.event('completed', self.stamp('2026-10-28T00:00:00'))
+        self.event('completed', self.stamp('2026-11-01T01:30:00-04:00'))
+        self.event('completed', self.stamp('2026-11-01T01:30:00-05:00'))
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+
+    def test_archive_reopen_retries_and_duplicate_completions(self):
+        self.timezone('UTC')
+        self.full_history()
+        as_of = self.stamp('2026-10-11T12:00:00')
+        done = self.stamp('2026-10-05T12:00:00')
+        self.event('completed', done)
+        self.event('completed', done)
+        self.event('archived', self.stamp('2026-10-06T12:00:00'))
+        self.k.execute("UPDATE tasks SET status='archived',completed_at=?", (done,))
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 1)
+        self.k.execute("UPDATE tasks SET status='running',completed_at=NULL")
+        self.event('status', self.stamp('2026-10-07T12:00:00'))
+        self.event('run_end', self.stamp('2026-10-08T12:00:00'))
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 1)
+        self.event('completed', self.stamp('2026-10-09T12:00:00'))
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+        other = 't_87654321'
+        self.add_task(other)
+        self.k.execute('INSERT INTO task_events(task_id,kind,created_at) VALUES(?,?,?)',
+                       (other, 'created', done))
+        self.k.execute('INSERT INTO task_events(task_id,kind,created_at) VALUES(?,?,?)',
+                       (other, 'archived', as_of))
+        self.k.execute("UPDATE tasks SET status='archived' WHERE id=?", (other,))
+        self.assertEqual(self.weekly(as_of)['done_days_7d'], 2)
+
+    def test_missing_prefix_interior_tail_and_entire_history_are_unknown(self):
+        for deletion in ('id=1', 'id=2', 'id=3', '1=1'):
+            with self.subTest(deletion=deletion):
+                self.k.execute('DELETE FROM task_events')
+                self.k.execute("DELETE FROM sqlite_sequence WHERE name='task_events'")
+                self.full_history()
+                self.event('completed', self.now)
+                self.event('heartbeat', self.now)
+                self.k.execute('DELETE FROM task_events WHERE ' + deletion)
+                self.assertNotIn('done_days_7d', self.weekly())
+
+    def test_missing_creation_unlogged_done_and_bad_completion_are_unknown(self):
+        self.assertNotIn('done_days_7d', self.weekly())
+        self.full_history()
+        self.k.execute("UPDATE tasks SET status='done',completed_at=?", (self.now,))
+        self.assertNotIn('done_days_7d', self.weekly())
+        self.event('completed', self.now)
+        self.assertEqual(self.weekly()['done_days_7d'], 1)
+        self.k.execute("UPDATE tasks SET completed_at=NULL")
+        self.assertNotIn('done_days_7d', self.weekly())
+        self.k.execute("UPDATE tasks SET status='running'")
+        self.event('completed')
+        self.k.execute("UPDATE task_events SET created_at=NULL WHERE id=(SELECT max(id) FROM task_events)")
+        self.assertNotIn('done_days_7d', self.weekly())
+
+    def test_weekly_snapshot_survives_short_replay_cursor_and_is_read_only(self):
+        self.full_history()
+        today = extract.datetime.datetime.fromtimestamp(self.now).replace(hour=0, minute=0, second=0, microsecond=0)
+        self.event('completed', (today - extract.datetime.timedelta(days=6)).timestamp())
+        self.k.commit()
+        before = (self.home / 'kanban.db').read_bytes()
+        first = extract.build_replay(self.cfg, 1)
+        self.assertEqual(first['working']['progress']['done_days_7d'], 1)
+        self.assertFalse(any(e['kind'] == 'completed' for e in first['events']))
+        delta = extract.collect_since(self.cfg, first['cursor'])
+        self.assertEqual(delta['events'], [])
+        self.assertEqual(delta['working']['progress'], first['working']['progress'])
+        self.assertEqual(before, (self.home / 'kanban.db').read_bytes())
+        self.assertNotIn('career_xp', delta['working']['progress'])
+
+    def test_absent_board_is_unknown_but_existing_empty_board_is_zero(self):
+        self.k.execute('DELETE FROM tasks')
+        self.k.execute('DELETE FROM task_events')
+        self.k.execute("DELETE FROM sqlite_sequence WHERE name='task_events'")
+        self.assertEqual(self.weekly()['done_days_7d'], 0)
+        self.assertNotIn('done_days_7d', extract._empty_working(self.now)['progress'])
+        cfg = dict(self.cfg, hermes_home=str(self.home / 'absent'), profiles=[])
+        self.assertNotIn('done_days_7d', extract.build_replay(cfg, 1)['working']['progress'])
+
+
 class CaptainLongHistoryTests(unittest.TestCase):
     def test_long_captain_history_is_identical_and_bounded(self):
         timings = {}

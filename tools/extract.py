@@ -710,6 +710,49 @@ def _display_labels(bot_rows, profiles, captain):
     return labels
 
 
+def _done_days_7d(db, as_of):
+    """Calendar-day observations, independent of replay retention and cursors.
+
+    Kanban can prune events or delete cards without a coverage watermark. Only
+    an intact AUTOINCREMENT history plus creation records for every card proves
+    coverage here. Legacy/imported/pruned boards are unknown, never guessed zero.
+    This log is deletable, so it is NOT a durable career-XP source.
+    """
+    schema = db.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='task_events'").fetchone()
+    if not schema or not re.search(r'\bAUTOINCREMENT\b', schema[0], re.I):
+        return None
+    count, lo, hi = db.execute('SELECT count(*),min(id),coalesce(max(id),0) FROM task_events').fetchone()
+    sequence = db.execute("SELECT seq FROM sqlite_sequence WHERE name='task_events'").fetchone()
+    if count != hi or (count and lo != 1) or hi != (sequence[0] if sequence else 0):
+        return None  # Includes missing prefix, interior, tail, or all rows after GC.
+    if db.execute("SELECT 1 FROM tasks t WHERE NOT EXISTS "
+                  "(SELECT 1 FROM task_events e WHERE e.task_id=t.id AND e.kind='created') LIMIT 1").fetchone():
+        return None
+    if db.execute("SELECT 1 FROM tasks t WHERE (t.status='done' AND t.completed_at IS NULL) OR "
+                  "(t.completed_at<=? AND NOT EXISTS (SELECT 1 FROM task_events e "
+                  "WHERE e.task_id=t.id AND e.kind='completed' AND e.created_at<=?)) LIMIT 1",
+                  (as_of, as_of)).fetchone():
+        return None  # A status snapshot cannot stand in for missing completion history.
+    today = datetime.datetime.fromtimestamp(as_of).date()
+    first = today - datetime.timedelta(days=6)
+    days = set()
+    for row in db.execute("SELECT e.created_at,t.id FROM task_events e LEFT JOIN tasks t ON t.id=e.task_id "
+                          "WHERE e.kind='completed'"):
+        stamp, task_id = row
+        if (task_id is None or isinstance(stamp, bool) or not isinstance(stamp, (int, float))
+                or not math.isfinite(stamp) or stamp <= 0):
+            return None
+        if stamp > as_of:
+            continue
+        try:
+            day = datetime.datetime.fromtimestamp(stamp).date()
+        except (ValueError, OverflowError, OSError):
+            return None
+        if first <= day <= today:
+            days.add(day)  # Repeated events/cards on one date never earn another day.
+    return len(days)
+
+
 def _empty_working(as_of):
     return dict(as_of=_iso(as_of), items=[], resting_count=0, latest_order=None,
                 progress=dict(wins_today=0, xp=0, gold=0, level=1, level_progress=0))
@@ -945,12 +988,14 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                               (f' AND {timestamp}>=?' if t0 is not None else '') + ' ORDER BY rowid',
                               (old.get(source, 0), hi) + ((t0,) if t0 is not None else ()))
     k = ro(home / 'kanban.db')
+    done_days_7d = None
     task_activity, active_tasks = {}, set()
     commenters = set()
     raw_tasks, raw_runs = {}, {}   # unsanitized current rows, consumed only by _build_working
     working_captain_events = []   # retained observations, independent of delta delivery
     working_actions = {}
     try:
+        done_days_7d = _done_days_7d(k, as_of)
         commenters = {r[0] for r in k.execute('SELECT DISTINCT author FROM task_comments') if r[0]}
         captain = cfg['captain']
         if captain == 'auto':
@@ -1386,6 +1431,9 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
             raw_bots[p] = _bot(p, cfg, captain, 'profile' if p in profiles else 'actor')
     working = _build_working(cfg, as_of, hours, captain, raw_tasks, raw_runs, raw_bots,
                              profiles, working_captain_events + events, session_key, working_actions)
+    if done_days_7d is not None:
+        working['progress']['done_days_7d'] = done_days_7d
+    # Unknown is omitted (not zero); existing snapshot XP remains board-local.
     # Generated fallback names must survive names-off sanitization, and duplicate
     # alias disambiguation must agree between bot surfaces and working rows.
     display_labels = _display_labels(raw_bots, set(profiles), captain)
