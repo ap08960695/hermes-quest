@@ -41,15 +41,16 @@ const server=http.createServer((req,res)=>{
           assert.match(await page.locator('#scene-overflow').textContent(),/\+6/);
           const scan=()=>page.evaluate(()=>({html:document.body.outerHTML,raster:[...window.__raster,...window.__drawnText]}));
           const privateSafe=async()=>{const value=await scan();for(const text of [value.html,...value.raster])assert(!/t_[a-f\d]{32}|bot-[a-f\d]{32}|PRIVATE_(?:JOB|HERO)_CANARY/.test(text),'private identity/prose reached DOM or raster');};
-          const representative=async(label)=>{
+          const representative=async(label,visible=true)=>{
             await page.evaluate(()=>draw());
             const value=await page.locator('#scene-selected').evaluate(el=>{
               const r=el.getBoundingClientRect(),canvas=el.querySelector('span canvas'),pixels=canvas&&canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;
               return {label:el.getAttribute('aria-label'),visible:!el.hidden&&r.width>0&&r.height>0,left:r.left,right:r.right,top:r.top,bottom:r.bottom,
                 width:innerWidth,height:innerHeight,ink:pixels?Array.from(pixels).filter((_,i)=>i%4===3&&pixels[i]>0).length:0};
             });
-            assert.equal(value.label,label.startsWith('Hero ')?'Selected Hero · '+label:'Selected '+label);assert(value.visible&&value.ink>0,'selected representative is blank/hidden');
-            assert(value.left>=0&&value.right<=value.width&&value.top>=0&&value.bottom<=value.height,'selected representative clipped');
+            assert.equal(value.label,label.startsWith('Hero ')?'Selected Hero · '+label:'Selected '+label);assert(value.ink>0,'selected representative has no ink');
+            assert.equal(value.visible,visible,'selected identity yields to modal space');
+            if(visible)assert(value.left>=0&&value.right<=value.width&&value.top>=0&&value.bottom<=value.height,'selected representative clipped');
             return value;
           };
           const selections=[];
@@ -59,7 +60,7 @@ const server=http.createServer((req,res)=>{
             await page.locator('#quest .item-summary').nth(i).locator('button').click();
             const state=await page.evaluate(()=>({selected:selectedScene,slot:S.tasks[selectedScene].placement.k,world:JSON.stringify(S.tasks)}));
             assert.equal(state.selected,'t_'+i.toString(16).padStart(32,'0'));
-            selections.push(await representative('Build quest #'+(i+1)));
+            selections.push(await representative('Build quest #'+(i+1),false));
             assert.equal(await page.evaluate(()=>JSON.stringify(S.tasks)),state.world,'render changed simulation state');
             assert.match(await page.locator('#scene-overflow').textContent(),state.slot>=12?/\+5/:/\+6/);
             await page.waitForFunction(()=>Array.from(document.querySelectorAll('#quest .bitmap-row')).every(row=>row.querySelector('canvas')||row.querySelector('.detail-text')?.getBoundingClientRect().height>0),null,{polling:50});await privateSafe();
@@ -78,7 +79,7 @@ const server=http.createServer((req,res)=>{
             if(heroes===1){const labels=await page.evaluate(()=>window.__labels);assert.equal(labels[0].text,'Hero · Hero 1','region allocated before selected label');}
             await page.evaluate(()=>{const h=S.heroes[selectedScene];h.path=[];heroDialog(h);window.__labels=[];draw();});
             await page.waitForFunction(()=>Array.from(document.querySelectorAll('#quest .bitmap-row')).every(row=>row.querySelector('canvas')||row.querySelector('.detail-text')?.getBoundingClientRect().height>0),null,{polling:50});
-            await representative('Hero '+heroes);await privateSafe();
+            await representative('Hero '+heroes,false);await privateSafe();
             if(out&&heroes===1)await page.screenshot({path:path.join(out,`${engine}-${width}-selected-details.png`)});
             await page.evaluate(()=>{UI.close();cam.x=cam.tx=0;cam.y=cam.ty=0;draw();});await representative('Hero '+heroes);
           }
