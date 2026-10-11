@@ -111,7 +111,9 @@ class LiveContractTests(unittest.TestCase):
         anonymous_app.include_router(api.router, prefix=PREFIX)
         with TestClient(anonymous_app) as anonymous:
             hidden = anonymous.get(PREFIX + '/replay?show_profile_names=true',
-                                   headers={'X-Quest-Authenticated': 'true'}).json()
+                                   headers={'X-Quest-Authenticated': 'true',
+                                            'Authorization': 'Bearer synthetic',
+                                            'Cookie': 'hermes_session=synthetic'}).json()
             self.assertFalse(hidden['meta']['show_profile_names'])
             self.assertTrue(all(b['name'] == b['id'] and b['profile_name'] is None for b in hidden['bots']))
             downgraded = anonymous.get(PREFIX + '/events', params={'since': replay['cursor']}).json()

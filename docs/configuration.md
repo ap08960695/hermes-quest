@@ -74,8 +74,9 @@ Replay and delta responses keep the existing tasks, bots, events and opaque curs
   `actor`. `actor_type` is `profile`, `commenter` or `unknown`. Consumers must not create worker heroes
   for actors or equate profile presence with a running OS process.
 - `profile_name`, `display_name`, `pet_name`: nullable strings. Profile/display names require verified
-  host session state or provider-verified bearer/cookie credentials. Missing host auth support fails
-  closed. Query parameters and caller-supplied auth flags never authorize names. Pet name currently
+  host `request.state.session` or verified token state (`token_authenticated` and `token_principal`).
+  Credentials alone do not authorize names: isolated hosts that do not forward auth state stay
+  pseudonymous, even after sign-in. Query parameters and caller-supplied auth flags never authorize names. Pet name currently
   remains null (not guessed from a slug or display name). Task prose remains governed by `show_titles`.
 - `availability`: `{status, observed_at}` from the bounded bot-status snapshot, using its `updated`
   epoch timestamp. Status is active, limited, waiting-start, unavailable or unknown. Missing/malformed

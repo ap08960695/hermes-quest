@@ -194,17 +194,15 @@ async function unit() {
 
   // ---- route guard: owner/lifecycle binding (fake host; the real SDK routing is exercised in sdkRouting()) ----
   const tick = (ms = 20) => new Promise(r => setTimeout(r, ms));
-  function fakeHost(initial = { connectionId: 'A', profile: 'default' }) {
-    const owner = { ...initial }; const profileL = new Set(); const registryL = new Set(); let applied = null;
+  function fakeHost(initial = { connectionId: 'local', profile: 'default' }) {
+    const owner = { ...initial }; const profileL = new Set();
     const watchers = {
-      pushes: { changed: true, applied: true },
-      subscribe: api => { const pl = () => api.check(), rl = p => api.registry(p), al = () => api.registry(null); profileL.add(pl); registryL.add(rl); applied = al; return () => { profileL.delete(pl); registryL.delete(rl); applied = null; }; },
+      subscribe: api => { const pl = () => api.check(); profileL.add(pl); return () => profileL.delete(pl); },
     };
     return {
       owner, watchers, read: () => ({ ...owner }),
       setOwner: (o, notify = true) => { Object.assign(owner, o); if (notify) for (const f of [...profileL]) f(); },
-      push: p => { for (const f of [...registryL]) f(p); }, apply: () => applied && applied(),
-      listeners: () => profileL.size + registryL.size + (applied ? 1 : 0),
+      listeners: () => profileL.size,
     };
   }
   function guarded(hostApi, restImpl) {
@@ -229,7 +227,7 @@ async function unit() {
     t.port.postMessage({ id: 2, method: 'GET', path: '/replay' }); await tick();
     assert.strictEqual(t.calls.length, 1, 'no ctx.rest call was made for the new owner on the old channel');
     assert.strictEqual(t.ch.stats.disposed, true); assert.deepStrictEqual(t.lostWhy, ['owner']);
-    pend[0].res({ owner: 'A', late: true }); await tick();
+    pend[0].res({ owner: 'local', late: true }); await tick();
     assert.deepStrictEqual(t.got, [], 'the old channel received nothing: no B result, no late A result');
   });
 
@@ -243,25 +241,17 @@ async function unit() {
     assert.strictEqual(t.calls.length, 1); assert.deepStrictEqual(t.got, []); assert.strictEqual(hostApi.listeners(), 0, 'watchers unsubscribed');
   });
 
-  await test('route guard: same-ID endpoint edit / removal / soft apply / malformed push retire; other ids do not', async () => {
-    for (const [name, fire, expectLost] of [
-      ['updated', h => h.push({ connectionId: 'A', reason: 'updated' }), true],
-      ['removed', h => h.push({ connectionId: 'A', reason: 'removed' }), true],
-      ['saved', h => h.push({ connectionId: 'A', reason: 'saved' }), true],
-      ['soft apply', h => h.apply(), true],
-      ['malformed', h => h.push({ reason: 'updated' }), true],
-      ['null', h => h.push(null), true],
-      ['other id', h => h.push({ connectionId: 'Z', reason: 'updated' }), false],
-    ]) {
-      const hostApi = fakeHost(); const pend = [];
-      const t = guarded(hostApi, () => new Promise(res => pend.push(res)));
-      t.port.postMessage({ id: 1, method: 'GET', path: '/events?since=a' }); await tick();
-      fire(hostApi);
-      assert.strictEqual(t.ch.stats.disposed, expectLost, name);
-      pend[0]({ late: name }); await tick();
-      assert.strictEqual(t.got.length, expectLost ? 0 : 1, name + ': old channel result delivery');
-      t.guard.dispose();
+  await test('route guard: registry and untagged owners fail closed even if private pushes exist', () => {
+    for (const connectionId of ['A', 'B', null, '', undefined]) {
+      let subscribed = false;
+      assert.throws(() => plugin.createRouteGuard({
+        read: () => ({ connectionId, profile: 'default' }),
+        watchers: { pushes: { changed: true, applied: true }, subscribe() { subscribed = true; } },
+      }), /lifecycle unavailable/);
+      assert.strictEqual(subscribed, false, 'refused before any subscription or request');
     }
+    const source = fs.readFileSync(path.join(__dirname, 'plugin.js'), 'utf8');
+    assert.ok(!/hermesDesktop|onChanged|onConnectionApplied/.test(source), 'shipped plugin only uses the SDK');
   });
 
   await test('route guard: result for the right owner is delivered; dispose is silent; unsupported host fails closed', async () => {
@@ -276,7 +266,8 @@ async function unit() {
     assert.throws(bad(() => ({ connectionId: 'A', profile: 'p' }), { changed: false, applied: true }), /lifecycle unavailable/);
     assert.throws(bad(() => ({ connectionId: null, profile: 'p' }), { changed: true, applied: false }), /lifecycle unavailable/);
     assert.throws(bad(() => { throw new Error('x'); }, { changed: true, applied: true }));
-    assert.doesNotThrow(bad(() => ({ connectionId: 'local', profile: 'default' }), {}));
+    const local = plugin.createRouteGuard({ read: () => ({ connectionId: 'local', profile: 'default' }) });
+    assert.strictEqual(local.valid(), true); local.dispose();
     assert.throws(() => plugin.readOwner({}), /lifecycle unavailable/);
     assert.strictEqual(plugin.classifyError(new Error('Desktop route lifecycle unavailable')), 'lifecycle');
   });
@@ -497,15 +488,15 @@ export const probe={ $connection,$activeGatewayProfile,$apiRequestScope,setApiRe
   }
   global.MessageChannel = RecMessageChannel;
   const requests = []; const pendingEvents = []; let serial = 0;
-  const regL = new Set(); const appliedL = new Set();
   window.hermesDesktop = {
-    connections: { onChanged: f => { regL.add(f); return () => regL.delete(f); } },
-    onConnectionApplied: f => { appliedL.add(f); return () => appliedL.delete(f); },
+    // This private API is consumed by the real SDK transport, never by the plugin.
+    get connections() { throw new Error('plugin accessed private connection registry'); },
+    get onConnectionApplied() { throw new Error('plugin accessed private lifecycle'); },
     api: async request => {
       requests.push({ ...request });
       if (request.path.endsWith('/desktop-bootstrap')) {
         const nonce = 'SyntheticNonce000000' + (++serial);
-        return { version: 1, nonce, html: `<meta http-equiv="Content-Security-Policy" content="connect-src 'none'"><meta name="quest-nonce" content="${nonce}"><script>/* quest-ready */</script>` };
+        return { version: 1, nonce, html: goodHtml.replaceAll(NONCE, nonce) };
       }
       if (request.path.includes('/events')) return new Promise(resolve => pendingEvents.push({ request, resolve }));
       return { syntheticOwner: request.connectionId, profile: request.profile };
@@ -530,49 +521,41 @@ export const probe={ $connection,$activeGatewayProfile,$apiRequestScope,setApiRe
     return { frame, port: ports[ports.length - 1], nonce };
   }
   const bootstraps = () => requests.filter(x => x.path.endsWith('/desktop-bootstrap'));
-  const reset = async () => { if (root) await act(() => root.unmount()); requests.length = 0; pendingEvents.length = 0; ports.length = 0; serial = 0; probe.$connection.set({ connectionId: 'A', mode: 'remote', baseUrl: 'https://synthetic-A.invalid' }); probe.setApiRequestConnection('A'); probe.$activeGatewayProfile.set('default'); };
+  const reset = async (connectionId = 'local') => { if (root) await act(() => root.unmount()); root = null; requests.length = 0; pendingEvents.length = 0; ports.length = 0; serial = 0; probe.$connection.set({ connectionId, mode: 'local' }); probe.setApiRequestConnection(connectionId); probe.$activeGatewayProfile.set('default'); };
   const guestSend = (c, m) => c.port.onmessage({ data: m });
   const ownerOf = c => c.port.replies.filter(r => r && r.value).map(r => r.value.syntheticOwner);
 
-  await test('SDK routing: connection fallback while the descriptor is pending (A -> B, profile unchanged)', async () => {
+  await test('SDK routing: local -> registry while descriptor pending retires without rerouting or bootstrapping', async () => {
     await reset(); await mount(); const first = connect();
     guestSend(first, { id: 1, method: 'GET', path: '/events?since=synthetic-A-cursor' });
-    await act(async () => { probe.setApiRequestConnection('B'); await wait(); }); // authority moved, descriptor/atoms still say A
-    assert.strictEqual(probe.$connection.get().connectionId, 'A', 'descriptor projection lags (the F1 trigger)');
+    await act(async () => { probe.setApiRequestConnection('B'); await wait(); }); // authority moved, descriptor/atoms still say local
+    assert.strictEqual(probe.$connection.get().connectionId, 'local', 'descriptor projection lags (the F1 trigger)');
     guestSend(first, { id: 2, method: 'GET', path: '/replay' }); await act(wait);
     assert.strictEqual(requests.filter(r => r.path.endsWith('/replay')).length, 0, 'no replay request was issued by the old channel');
     assert.strictEqual(first.port.closed, true, 'old port retired');
-    pendingEvents[0].resolve({ syntheticOwner: 'A', late: true }); await act(wait);
+    pendingEvents[0].resolve({ syntheticOwner: 'local', late: true }); await act(wait);
     assert.deepStrictEqual(first.port.replies, [], 'old channel got neither the B replay nor the late A result');
-    // the page re-bootstraps for the NEW owner (not the old one) and shows a fresh frame
+    // Registry connections cannot be guarded through the current public SDK.
     await act(wait);
-    const boots = bootstraps(); assert.strictEqual(boots.length, 2); assert.strictEqual(boots[1].connectionId, 'B');
-    const second = connect(); assert.notStrictEqual(second.frame, first.frame); assert.notStrictEqual(second.nonce, first.nonce);
-    guestSend(second, { id: 1, method: 'GET', path: '/replay' }); await act(wait);
-    assert.deepStrictEqual(ownerOf(second), ['B']); assert.deepStrictEqual(ownerOf(first), []);
+    assert.strictEqual(bootstraps().length, 1, 'no bootstrap to the registry owner');
+    assert.strictEqual(document.querySelector('iframe'), null);
+    assert.ok(document.querySelector('[data-quest-state="lifecycleTitle"]'));
     await act(async () => { probe.$connection.set({ connectionId: 'B', mode: 'remote', baseUrl: 'https://synthetic-B.invalid' }); await wait(); }); await act(wait);
-    assert.strictEqual(second.port.closed, false, 'the descriptor catching up to the pinned owner B does not retire the already-rebound generation');
-    guestSend(second, { id: 2, method: 'GET', path: '/replay' }); await act(wait);
-    assert.deepStrictEqual(ownerOf(second), ['B', 'B']);
+    assert.strictEqual(bootstraps().length, 1, 'descriptor catch-up cannot enable a refused owner');
   });
 
-  await test('SDK routing: same-ID endpoint edit retires the frame/port (registry push) and late A result is dropped', async () => {
-    await reset(); await mount(); const first = connect();
-    guestSend(first, { id: 1, method: 'GET', path: '/events?since=synthetic-A-cursor' }); await act(wait);
-    await act(async () => { probe.$connection.set({ connectionId: 'A', mode: 'remote', baseUrl: 'https://synthetic-C.invalid' }); for (const f of [...regL]) f({ connectionId: 'A', reason: 'updated' }); await wait(); });
-    assert.strictEqual(first.port.closed, true, 'port closed synchronously by the lifecycle push');
-    pendingEvents[0].resolve({ syntheticOwner: 'A-old-endpoint', late: true }); await act(wait);
-    assert.deepStrictEqual(first.port.replies, []);
-    await act(wait); assert.strictEqual(bootstraps().length, 2, 'bootstrap repeated for the edited connection');
-    assert.notStrictEqual(document.querySelector('iframe'), first.frame);
+  await test('SDK routing: registry endpoint edits cannot load a frame or issue REST calls', async () => {
+    await reset('A'); await mount();
+    await act(async () => { probe.$connection.set({ connectionId: 'A', mode: 'remote', baseUrl: 'https://synthetic-C.invalid' }); await wait(); });
+    assert.strictEqual(document.querySelector('iframe'), null);
+    assert.deepStrictEqual(requests, []);
+    assert.ok(document.querySelector('[data-quest-state="lifecycleTitle"]'));
   });
 
-  await test('SDK routing: actual profile change retires; removal of another connection does not', async () => {
+  await test('SDK routing: local profile change retires and drops late results', async () => {
     await reset(); await mount(); const first = connect();
-    await act(async () => { for (const f of [...regL]) f({ connectionId: 'Z', reason: 'removed' }); await wait(); });
-    assert.strictEqual(first.port.closed, false, 'unrelated registry change keeps the channel');
     guestSend(first, { id: 1, method: 'GET', path: '/replay' }); await act(wait);
-    assert.deepStrictEqual(ownerOf(first), ['A']);
+    assert.deepStrictEqual(ownerOf(first), ['local']);
     guestSend(first, { id: 2, method: 'GET', path: '/events?since=a' }); await act(wait);
     await act(async () => { probe.$activeGatewayProfile.set('work'); await wait(); });
     assert.strictEqual(first.port.closed, true, 'profile switch retired the old port in the same step');
@@ -592,17 +575,15 @@ export const probe={ $connection,$activeGatewayProfile,$apiRequestScope,setApiRe
     guestSend(first, { id: 1, method: 'GET', path: '/events?since=a' }); await act(wait);
     await act(() => root.unmount()); root = null;
     assert.strictEqual(first.port.closed, true);
-    pendingEvents[0].resolve({ syntheticOwner: 'A', late: true }); await act(wait);
+    pendingEvents[0].resolve({ syntheticOwner: 'local', late: true }); await act(wait);
     assert.deepStrictEqual(first.port.replies, []);
-    assert.strictEqual(regL.size, 0); assert.strictEqual(appliedL.size, 0);
     const before = requests.length; await wait(700); assert.strictEqual(requests.length, before, 'no traffic after unmount');
   });
 
-  await test('SDK routing: Desktop without lifecycle pushes fails closed (no bootstrap, no frame)', async () => {
-    await reset(); const saved = window.hermesDesktop.connections; window.hermesDesktop.connections = undefined;
-    try { await mount(); assert.strictEqual(document.querySelector('iframe'), null); assert.strictEqual(bootstraps().length, 0);
-      assert.ok(document.querySelector('[data-quest-state="lifecycleTitle"]')); }
-    finally { window.hermesDesktop.connections = saved; }
+  await test('SDK routing: untagged connection fails closed (no bootstrap, no frame)', async () => {
+    await reset(null); await mount();
+    assert.strictEqual(document.querySelector('iframe'), null); assert.deepStrictEqual(requests, []);
+    assert.ok(document.querySelector('[data-quest-state="lifecycleTitle"]'));
     await reset();
   });
   if (root) await act(() => root.unmount());
@@ -621,4 +602,4 @@ export const probe={ $connection,$activeGatewayProfile,$apiRequestScope,setApiRe
   console.log(`PASS ${passed} tests`);
   fs.rmSync(tmp, { recursive: true, force: true });
   process.exit(process.exitCode || 0);
-})().catch(error => { if (!error || !error.__reported) console.error(error && error.stack || error); process.exitCode = 1; });
+})().catch(error => { if (!error || !error.__reported) console.error(error && error.stack || error); process.exit(1); });

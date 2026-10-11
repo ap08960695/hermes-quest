@@ -256,11 +256,10 @@ def _ensure_sampler() -> str:
 
 
 def _profile_names_allowed(request: Request | None) -> bool:
-    """Only verified host state or provider-verified credentials disclose names.
+    """Only verified request state supplied by the host discloses names.
 
-    Isolated plugin hosts forward headers/cookies, not parent ASGI state. Reverify
-    those with the host's own providers; never trust a query or presence of a header.
-    Missing Hermes auth support leaves pseudonyms rather than widening disclosure.
+    Isolated hosts that forward credentials but not auth state stay pseudonymous.
+    The plugin never verifies credentials or reads the dashboard signing secret.
     """
     if request is None:
         return False
@@ -269,25 +268,7 @@ def _profile_names_allowed(request: Request | None) -> bool:
     if (getattr(request.state, "token_authenticated", False) is True
             and getattr(request.state, "token_principal", None) is not None):
         return True
-    try:
-        from hermes_cli.dashboard_auth.cookies import read_session_cookies, read_session_provider
-        from hermes_cli.dashboard_auth.middleware import _extract_bearer, _verify_access_token
-        token = _extract_bearer(request) or read_session_cookies(request)[0]
-        if not token:
-            return False
-        if _verify_access_token(request, access_token=token,
-                                provider_hint=read_session_provider(request), audit=False) is not None:
-            return True
-        # Basic sessions are stateless. The isolated host may not have registered
-        # this bundled provider; use its official verifier/config, without logging
-        # in, refreshing, registering providers, or minting a new signing secret.
-        from plugins.dashboard_auth.basic import BasicAuthProvider, _settings, _load_config_basic_auth_section
-        section = _load_config_basic_auth_section()
-        if not (os.environ.get("HERMES_DASHBOARD_BASIC_AUTH_SECRET") or section.get("secret")):
-            return False
-        return BasicAuthProvider(**_settings()).verify_session(access_token=token) is not None
-    except Exception:  # optional host seam/provider outage: fail closed on names
-        return False
+    return False
 
 
 @router.get("/replay")

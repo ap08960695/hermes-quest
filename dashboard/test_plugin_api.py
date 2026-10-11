@@ -111,6 +111,15 @@ class QuestAPItests(unittest.TestCase):
         self.assertFalse(api._profile_names_allowed(None))
         self.assertFalse(api._profile_names_allowed(request(headers=[(b'x-quest-authenticated', b'true')])))
         self.assertFalse(api._profile_names_allowed(request({'token_authenticated': True})))
+        self.assertFalse(api._profile_names_allowed(request({'token_principal': object()})))
+        self.assertFalse(api._profile_names_allowed(request({'token_authenticated': 1, 'token_principal': object()})))
+        self.assertFalse(api._profile_names_allowed(request({'session': None})))
+        # Credentials and signing configuration cannot replace verified host state.
+        with patch.dict(os.environ, {'HERMES_DASHBOARD_BASIC_AUTH_SECRET': 'synthetic-not-a-secret'}):
+            with patch('builtins.__import__', side_effect=AssertionError('auth internals must not be imported')):
+                self.assertFalse(api._profile_names_allowed(request(headers=[
+                    (b'authorization', b'Bearer synthetic'), (b'cookie', b'hermes_session=synthetic')
+                ])))
         self.assertTrue(api._profile_names_allowed(request({'session': object()})))
         self.assertTrue(api._profile_names_allowed(request({'token_authenticated': True, 'token_principal': object()})))
 

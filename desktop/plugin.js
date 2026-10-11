@@ -35,7 +35,7 @@ const EN = {
   bridgeTitle: 'Desktop bridge unavailable',
   bridge: 'This view needs the Hermes Desktop app.',
   lifecycleTitle: 'Desktop update needed',
-  lifecycle: 'This Hermes Desktop build cannot report connection changes, so Quest cannot guarantee that it only shows data from the connection you selected. Update Hermes Desktop, then try again.',
+  lifecycle: 'Quest currently supports only an explicit local connection. Registry and remote connections need a public Desktop SDK connection-change hook before they can safely load. Select a local connection, or update Hermes Desktop when that hook is available, then try again.',
   invalidTitle: 'Quest page was refused',
   invalid: 'The backend returned a page that does not match the Desktop contract, so it was not loaded.'
 }
@@ -160,14 +160,14 @@ export function validAccent(value) {
 // connection while requests already go to the new one, and it never changes when a registry
 // connection keeps its id but is edited to another endpoint. The guard therefore
 //   1. pins the owner read from host.activeConnectionId() (the same source as the request scope)
-//      and host.state.profile, plus a lifecycle epoch fed by the registry push events;
+//      and host.state.profile;
 //   2. verifies the pin in the same synchronous tick as every ctx.rest call (nothing can
 //      interleave between the check and the host reading its scope) and again before any
 //      result is published;
 //   3. on any mismatch retires the channel synchronously (port closed, no reply of any kind)
 //      before anything can be re-routed, then lets the page bootstrap again for the new owner.
-// A transition that is neither observable through the SDK nor reported by a lifecycle push in
-// time cannot be detected here; docs/native-integration.md lists that residual window.
+// The SDK cannot report same-id registry endpoint edits. Until it provides a lifecycle hook,
+// registry and untagged connections are refused before any REST call (catalog rule 8).
 
 export class RouteChangedError extends Error {
   constructor() {
@@ -192,19 +192,12 @@ export function readOwner(h = host) {
 const ownerKey = owner => `${owner.connectionId === null ? '\u0001' : owner.connectionId}\u0000${owner.profile === null ? '\u0001' : owner.profile}`
 
 /**
- * Watchers fed from the Desktop host: SDK atoms (prompt retirement) and the registry lifecycle
- * pushes (same-id endpoint edits, removal, soft connection apply). Every subscription is
- * optional; the per-request check above is the authority, these only retire sooner.
- * `pushes` says which lifecycle pushes this Desktop build provides.
+ * SDK-only owner observation. Atom listeners retire promptly; the watchdog catches a
+ * request-scope change before the descriptor projection catches up. Per-request checks
+ * remain the authority. No private preload bridge is inspected or subscribed to.
  */
-export function hostWatchers(h = host, desktop = typeof window !== 'undefined' ? window.hermesDesktop : undefined) {
-  const connections = desktop && desktop.connections
-  const pushes = {
-    changed: Boolean(connections && typeof connections.onChanged === 'function'),
-    applied: Boolean(desktop && typeof desktop.onConnectionApplied === 'function')
-  }
+export function hostWatchers(h = host) {
   return {
-    pushes,
     subscribe(api) {
       const offs = []
       const add = fn => { try { const off = fn(); if (typeof off === 'function') offs.push(off) } catch (e) { /* unobservable here */ } }
@@ -213,8 +206,6 @@ export function hostWatchers(h = host, desktop = typeof window !== 'undefined' ?
       add(() => { const id = setInterval(() => api.check(), WATCHDOG_MS); return () => clearInterval(id) })
       add(() => h.state.profile.listen(() => api.check()))
       add(() => h.state.connectionId.listen(() => api.check()))
-      if (pushes.changed) add(() => connections.onChanged(payload => api.registry(payload)))
-      if (pushes.applied) add(() => desktop.onConnectionApplied(() => api.registry(null)))
       return () => { for (const off of offs) { try { off() } catch (e) { /* already gone */ } } }
     }
   }
@@ -223,17 +214,16 @@ export function hostWatchers(h = host, desktop = typeof window !== 'undefined' ?
 /**
  * One guard per bootstrap generation.
  *   read()      -> {connectionId, profile}   authoritative owner, synchronous
- *   watchers    -> {pushes:{changed,applied}, subscribe(api)} (see hostWatchers)
+ *   watchers    -> {subscribe(api)} (see hostWatchers)
  *   onLost(why) -> called once, after the retire hooks ran
  * Returns {pin, lost, valid(), rest(fn), retireWith(hook), dispose()}.
  */
 export function createRouteGuard({ read, watchers, onLost }) {
   const pin = Object.freeze({ ...read() })
   const pinKey = ownerKey(pin)
-  // An endpoint can change behind an unchanged owner id; only a lifecycle push reports that.
-  // Without the push this owner cannot be guarded, so refuse (fail closed) instead of guessing.
-  const pushes = (watchers && watchers.pushes) || {}
-  if (pin.connectionId === 'local' ? false : pin.connectionId === null ? !pushes.applied : !pushes.changed) {
+  // An endpoint can change behind an unchanged registry id; SDK atoms cannot report that.
+  // Only the explicit local owner is safe until a public lifecycle hook is available.
+  if (pin.connectionId !== 'local') {
     throw new Error('Desktop route lifecycle unavailable')
   }
 
@@ -258,13 +248,6 @@ export function createRouteGuard({ read, watchers, onLost }) {
     try { now = ownerKey(read()) } catch (e) { lose('owner'); return false }
     if (now !== pinKey) { lose('owner'); return false }
     return true
-  }
-  const registry = payload => {
-    if (lost || disposed) return
-    const id = payload && typeof payload === 'object' ? payload.connectionId : undefined
-    // A malformed payload, a soft connection apply (null) or an untagged owner cannot be matched
-    // to one registry id, so it counts (fail closed).
-    if (typeof id !== 'string' || pin.connectionId === null || id === pin.connectionId) lose('registry')
   }
 
   const guard = {
@@ -294,7 +277,7 @@ export function createRouteGuard({ read, watchers, onLost }) {
       finish(null)
     }
   }
-  if (watchers && typeof watchers.subscribe === 'function') unwatch = watchers.subscribe({ check, registry })
+  if (watchers && typeof watchers.subscribe === 'function') unwatch = watchers.subscribe({ check })
   return guard
 }
 

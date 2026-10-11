@@ -243,6 +243,11 @@ Desktop plugins are off by default, and each plugin has a separate Agent and Des
 
 **4. What you should see.**
 
+This version supports only the SDK's explicit **local** connection. Registry connections (including SSH
+remotes) and connections without an owner ID show "Desktop update needed" without fetching any data.
+Installing on both machines does not bypass this guard. Remote support needs a public SDK lifecycle hook
+for same-ID endpoint changes; updating the app alone may not provide that hook yet.
+
 - A populated board: heroes and quests for the work in the last 12 hours, live-updating about every 10 seconds.
 - A new or quiet Hermes home: the game town with **no heroes, no quests and no battles**. That is normal and not
   an error. Quest shows your real board only and never injects demo data into it. Use the standalone demo to see
@@ -250,11 +255,12 @@ Desktop plugins are off by default, and each plugin has a separate Agent and Des
 - "Quest is not available yet": the backend for the connection you selected does not have Quest installed or
   enabled. Install or update it there, restart that backend, then use **Try again**.
 - "Sign-in needed": reconnect or sign in to that connection again.
-- "Desktop update needed": this Desktop build cannot report connection changes; update Hermes Desktop.
+- "Desktop update needed": the selected connection cannot be guarded with the public Desktop SDK.
 
-Desktop support is tested on Hermes Desktop for Linux (local backend) and on a macOS Desktop connected to a
-Linux backend over SSH. The macOS renderer motion and mobile Desktop have not been measured, so treat those as
-untested. The technical contract is in [docs/native-integration.md](docs/native-integration.md).
+Previous releases were tested on Linux (local backend) and macOS connected over SSH; that remote result does
+not certify this SDK-only version, which intentionally refuses registry connections. Real-app verification
+of this candidate is separate from the SDK harness. The technical contract is in
+[docs/native-integration.md](docs/native-integration.md).
 
 ### Update
 
@@ -397,10 +403,9 @@ Desktop app and the Hermes dashboard/backend you already run. Installing from th
   `show_titles` is `false` by default and is a local setting you can opt in to.
 - Profile and pet names are a **separate** setting from card titles. `show_profile_names` is `false` for
   anonymous output and cannot be turned on from the JSON file. The dashboard plugin turns it on only for a
-  request that carries a verified dashboard session, so a signed-in dashboard user sees profile/display names
-  (never card text), while anything unverified shows `bot-<hash>` labels. So with the default `show_titles: false`
-  you can still see real profile names inside your own signed-in dashboard. Treat a signed-in view as private
-  and do not screenshot it for sharing.
+  request with host-verified session or token state (never card text). A signed-in host that does not forward
+  verified request state, including current isolated plugin hosts, still shows `bot-<hash>` labels;
+  credentials alone cannot authorize names. Treat any view with real names as private and do not screenshot it for sharing.
 - Text fields come from fixed enumerations. Anything unknown becomes `unknown`.
 - Memory activity is counted and shown as a gesture. The extractor projects tool identities from session
   transcripts without materializing memory query/result prose. It does not open any memory store.

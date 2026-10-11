@@ -33,10 +33,11 @@ These are two separate settings.
 | Setting | Default | What it controls | Can the JSON file change it? |
 | --- | --- | --- | --- |
 | `show_titles` | `false` | Free text from cards (titles, notes). Opt-in, redacted. | Yes (boolean) |
-| `show_profile_names` | `false` | Profile and display names of bots. | **No.** The plugin API turns it on only for a request carrying a verified dashboard session or provider-verified bearer/cookie; otherwise it stays off. |
+| `show_profile_names` | `false` | Profile and display names of bots. | **No.** The plugin API turns it on only for host-verified `request.state.session` or token state (`token_authenticated` and `token_principal`); otherwise it stays off. |
 
-So with the default `show_titles: false`, a signed-in dashboard user still sees profile/display names (they are
-not card text), while anonymous or unverified output shows `bot-<hash>`. `show_titles` does not hide profile names
+So with the default `show_titles: false`, a signed-in dashboard user sees profile/display names only when
+the host supplies verified request state. Isolated hosts that forward only headers/cookies show `bot-<hash>`
+even after sign-in; the plugin does not verify credentials or read signing secrets. `show_titles` does not hide profile names
 and `show_profile_names` does not reveal card text. Pet names are currently always empty. Standalone demo data is
 synthetic.
 

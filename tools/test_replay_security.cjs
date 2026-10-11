@@ -9,9 +9,15 @@ const { chromium, firefox } = require(process.env.PLAYWRIGHT_NODE_MODULE || 'pla
 const demo = JSON.parse(fs.readFileSync(path.join(root, 'data/demo.json')));
 const hostile = structuredClone(demo);
 const marker = '<img src=x onerror="window.__qcanary=1"><b data-qcanary="1">q</b>';
+const feedFields = ['before', 'after', 'passed', 'code', 'stage', 'outcome'];
+const feedEvent = demo.events.find(e => e.bot && e.task && e.kind === 'tests');
+assert(feedEvent, 'synthetic fixture must contain a worker test event');
 hostile.events = [
   ...demo.events.filter(e => e.kind !== 'captain'),
   { ...demo.events.find(e => e.kind === 'captain'), kind: 'captain', act: marker },
+  ...feedFields.map(field => ({ ...feedEvent, id: 'hostile-feed-' + field, kind: ({ before: 'compress', after: 'compress',
+    passed: 'tests', code: 'hurt', stage: 'created', outcome: 'run_end' })[field],
+    before: 10, after: 5, passed: 2, code: 1, [field]: marker + ' field-' + field })),
 ];
 const types = { '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.html': 'text/html', '.png': 'image/png' };
 const served = [];
@@ -71,6 +77,38 @@ const server = http.createServer((req, res) => {
           return (window.S.soc.captain || 0) - before;
         });
         assert.equal(entered, 4, 'unknown actions must reach the Captain handler');
+        // Exercise each raw feed input through the real event handlers, then render
+        // the actual feed and its Details dialog. Merely carrying HTML in JSON is not proof.
+        for (const field of feedFields) {
+          const reached = await page.evaluate(({ field, marker }) => {
+            const game = window.__questTest;
+            const event = window.D.events.find(e => typeof e[field] === 'string' && e[field].endsWith('field-' + field));
+            if (!event) throw new Error('hostile event missing: ' + field);
+            const hero = game.hero(event.bot), task = game.task(event.task);
+            hero.rest.state = 'active'; hero.rest.phase = null; hero.task = task.id;
+            task.bot = hero.bot; task.state = 'fight'; task.dying = 0; task.alpha = 1; task.mpath = null;
+            window.S.feed = []; window.S.lastFeed = {};
+            game.apply(event, true);
+            // stage/outcome are fixed-enum presentation paths: unknown values must not
+            // become feed prose. The four interpolated fields MUST reach the feed.
+            const raw = window.S.feed.map(f => f.html).join('\n');
+            document.querySelector('#menu').hidden = false;
+            document.querySelector('#chron').hidden = false;
+            document.querySelector('#group-overview').open = true;
+            game.renderFeed();
+            return { raw, rendered: document.querySelector('#feed').textContent };
+          }, { field, marker });
+          if (['stage', 'outcome'].includes(field)) {
+            assert(!reached.raw.includes(marker), `${field}: unknown enum has no feed prose`);
+          } else {
+            assert(reached.raw.includes(marker), `${field}: marker actually reached the feed`);
+            assert(reached.rendered.includes('field-' + field), `${field}: literal marker rendered`);
+            await page.locator('#feed button').first().click();
+            assert((await page.locator('#quest').textContent()).includes('field-' + field), `${field}: Details path rendered`);
+          }
+          assert.equal(await page.evaluate(() => window.__qcanary || 0), 0, field);
+          assert.equal(await page.locator('[data-qcanary], img[src="x"]').count(), 0, field);
+        }
       }
       assert(served.slice(start).includes(test.replay), `source ${test.url}`);
       assert.deepEqual(external, [], 'no attacker-origin fetch');
@@ -96,7 +134,7 @@ const server = http.createServer((req, res) => {
     assert.equal(redacted.tasks[0].campaign, 'misc');
     assert(!JSON.stringify(redacted).includes('SECRET'), 'titles/campaign/note removed');
     await page.close();
-    console.log(`PASS replay-security ${engine.name()}: ${cases.length} URL sources, unknown-action injection, no external fetch, privacy redaction`);
+    console.log(`PASS replay-security ${engine.name()}: ${cases.length} URL sources, ${feedFields.length} hostile feed fields (4 interpolated + 2 enum-rejected), Details, no external fetch, privacy redaction`);
   } finally { await browser.close(); }
   }
   server.close();

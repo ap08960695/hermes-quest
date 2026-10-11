@@ -55,15 +55,13 @@ fixed phrase, never as response bodies or paths.
   `host.activeConnectionId()` + `host.state.profile` per bootstrap generation, re-checks it in the same
   synchronous tick as every `ctx.rest` call and again before any result is delivered, and on mismatch
   closes the port with no reply (nothing from the old owner is delivered, nothing is re-routed to the
-  new one). It also retires on profile/descriptor changes, on the registry pushes
-  (`connections.onChanged` for the pinned id or a malformed payload, `onConnectionApplied`) and on a
-  500 ms watchdog while idle, then re-bootstraps for the new owner ("Quest reconnecting").
-- Fail closed: if this Desktop build lacks `activeConnectionId()` or the lifecycle push needed for the
-  pinned owner (`connections.onChanged` for a registry id, `onConnectionApplied` for an unpinned owner),
-  Quest shows "Desktop update needed" and mounts nothing. The local owner needs no push.
-- Residual window: a transition that is neither visible through the SDK nor announced by a push within the
-  watchdog interval is not detectable by a plugin. Backend responses are read-only and per-owner, and
-  results are re-verified before delivery, so the exposure is one in-flight request issued in that window.
+  new one). It observes only SDK profile/connection atoms and a 500 ms watchdog while idle,
+  then attempts a fresh bootstrap for the new owner ("Quest reconnecting").
+- Fail closed: the current SDK cannot report same-ID registry endpoint edits. Only an explicit `local`
+  owner is supported. Registry connections (including SSH remotes) and untagged owners show
+  "Desktop update needed", issue no REST calls and mount nothing, even if the app has private
+  lifecycle events. Builds lacking `activeConnectionId()` also fail closed. A public SDK lifecycle
+  hook is needed to safely restore registry support; polling IDs cannot detect endpoint edits.
 - Unmount closes the port, unsubscribes the watchers and stops all traffic.
 - The host accent (`--ui-accent`) is resolved to `#rrggbb` in the parent and pushed to the guest as `--ui-accent` and `--gold`.
 
