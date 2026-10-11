@@ -4,6 +4,12 @@ All notable changes to Hermes Quest are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Documentation
+
+- Docs: custom HERMES_HOME ต้องตั้ง HERMES_QUEST_CONFIG; หน้า Quest แสดงวิธีแก้เมื่อโหลดข้อมูลไม่ได้
+
 ## v0.1.3 - 2026-10-11
 
 ### Added
