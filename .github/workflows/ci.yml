@@ -185,6 +185,8 @@ jobs:
         run: |
           python3 -m pip install 'fastapi>=0.115,<1'
           node dashboard/test_dashboard_auth.cjs ${{ matrix.browser }} "$RUNNER_TEMP/dashboard-auth"
+      - name: Configuration guidance stays readable on mobile
+        run: node tools/test_config_hint_browser.cjs ${{ matrix.browser }}
       - name: Browser smoke (1280x800 and 390x844; demo from tools/mock.py)
         run: node tools/browser_smoke.mjs ${{ matrix.browser }} --out "$RUNNER_TEMP/smoke-shots"
       - name: Upload screenshots (CI artifact only, never committed)
