@@ -34,7 +34,9 @@ body:has(#menu:not([hidden])) #first-run,body:has(#quest:not([hidden])) #first-r
 #clock{width:auto!important;max-width:100%;overflow-wrap:anywhere}
 select{min-height:44px;max-width:100%;background:#1b2742;color:var(--ink);border:1px solid var(--line)}
 select:focus-visible{outline:2px solid var(--gold)}
-#focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px;max-width:calc(100vw - 16px)}
+#focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px;max-width:calc(100vw - 16px);pointer-events:none}
+#focus-bar>*{pointer-events:auto}
+#focus-bar #empty-note{pointer-events:none}
 #live-note{flex:0 0 100%;font-size:11px;padding:2px 6px;background:var(--panel);border:1px solid var(--red);border-radius:4px;color:#ffbba7}
 #empty-note{flex:0 0 100%;max-width:420px;padding:8px;background:var(--panel);border:1px solid var(--gold);border-radius:4px;overflow-wrap:anywhere}
 #focus-bar.inspection-side #mode{display:none}

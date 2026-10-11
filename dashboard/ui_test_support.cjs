@@ -45,10 +45,10 @@ module.exports = function loadUI(box, el) {
   for (const id of ['#camp', '#chron', '#quest']) box.document.querySelector(id).hidden = true;
   return state => {
     const label = el('#connection').getAttribute('aria-label');
-    if (state === 'offline' && label === 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME) alert') return true;
+    if (state === 'offline' && label === "Hermes Quest can't read your Hermes data. Retry, or open Help → Setup if you use a custom Hermes folder. alert") return true;
     if(state==='file')return ['Sample data normal','Saved history (not live) normal'].includes(label);
     if(state==='online')return label==='Connected normal';
-    if(state==='offline')return /^(?:Offline|update failed|Server error \(\d+\)(?: · Quest data is unavailable: .+)?) · retrying in 10 sec alert$/.test(label);
+    if(state==='offline')return /^(?:Offline|update failed|Server error \(\d+\)(?: · Hermes Quest can't read your Hermes data\. Retry, or open Help → Setup if you use a custom Hermes folder\.)?) · retrying in 10 sec alert$/.test(label);
     return false;
   };
 };

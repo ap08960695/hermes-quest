@@ -126,7 +126,7 @@ function blit(v, im, sx, sy, sw, sh, nx, ny, flip = false) {       // nx,ny: nat
 }
 function draw() {
   const empty=ctx.$('#empty-note');
-  if(empty){empty.hidden=ctx.privacyPending||ctx.D.tasks.length>0;
+  if(empty){empty.hidden=ctx.privacyPending||ctx.D.tasks.length>0||!!ctx.selectedEntity();
     empty.textContent=empty.hidden?'':'No quests yet — when a bot starts a Kanban task it appears here. Start a task in Hermes Kanban, or load saved history with tasks.';}
   if(ctx.workingSnapshot?.()&&!ctx.workView.all)return drawWorking();
   const v = view();
