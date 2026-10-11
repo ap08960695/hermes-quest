@@ -47,16 +47,52 @@ function inspectionLinks(v) {
   ctx.cx.restore();
   if(visible.length>3 && ctx.UI){const a=point(selected);ctx.UI.screenNumber('+'+(visible.length-3),a[0]/ctx.DPR,a[1]/ctx.DPR-90);}
 }
+function entityLabel(entity) {
+  // sceneName is the privacy boundary; never read raw title/name/profile fields.
+  const name = ctx.sceneName(entity);
+  return !entity.id && !name.startsWith('Hero · ') ? 'Hero · ' + name : name;
+}
+// Keep complete names rather than replacing narrow labels with bare quest numbers.
+// UIPanels owns viewport/reserved-area/collision placement; pinned labels get its
+// extra lanes. Wrap before passing a width so its ellipsis cannot erase the role.
+function sceneLabel(text, x, y, maxWidth = 280) {
+  if (!ctx.UI || !text) return;
+  const width = Math.max(48, Math.min(maxWidth, innerWidth - 32));
+  const measure = value => window.UIText.measure(value.toUpperCase(), 2);
+  const parts = Array.from(new Intl.Segmenter(undefined, {granularity:'grapheme'}).segment(String(text)), s => s.segment);
+  const lines = []; let line = '';
+  for (const part of parts) {
+    if (line && measure(line + part) > width) {
+      const space = line.lastIndexOf(' ');
+      if (space > 0) { lines.push(line.slice(0, space)); line = line.slice(space + 1); }
+      else { lines.push(line); line = ''; }
+    }
+    line += part;
+  }
+  if (line.trim()) lines.push(line.trim());
+  // Upward wrapping leaves the last line nearest its character's anchor.
+  lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, true, width));
+}
+function emptyScene(heroes) {
+  sceneLabel('No active quests', innerWidth / 2, innerHeight / 2);
+  if (!heroes) sceneLabel('No heroes in this history range', innerWidth / 2, innerHeight / 2 + 44);
+}
+function villagerLabel(v, villagers) {
+  if (!villagers.length) return;
+  // One representative avoids giving scenery the same visual weight as workers.
+  const n = window.NPCS?.state?.list.find(n => onScreen(v, n.x, n.y, 80, 100));
+  if (n) sceneLabel('Villager · decorative', (v.ox + n.x * v.Z) / ctx.DPR, (v.oy + (n.y - 70) * v.Z) / ctx.DPR);
+}
 function sceneSelection(v) {
   const entity = ctx.selectedEntity();
-  if (ctx.UI?.selected) ctx.UI.selected(entity ? ctx.sceneName(entity) : null, entity?.id ? 'quests' : 'delegate');
+  if (ctx.UI?.selected) ctx.UI.selected(entity ? entityLabel(entity) : null, entity?.id ? 'quests' : 'delegate');
   if (ctx.UI) ctx.UI.bounds();
   if (!entity || !ctx.UI) return;
   // Selected identification precedes regions/effects. The highlighted compact
   // representative remains visible even when no world-label lane fits.
   const x = entity.mx ?? entity.x, y = entity.my ?? entity.y;
   if (!ctx.overflowed(entity) && onScreen(v,x,y,180,180))
-    ctx.UI.screenLabel(ctx.sceneName(entity),(v.ox+x*v.Z)/ctx.DPR,(v.oy+(y-110)*v.Z)/ctx.DPR,true);
+    sceneLabel(entityLabel(entity),(v.ox+x*v.Z)/ctx.DPR,(v.oy+(y-110)*v.Z)/ctx.DPR);
 }
 function sceneOverflow(v) {
   if (!ctx.UI?.sceneOverflow) return;
@@ -68,7 +104,7 @@ function sceneOverflow(v) {
     if (!onScreen(v,x,y,300,220)) return [];
     return [{region, label:r.label.split(' · ')[0], count:items.length,
       blocked:items.filter(o => o.chained || o.state === 'blocked').length,
-      rows:() => entities.filter(o => o.placement?.region === region).map(o => ({key:o.id||o.bot, summary:ctx.sceneName(o)+' · '+(ctx.overflowed(o)?'Outside standing slots · ':'')+(o.id ? ctx.TASK_STATES[o.state]||'Unknown' : ctx.heroStatus(o)), details:()=>o.id?ctx.quest(o):ctx.heroDialog(o)}))}];
+      rows:() => entities.filter(o => o.placement?.region === region).map(o => ({key:o.id||o.bot, summary:entityLabel(o)+' · '+(ctx.overflowed(o)?'Outside standing slots · ':'')+(o.id ? ctx.TASK_STATES[o.state]||'Unknown' : ctx.heroStatus(o)), details:()=>o.id?ctx.quest(o):ctx.heroDialog(o)}))}];
   }));
 }
 function resize() { ctx.cv.width = innerWidth * ctx.DPR; ctx.cv.height = innerHeight * ctx.DPR; if (ctx.UI) ctx.UI.resize(); }
@@ -98,6 +134,14 @@ function draw() {
   if (ctx.privacyPending) { if(ctx.UI)ctx.UI.flush(); return; }
   if (ctx.BG) ctx.cx.drawImage(ctx.BG, v.ox, v.oy, ctx.W.size[0] * v.Z, ctx.W.size[1] * v.Z);
   sceneSelection(v);
+  const heroes = Object.values(ctx.S.heroes), quests = Object.values(ctx.S.tasks).filter(t => t.alpha > 0);
+  if (!quests.some(t => !['done','failed'].includes(t.state))) emptyScene(heroes.length);
+  // Identification takes priority over location banners and cosmetic effects.
+  for (const entity of [...heroes, ...quests]) {
+    const x = entity.mx ?? entity.x, y = entity.my ?? entity.y;
+    if (entity !== ctx.selectedEntity() && !ctx.overflowed(entity) && onScreen(v,x,y,180,180))
+      sceneLabel(entityLabel(entity),(v.ox+x*v.Z)/ctx.DPR,(v.oy+(y-110)*v.Z)/ctx.DPR);
+  }
   for (const [k,r] of Object.entries(ctx.W.regions)) banner(v,k,r);
   inspectionLinks(v); ctx.inspect.picks = [];
   const ents = [...(ctx.W.layered ? ctx.W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
@@ -106,6 +150,7 @@ function draw() {
     ...Object.values(ctx.S.heroes).map(h => ({y: h.y, f: () => heroDraw(v, h)})),
     ...(window.NPCS ? NPCS.ents(v, blit, shadowPx) : [])];             // M4 villagers share the y-sort
   ents.sort((a, b) => a.y - b.y).forEach(e => e.f());
+  villagerLabel(v, window.NPCS?.state?.list || []);
   const groups = new Map();
   for (const f of ctx.S.fx) {
     if(f.k !== 'num') { fxDraw(v,f); continue; }
@@ -126,18 +171,17 @@ function drawWorking() {
   ctx.cx.imageSmoothingEnabled=false;ctx.cx.fillStyle='#0b1220';ctx.cx.fillRect(0,0,ctx.cv.width,ctx.cv.height);
   if(ctx.privacyPending){ctx.UI?.flush();return;}
   if(ctx.BG)ctx.cx.drawImage(ctx.BG,v.ox,v.oy,ctx.W.size[0]*v.Z,ctx.W.size[1]*v.Z);
+  if (!ctx.workView.pairs.length) emptyScene(Object.keys(ctx.S.heroes).length);
   for(const p of ctx.W.layered?ctx.W.props:[])prop(v,p);
   for(const pair of ctx.workView.pairs){
     if(pair.hero)heroDraw(v,pair.hero);
     else {const [x,y]=P(v,pair.x-60,pair.y-20);ctx.cx.strokeStyle='#ffd36b';ctx.cx.strokeRect(x-12*v.Z,y-24*v.Z,24*v.Z,24*v.Z);}
     monster(v,pair.monster);
-    const labelWidth=Math.max(48,110*v.Z/ctx.DPR),labelY=(v.oy+(pair.y-110)*v.Z)/ctx.DPR;
-    if(pair.hero)ctx.UI?.screenLabel(pair.item.display_name,(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
-    const compactLabel=pair.item.quest_label.replace(/^(Planning|Testing|Verification) quest/,(_,kind)=>({Planning:'Plan',Testing:'Test',Verification:'Verify'})[kind]).replace(/ quest(?= #)/,'');
-    const number=compactLabel.match(/#\d+$/)?.[0];
-    // Keep the stable quest number even when the scene lane is too narrow for its name.
-    const sceneLabel=number&&UIText.measure(compactLabel,2)>labelWidth?number:compactLabel;
-    ctx.UI?.screenLabel(sceneLabel,(v.ox+pair.monster.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
+    const labelY=(v.oy+(pair.y-110)*v.Z)/ctx.DPR;
+    if(pair.hero)sceneLabel(entityLabel(pair.hero),(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY);
+    const questLabel=entityLabel(pair.monster).replace(/^(Planning|Testing|Verification) quest/,(_,kind)=>({Planning:'Plan',Testing:'Test',Verification:'Verify'})[kind]+' quest');
+    // Stagger the paired anchors so their full role labels have separate lanes.
+    sceneLabel(questLabel,(v.ox+pair.monster.x*v.Z)/ctx.DPR,labelY+44);
     const a=pair.monster.activity;
     if(pair.hero?.spar>0) {
       // Muted block cue: no impact flash, damage or reward.
@@ -157,6 +201,7 @@ function drawWorking() {
   const cap=innerWidth<=760?8:innerWidth<=1100?14:20;
   const villagers=!ctx.workView.pairs.length&&window.NPCS?NPCS.ents(v,blit,shadowPx).slice(0,cap-1):[];
   villagers.forEach(e=>e.f());
+  villagerLabel(v, villagers);
   let couriers=0;
   for(const f of ctx.S.fx)if(f.working || (!ctx.workView.pairs.length && f.src==='inn')){
     if(f.k==='raven' && couriers++)continue;
@@ -206,8 +251,8 @@ function banner(v, key, r) {
   const [px,py] = r.plaza?.label || [r.spot[0], im ? pr.y-im.height-10 : r.spot[1]-60];
   const x = v.ox + N(px) * v.Z, y = v.oy + N(py) * v.Z;
   const n = Object.values(ctx.S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
-  if(ctx.UI){ctx.UI.screenLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,true);
-    if(n||key==='vault')ctx.UI.screenNumber(compact(key==='vault'?ctx.S.vault:n),x/ctx.DPR,y/ctx.DPR-22,'#ffd36b');}
+  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR);
+    if(n||key==='vault')sceneLabel(key==='vault'?(Number.isFinite(ctx.S.vault)?compact(ctx.S.vault)+' game gold':'Game gold: unavailable'):compact(n)+' '+(n===1?'quest':'quests'),x/ctx.DPR,y/ctx.DPR-44);}
 }
 function heroDraw(v, h) {
   if (ctx.overflowed(h)) return;
@@ -269,7 +314,7 @@ function heroDraw(v, h) {
   if (h.gest && !walking) emoji(h.gest.icon.split(' ')[0], hx + 14 * v.Z, top + 6 * v.Z - Math.sin(performance.now() / 200) * 2 * v.Z, 12 * v.Z);
   if (h.sleep && !walking) emoji('💤', hx + 12 * v.Z, top + 28 * v.Z - Math.sin(performance.now() / 400) * 4 * v.Z, 14 * v.Z);
 
-  if (h.bubble && !ctx.workingSnapshot?.()) bubble(hx, top - 16 * ctx.DPR, h.bubble.text);
+  if (h.bubble && !ctx.workingSnapshot?.()) bubble(hx, top - 16 * ctx.DPR, ctx.D.meta.show_titles===true?'Observed activity':'Activity details hidden');
 
 }
 // Effort/attack colours come from the character itself: the dominant saturated hue of its first frame, plus a
