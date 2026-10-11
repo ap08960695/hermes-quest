@@ -357,6 +357,7 @@ function say(html, t, key, minGap = 0) {
 function renderFeed() {
   if(!ctx.UI||ctx.$('#chron').hidden||ctx.$('#menu').hidden||!ctx.$('#group-overview').open)return;
   ctx.UI.feed(ctx.S.feed.map(f=>{
+    const issue=/⛓|💀|💥|Blocked|Failed|Unavailable/i.test(ctx.UI.plain(f.html));
     let detailText=fmt(f.t)+' '+ctx.UI.plain(f.html);
     let text=ctx.UI.plain(f.html).replace(/ — .*$/u,'');
     if(/^💬|^🐦‍⬛ Captain:/.test(text))text='💬 Message; open Details';
@@ -378,7 +379,7 @@ function renderFeed() {
       text=(who?'Hero · '+characterName(who.id)+' · ':'')+action;
       detailText='Activity details hidden to protect privacy';
     }
-    return {text:fmt(f.t)+' · '+text,detailText};
+    return {text:fmt(f.t)+' · '+text,detailText,issue};
   }),{loading:!ctx.D,empty:'No activity for this filter in saved history',...stalePayload()});
   ctx.S.feedDirty=false;
 }
@@ -425,7 +426,7 @@ let hudT=0;
 function hud(dt) {
   if(!ctx.UI || ctx.privacyPending)return;
   if((hudT+=dt)<.1)return;hudT=0;
-  ctx.UI.number('#clock',fmt(ctx.S.t),'Replay time');ctx.UI.number('#speeds',ctx.S.speed+'×','Replay speed relative to real time');
+  ctx.UI.number('#clock',fmt(ctx.S.t),'Replay time');ctx.UI.number('#speeds',String(ctx.S.speed),'Replay speed relative to real time');
   ctx.UI.control('#play',ctx.S.play?'pause':'play',ctx.S.play?'Pause':'Play');
   ctx.UI.control('#live','live-follow','Follow live',ctx.following?'selected':'normal');
   ctx.$('#play').setAttribute('aria-pressed',String(!ctx.S.play));ctx.$('#live').setAttribute('aria-pressed',String(ctx.following));

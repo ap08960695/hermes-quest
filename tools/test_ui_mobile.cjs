@@ -4,6 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),
 const crypto=require('node:crypto');
 const {chromium}=require('playwright');
 const {instrument,assertPerf}=require('./mobile_measurement.cjs');
+const {inspectDetail,assertReadableDetail}=require('./clarity_readability.cjs');
 const root=path.resolve(__dirname,'..'),out=path.resolve(process.argv[2]||process.env.TMPDIR||'.');fs.mkdirSync(out,{recursive:true});
 const mode=process.argv[3]||'smoke',base='a326040901cc54d6e4a6fc34ea2ec2be97e4bb44';
 const demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json'))),requests=[];
@@ -185,9 +186,16 @@ function monitor(){
         await openGroup(page,'overview');await page.click('#log');const log=await page.evaluate(()=>{const c=document.querySelector('#chron').getBoundingClientRect(),m=document.querySelector('#menu'),r=m.getBoundingClientRect();return {x:c.x,w:c.width,menuX:r.x,menuW:r.width,menuBottom:r.bottom,overflow:m.scrollWidth>m.clientWidth+1};});assert(log.x>=log.menuX&&log.x+log.w<=log.menuX+log.menuW&&log.menuBottom<=height-8&&!log.overflow,'feed stays in scrollable Menu');
         await page.click('#chron-close');assert(await page.locator('#chron').isHidden());
         await page.click('#quests');assert(await page.locator('#chron').isHidden());assert(await page.locator('#camp').isVisible());
-        await page.click('#quests');await page.evaluate(()=>UIPanels.detail(['กี่ กุ้ง น้ำ ฤทธิ์ ปี่ '+'A'.repeat(1024)],'synthetic detail'));await page.waitForTimeout(1000);
-        const detail=await page.evaluate(()=>{const el=document.querySelector('#quest'),r=el.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,scroll:el.scrollWidth,client:el.clientWidth,canvases:el.querySelectorAll('canvas').length,readable:[...el.querySelectorAll('.bitmap-row')].every(row=>row.querySelector('canvas')||row.querySelector('.detail-text')?.getBoundingClientRect().height>0)};});
-        assert(detail.x>=8&&detail.y>=8&&detail.x+detail.w<=width-8&&detail.y+detail.h<=height-8);assert(detail.scroll<=detail.client+1);assert(detail.readable);
+        const expectedDetail=['กี่ กุ้ง น้ำ ฤทธิ์ ปี่ '+'A'.repeat(1024)];
+        await page.click('#quests');await page.evaluate(lines=>UIPanels.detail(lines,'synthetic detail'),expectedDetail);await page.waitForTimeout(1000);
+        const detail=await page.evaluate(inspectDetail);
+        assert(detail.x>=8&&detail.y>=8&&detail.x+detail.w<=width-8&&detail.y+detail.h<=height-8);assert(detail.scroll<=detail.client+1);assertReadableDetail(detail,expectedDetail);
+        if(width===1280&&zoom===1){
+          await page.evaluate(()=>{window.savedDetailRows=[...document.querySelector('#quest .detail-content').childNodes];document.querySelector('#quest .detail-content').replaceChildren();});
+          assert.throws(()=>assertReadableDetail({rows:[]},expectedDetail),/nonempty detail rows/);
+          const blank=await page.evaluate(inspectDetail);assert.throws(()=>assertReadableDetail(blank,expectedDetail),/nonempty detail rows/);
+          await page.evaluate(()=>{document.querySelector('#quest .detail-content').append(...savedDetailRows);delete window.savedDetailRows;});
+        }
         if(zoom!==2)await page.screenshot({path:path.join(out,'after-'+width+'x'+height+'-z'+zoom+'.png')});
         await page.keyboard.press('Escape');
         const privacy=await page.evaluate(async()=>{

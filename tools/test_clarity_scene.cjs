@@ -2,6 +2,7 @@
 // Synthetic acceptance cases: production factories, real DOM/raster and transport.
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),assert=require('node:assert/strict');
 const {chromium,firefox}=require('playwright');
+const {assertRenderedAliases}=require('./clarity_readability.cjs');
 const root=path.resolve(process.env.SCENE_ROOT||path.join(__dirname,'..'));
 const out=path.resolve(process.argv[2]||'.evidence/clarity-scene');
 const demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json')));
@@ -32,13 +33,17 @@ const server=http.createServer((req,res)=>{
    let factory;Object.defineProperty(HQModules,name,{get:()=>ctx=>(window[key]=factory(ctx)),set:v=>factory=v});
   }
   window.clarityText=[];const fill=CanvasRenderingContext2D.prototype.fillText;
-  CanvasRenderingContext2D.prototype.fillText=function(text,...args){clarityText.push(String(text));return fill.call(this,text,...args);};
+  CanvasRenderingContext2D.prototype.fillText=function(text,...args){clarityText.push(String(text));this.canvas.rasterText=String(text);return fill.call(this,text,...args);};
+  const image=CanvasRenderingContext2D.prototype.drawImage;
+  CanvasRenderingContext2D.prototype.drawImage=function(source,...args){this.canvas.rasterText=source.rasterText;return image.call(this,source,...args);};
+  let font;Object.defineProperty(window,'UIText',{get:()=>font,set:value=>{font={...value,draw(ctx,text,...args){ctx.canvas.rasterText=String(text);return value.draw(ctx,text,...args);}};}});
  });
  await page.route('**/data/demo.json',r=>r.fulfill({json:fixture()}));
  await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>typeof loop.last==='number');
  await page.locator('#hint-dismiss').click();
  await page.evaluate(()=>{cancelAnimationFrame(raf);const bitmap=UIText.bitmap;UIText.bitmap=(text,...args)=>{clarityText.push(String(text));return bitmap.call(UIText,text,...args);};
  const label=UIPanels.screenLabel;UIPanels.screenLabel=(text,...args)=>{clarityText.push(String(text));return label.call(UIPanels,text,...args);};
+
  window.clarityPayload={};for(const name of ['overview','feed','camps','status']){const original=UIPanels[name];UIPanels[name]=(...args)=>{clarityPayload[name]=args;return original.apply(UIPanels,args);};}
  });
  const check=async(name,fn)=>{try{await fn();records.push({engine,name,pass:true});}catch(e){records.push({engine,name,pass:false,error:e.message});}};
@@ -55,7 +60,11 @@ const server=http.createServer((req,res)=>{
  await load(fixture());const r=await page.evaluate(()=>({rows:document.querySelector('#working-rows').textContent,details:clarityUI.questLines({id:S.work.items()[5].task_ref}),rewards:document.querySelector('#working-rewards').textContent,speed:document.querySelector('#speeds').getAttribute('aria-label')}));
  for(const word of ['Hero ·','Build quest','Running','Blocked','Failed','Unknown','Next:','Running for <1 min'])assert(r.rows.includes(word),word);
  assert(!r.rows.includes('0 min'));assert(r.details.includes('Run time: unavailable'));assert(r.details.includes('Actions: unavailable'));assert(r.details.includes('Time limit: <1 min'));
- for(const unit of ['quests completed today','Guild XP','game gold','Guild level'])assert(r.rewards.includes(unit));assert(r.speed.includes('×'));
+ for(const unit of ['quests completed today','Guild XP','game gold','Guild level'])assert(r.rewards.includes(unit));
+ for(const speed of [30,120,600]){
+   const copy=await page.evaluate(speed=>{S.speed=speed;hudT=1;hud(0);const el=document.querySelector('#speeds');return {visible:el.textContent,aria:el.getAttribute('aria-label'),title:el.title};},speed);
+   assert.deepEqual(copy,{visible:speed+'×',aria:'Replay speed: '+speed+'×',title:'Replay speed: '+speed+'×'});
+ }
  await page.evaluate(()=>{S.t+=30;hudT=1;hud(0);});assert((await page.locator('#working-rows').textContent()).includes('Running for 1 min'));
  await privacy();
  });
@@ -69,6 +78,27 @@ const server=http.createServer((req,res)=>{
  const states=await page.evaluate(()=>['quest','caged','blocked','failed','done'].map(state=>clarityUI.questLines({...D.tasks[0],state})));
  for(const [i,state] of ['Waiting to start','Waiting on a dependency','Blocked','Failed','Complete'].entries())assert(states[i].some(line=>line.includes(state)&&line.includes('Next:')),state);
  await page.evaluate(()=>{S.feed=[];renderFeed();});assert.equal((await page.evaluate(()=>clarityPayload.feed[1])).loading,false);assert.equal((await page.evaluate(()=>clarityPayload.feed[1])).empty,'No activity for this filter in saved history');
+ });
+ await check('privacy-safe Issues vs Work and open Activity/Campaign stale recovery',async()=>{
+ await load(fixture(false));
+ await page.evaluate(()=>{UIPanels.menu(true);document.querySelector('#group-overview').open=true;document.querySelector('#chron').hidden=false;document.querySelector('#camp').hidden=false;S.feed=[];
+ say('⛓ Quest blocked: '+D.tasks[0].id,S.t);say('💀 Hero stopped (crashed)',S.t);say('📖 Read document',S.t);renderFeed();clarityUI.renderCamps();});
+ const filter=async value=>page.evaluate(value=>{const el=document.querySelector('#feed-filter');el.value=value;el.dispatchEvent(new Event('change'));},value);
+ await filter('all');assert.equal(await page.locator('#feed section').count(),3);
+ await filter('issues');assert.equal(await page.locator('#feed section').count(),2);
+ await filter('work');assert.equal(await page.locator('#feed section').count(),1);assert(!(await page.locator('#feed').textContent()).includes('Quest stopped'));
+ await filter('all');
+ for(const [selector,heading] of [['#feed section button','Activity details'],['#camps section button','Campaign details']]){
+   await page.locator(selector).first().evaluate(el=>el.click());assert.equal(await page.locator('#dialog-heading').textContent(),heading);
+   const fail=async()=>page.evaluate(async()=>{liveFeed=true;lastPollOk=Date.now();pollFailures=0;const old=fetch;for(const status of [422,503,503]){window.fetch=async()=>({ok:false,status});await pollEvents();clearTimeout(pollTimer);}hudT=1;hud(0);window.fetch=old;});
+   await fail();
+   let text=await page.locator('#quest').textContent();for(const copy of ['Stale data','Last successful update:','Reason:','Retrying in'])assert(text.includes(copy),heading+' '+copy);
+   assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#quest .close')),true,'stale does not steal focus');await privacy();
+   await page.locator('#quest .close').click();await page.locator(selector).first().evaluate(el=>el.click());assert((await page.locator('#quest').textContent()).includes('Stale data'),'open while stale');
+   await page.evaluate(async()=>{const old=fetch;window.fetch=async()=>({ok:true,json:async()=>({state:'online',events:[],bots:[],tasks:[],cursor:null})});await pollEvents();clearTimeout(pollTimer);hudT=1;hud(0);window.fetch=old;});
+   text=await page.locator('#quest').textContent();for(const copy of ['Stale data','Last successful update:','Reason:','Retrying in'])assert(!text.includes(copy),'recovery clears '+copy);
+   assert.equal(await page.evaluate(()=>document.activeElement===document.querySelector('#quest .close')),true,'recovery does not steal focus');await privacy();await page.locator('#quest .close').click();
+ }
  });
  await check('server error vs offline, three-failure stale payload and success recovery',async()=>{
  await load(fixture());const r=await page.evaluate(async()=>{
@@ -90,13 +120,25 @@ const server=http.createServer((req,res)=>{
  for(const [width,height] of [[1440,900],[1024,768],[390,844],[375,667],[320,568]])await check('viewport '+width+' crowd/long labels, empty center and privacy',async()=>{
  await page.setViewportSize({width,height});await load(fixture());await page.waitForTimeout(100);
  await page.evaluate(()=>{resize();draw();});await page.waitForTimeout(200);await page.evaluate(()=>draw());
- const measure=()=>page.evaluate(()=>{const drawn=UIPanels.diagnostics().drawn;return {drawn,overflow:document.documentElement.scrollWidth>innerWidth,labels:clarityText.slice(-100),camera:{...cam},width:innerWidth,height:innerHeight};});
+ const measure=()=>page.evaluate(()=>{const drawn=UIPanels.diagnostics().drawn;const rendered=[...document.querySelectorAll('#ui-stage canvas')].filter(c=>!c.hidden&&c.rasterText).map(c=>({text:c.rasterText,ink:c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i)=>i%4===3&&v>0)}));return {drawn,rendered,overflow:document.documentElement.scrollWidth>innerWidth,labels:clarityText.slice(-100),camera:{...cam},width:innerWidth,height:innerHeight};});
  const r=await measure();assert(!r.overflow,'horizontal overflow');assert(r.drawn.length>0,'blank labels');
  for(let i=0;i<r.drawn.length;i++){const a=r.drawn[i];assert(a.left>=0&&a.right<=width&&a.top>=0&&a.bottom<=height,'clipped label');for(let j=i+1;j<r.drawn.length;j++){const b=r.drawn[j];assert(!(a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top),'label overlap');}}
  await privacy();await page.screenshot({path:path.join(out,engine+'-'+width+'-working.png')});
  // Permitted long aliases remain complete, and crowd still exposes retained identities.
  const long=fixture();long.bots.forEach((b,i)=>b.display_name='Long Friendly Worker Alias '+(i+1));long.working.items.forEach((item,i)=>item.display_name='Long Friendly Worker Alias '+(i+1));await load(long);await page.evaluate(()=>{resize();draw();});await page.waitForTimeout(200);await page.evaluate(()=>draw());
- const wrapped=await measure();assert(wrapped.drawn.length>1);assert(wrapped.labels.some(text=>text.includes('LONG FRIENDLY')||text.includes('Long Friendly')));assert(wrapped.labels.some(text=>text.includes('ALIAS')||text.includes('Alias')));
+ const aliases=['Long Friendly Worker Alias 1','Long Friendly Worker Alias 2'];
+ const wrapped=await measure();assert(wrapped.drawn.length>1);assertRenderedAliases(wrapped.rendered,width>760?aliases:aliases.slice(0,1));
+ // Narrow screens expose each pair through the existing focus control. Prove
+ // every identity in its own view, rather than mistaking an off-screen pair for ink.
+ for(const [i,alias] of aliases.entries()){
+   await page.evaluate(i=>{workView.focus=S.work.active()[i].ref;draw();},i);
+   assertRenderedAliases((await measure()).rendered,[alias]);
+ }
+ await page.evaluate(()=>{workView.focus=null;draw();});
+ // Drop actual Hero draws, not just the recorded inputs; the same gate must reject it.
+ await page.evaluate(()=>{window.savedScreenLabel=UIPanels.screenLabel;UIPanels.screenLabel=(text,...args)=>{if(!/Hero|Long Friendly|Alias/i.test(text))return savedScreenLabel(text,...args);};draw();});
+ const dropped=await measure();assert.throws(()=>assertRenderedAliases(dropped.rendered,aliases),/missing rendered identity|nonempty rendered/);
+ await page.evaluate(()=>{UIPanels.screenLabel=savedScreenLabel;delete window.savedScreenLabel;draw();});
  for(let i=0;i<wrapped.drawn.length;i++){const a=wrapped.drawn[i];assert(a.left>=0&&a.right<=width&&a.top>=0&&a.bottom<=height);for(let j=i+1;j<wrapped.drawn.length;j++){const b=wrapped.drawn[j];assert(!(a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top),'long labels overlap');}}
  await privacy();await page.screenshot({path:path.join(out,engine+'-'+width+'-long.png')});
  await page.evaluate(()=>document.querySelector('#working-toggle').click());await page.evaluate(()=>draw());await privacy();

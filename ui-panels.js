@@ -235,7 +235,10 @@
     const heading=document.createElement('h2');heading.id='dialog-heading';heading.textContent=label;el.append(heading);
     const content=document.createElement('div');content.className='detail-content';el.append(content);
     for(const text of lines)line(content,text);bounds();button.focus();
-    if(binding)live={kind:'detail',refresh:binding.refresh,key:JSON.stringify(lines),at:performance.now()};
+    if(binding){
+      live={kind:'detail',refresh:binding.refresh,status:binding.status,key:JSON.stringify(lines),at:performance.now()};
+      refreshDialogStatus();
+    }
   }
   // View all: rows follow the current retained list, so evicted identities and their actions disappear.
   function listDialog(label,rowsOf,empty) {
@@ -252,9 +255,20 @@
       (row?.querySelector('button')||$('#quest .close')).focus();
     }
   }
+  function refreshDialogStatus() {
+    if(!live?.status)return;
+    const lines=panelStaleLines(live.status()),key=JSON.stringify(lines);
+    if(key===live.statusKey)return;live.statusKey=key;
+    let section=$('#quest .detail-status');
+    if(!section){section=document.createElement('div');section.className='detail-status';$('#quest').append(section);}
+    section.replaceChildren();section.hidden=!lines.length;
+    for(const text of lines)line(section,text);bounds();
+  }
   function refreshDialog() {
     if(!live||$('#quest').hidden)return;
     if(live.kind==='list')return renderList();
+    refreshDialogStatus();
+    if(!live.refresh)return;
     const lines=live.refresh();
     if(lines===null){close();return;}
     if(!Array.isArray(lines))return;
@@ -375,15 +389,15 @@
       'Reason: '+(info.reason||'update failed'),'Retrying in '+(info.retrySeconds||10)+' sec'];
   }
   function feed(entries,options={}) {
-    lastFeed=entries;feedOptions=options;if($('#chron').hidden)return;
-    const filter=$('#feed-filter').value||'all',issue=f=>f.issue===true||/⛓|💀|💥|Blocked|Failed|Unavailable/i.test(f.text);
+    lastFeed=entries;feedOptions=options;refreshDialog();if($('#chron').hidden)return;
+    const filter=$('#feed-filter').value||'all',issue=f=>typeof f.issue==='boolean'?f.issue:/⛓|💀|💥|Blocked|Failed|Unavailable/i.test(f.text);
     const selected=entries.filter(f=>filter==='all'||(filter==='issues'?issue(f):!issue(f)));
     const key=JSON.stringify([selected,allFeed,filter,options]);if(key===feedKey)return;feedKey=key;const el=$('#feed');el.replaceChildren();
     for(const text of panelStaleLines(options))line(el,text);
     const shown=selected.slice(0,allFeed?selected.length:5);
     if(!shown.length)line(el,options.loading?'Loading activity…':options.empty||'No activity for this filter in saved history');
     for(const f of shown){const row=document.createElement('section');el.append(row);line(row,f.text);
-      button(row,'Details',()=>detail([f.detailText||f.text,...panelStaleLines(feedOptions),'Activity from the current retained replay history'],'Activity details'));}
+      button(row,'Details',()=>detail([f.detailText||f.text,'Activity from the current retained replay history'],'Activity details',{status:()=>feedOptions}));}
     $('#feed-all').textContent=allFeed?'Show recent activity':'View all activity';
   }
   function campaignCount(parent,value) {
@@ -393,7 +407,7 @@
     row.setAttribute('aria-label',row.textContent);parent.append(row);
   }
   function camps(rows,options={}) {
-    lastCamps=rows;campOptions=options;if($('#camp').hidden)return;
+    lastCamps=rows;campOptions=options;refreshDialog();if($('#camp').hidden)return;
     const key=JSON.stringify([rows,allCamps,options]);if(key===campKey)return;campKey=key;const el=$('#camps');el.replaceChildren();
     for(const text of panelStaleLines(options))line(el,text);
     if(!rows.length)line(el,'No campaigns in this replay range');
@@ -403,7 +417,7 @@
       const pips=document.createElement('div');pips.className='pips';section.append(pips);
       for(const p of r.stages){const name=document.createElement('span');name.textContent=p.id+' stage: '+p.state;pips.append(name);}
       if(r.blocked)line(section,r.blocked);
-      button(section,'Details',()=>detail([r.title,section.querySelector('.campaign-count').textContent,...r.stages.map(p=>p.id+' stage: '+p.state),r.blocked||'No blocked quests observed',...panelStaleLines(campOptions)],'Campaign details'));
+      button(section,'Details',()=>detail([r.title,section.querySelector('.campaign-count').textContent,...r.stages.map(p=>p.id+' stage: '+p.state),r.blocked||'No blocked quests observed'],'Campaign details',{status:()=>campOptions}));
     }
     $('#camps-all').textContent=allCamps?'Show recent campaigns':'View all campaigns';
   }
