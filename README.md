@@ -289,6 +289,8 @@ refuses to overwrite local changes; preserve them before resolving that error. A
 
 Removal has four parts. Do them in this order. Nothing here touches your Hermes databases (`kanban.db`,
 `state.db`) or `config.yaml` settings other than Quest's own plugin entry.
+**Before starting**, locate and inspect the effective state directory using step 4 below; package/config
+removal in steps 2 and 3 would otherwise discard the inputs needed for that read-only inspection.
 
 **1. Hermes Desktop (only if you enabled it there).** In Settings, Plugins, turn the **Desktop** switch for Hermes
 Quest **off**. Deleting only the app copy (`$HERMES_HOME/desktop-plugins/hermes-quest`) is not enough while the
@@ -311,22 +313,44 @@ backend) and confirm the Quest tab is gone. After a Desktop **Rescan** the sideb
 `rm -f "$HERMES_HOME/hermes-quest.json"` (or the path in `HERMES_QUEST_CONFIG`). Remove `HERMES_QUEST_CONFIG`
 from your service environment as well.
 
-**4. Quest's private state.** Quest keeps a small folder of its own in `$HERMES_HOME/hermes-quest` (or the
-`history_dir` you configured). It is **not** removed by `hermes plugins remove`:
+**4. Quest's private state.** The state directory is the effective `history_dir`, defaulting to
+`<effective Quest data home>/hermes-quest`. It is **not** removed by `hermes plugins remove`:
+
+- With no Quest override, the dashboard uses the official Hermes shared root. A named profile at
+  `<root>/profiles/<name>` therefore stores Quest state in `<root>/hermes-quest`, **not** inside that profile.
+- An explicit Quest `hermes_home` selects a different data home (including a profile-local home).
+- An explicit `history_dir` wins over both defaults and may be elsewhere. Relative paths use the backend's
+  working directory, not the config file's directory. Inspect the service environment/config before deleting.
+
+Before removing the package, run this read-only inspection **from the installed Quest checkout**, with the
+dashboard's Python interpreter, environment (`HERMES_HOME`, `HERMES_QUEST_CONFIG`) and working directory.
+The interpreter must be able to import Hermes' `hermes_constants`; if discovery fails, stop and inspect
+the actual service configuration rather than guessing a parent directory:
+
+```bash
+python3 -c 'from tools.botstatus_history import load_settings; s = load_settings(backend=True); print("Quest data home:", s["home"]); print("Quest state:", s["history_dir"].resolve())'
+```
+
+If the backend's working directory is not the checkout, make the checkout importable in that interpreter
+without changing the backend working directory (for example via `PYTHONPATH`). Inspect the printed state
+directory and its contents; stop all dashboard/remote backend processes that write it before purging.
 
 | File | What it is | Safe to delete? |
 | --- | --- | --- |
 | `session-ref.key` | Random 32-byte private key used to make session references. Never leaves your machine. | Yes, but hold it back if you plan to reinstall: a new key changes the pseudonymous references, so old replay identity does not match. Back it up privately (mode 0600) to keep them stable. |
 | `botstatus-history.jsonl` and rotated `.1`, `.2`, `.3` copies, `state.json`, `.lock` | A small log of bot availability changes (profile ID, status, timestamps only) | Yes |
 
-To purge everything Quest ever stored:
+To purge the inspected Quest state (after optionally backing up the private key):
 
 ```bash
-rm -r "$HERMES_HOME/hermes-quest"
+QUEST_STATE_DIR='/absolute/path/you/inspected'
+ls -la -- "$QUEST_STATE_DIR"
+rm -r -- "$QUEST_STATE_DIR"
 ```
 
-Check first that the path is Quest's folder and not something else. For a named profile set `HERMES_HOME` to that
-profile's home before you run it. Browser-side Quest preferences (panel layout) are stored in your browser's
+Replace the example with the exact inspected directory; do not derive it from process `HERMES_HOME` alone.
+Do not delete the shared Hermes root, databases or unrelated files, or a custom directory used by other apps.
+Browser-side Quest preferences (panel layout) are stored in your browser's
 local storage for the dashboard site and are removed by clearing site data. See [docs/privacy.md](docs/privacy.md).
 
 ### Troubleshooting
@@ -389,11 +413,12 @@ Desktop app and the Hermes dashboard/backend you already run. Installing from th
 **What it reads, and what it runs.**
 
 - Reads (read-only): `kanban.db`, each profile's `state.db`, `config.yaml`, `profile.yaml` and `logs/agent.log`
-  under `$HERMES_HOME`, and `bot-status.json` if present. Databases are opened read-only.
+  under the effective Quest data home (the shared root for default named-profile backends, or explicit Quest
+  `hermes_home`), and `bot-status.json` if present (`botstatus_path` may override its location). Databases are opened read-only.
 - Runs: on each `/replay` and `/events` request (about every 10 seconds while a Quest tab is open) the plugin
   starts one bundled Python extractor subprocess (30 second limit). While the dashboard is up, a background
   thread also samples `bot-status.json` about every 30 seconds. Set `HERMES_QUEST_SAMPLER=off` to disable it.
-- Writes: only its own folder `$HERMES_HOME/hermes-quest` (the private `session-ref.key` and a small bot
+- Writes: only its effective `history_dir`, default `<effective Quest data home>/hermes-quest` (the private `session-ref.key` and a small bot
   availability history). See [Remove](#remove) to delete it.
 
 **What is shown by default.**

@@ -160,6 +160,16 @@ async function unit() {
     fire({ source: frame, origin: 'null', data: ready }); assert.strictEqual(sent.length, 1);
     const guest = sent[0].ports[0]; const got = []; guest.onmessage = e => got.push(e.data); guest.start?.();
     const tick = () => new Promise(r => setTimeout(r, 20));
+    const unhandled = []; const rejection = error => unhandled.push(error);
+    process.on('unhandledRejection', rejection);
+    try {
+      for (const value of [null, undefined, [], 'invalid', 42]) guest.postMessage(value);
+      await tick();
+      assert.deepStrictEqual(unhandled, [], 'malformed guest messages never reject outside the handler');
+      assert.strictEqual(ch.stats.denied, 5);
+      assert.strictEqual(ch.stats.inflight, 0);
+      assert.strictEqual(calls.length, 0); assert.deepStrictEqual(got, []);
+    } finally { process.removeListener('unhandledRejection', rejection); }
     guest.postMessage({ id: 1, method: 'POST', path: '/replay' }); guest.postMessage({ id: 2, method: 'GET', path: '/desktop-bootstrap' });
     await tick();
     assert.strictEqual(calls.length, 0); assert.deepStrictEqual(got.map(g => g.error), ['Bridge request denied', 'Bridge path denied']);

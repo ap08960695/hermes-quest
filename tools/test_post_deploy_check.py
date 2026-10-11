@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """Isolated HTTP + executable fake-git/systemctl regression; no live mutations."""
-import base64
 import contextlib
-import hashlib
-import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
@@ -24,7 +21,9 @@ except ImportError:
 
 CANDIDATE = "a" * 40
 ROLLBACK = "b" * 40
-SECRET = "private-canary!not-base64"
+PASSWORD = "password-canary"
+SESSION = "opaque-host-issued-session-canary"
+TOKEN = "host-issued-token-canary"
 USER = "login-canary"
 CURSOR = "opaque-canary+/=雪"
 
@@ -75,7 +74,8 @@ class PostDeployTests(unittest.TestCase):
         self.update_state(sha=CANDIDATE)
         self.auth = self.root / "auth.txt"
         self.auth.write_text("# synthetic credentials\nexport HERMES_DASHBOARD_BASIC_AUTH_USERNAME='" + USER + "'\n"
-                             + "HERMES_DASHBOARD_BASIC_AUTH_SECRET='" + SECRET + "' # comment\n")
+                             + "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD='" + PASSWORD + "' # comment\n")
+        self.auth.chmod(0o600)
         bindir = self.root / "bin"
         bindir.mkdir()
         for name in ("git", "systemctl"):
@@ -90,24 +90,34 @@ class PostDeployTests(unittest.TestCase):
         self.addCleanup(self.env.stop)
         self.mode = "pass"
         self.received = []
+        self.logins = []
+        self.auth_received = []
         owner = self
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, format, *args):
                 pass
 
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                owner.logins.append((self.path, body))
+                valid = self.path == '/auth/password-login' and body == {'provider': 'basic', 'username': USER, 'password': PASSWORD}
+                status = 302 if owner.mode == 'login_redirect' else (200 if valid and owner.mode != 'login_401' else 401)
+                self.send_response(status)
+                if status == 302:
+                    self.send_header('Location', '/redirect-canary')
+                if status == 200 and owner.mode != 'login_no_cookie':
+                    self.send_header('Set-Cookie', 'hermes_session_at=' + SESSION + '; HttpOnly; Path=/')
+                    self.send_header('Set-Cookie', 'hermes_session_provider=basic; Path=/')
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+
             def do_GET(self):
                 url = parse.urlsplit(self.path)
-                authenticated = False
                 cookie = self.headers.get("Cookie", "")
-                try:
-                    token = cookie.split("hermes_session_at=", 1)[1].split(";", 1)[0]
-                    decoded = base64.urlsafe_b64decode(token)
-                    raw, sig = decoded[:-32], decoded[-32:]
-                    authenticated = (hmac.compare_digest(sig, hmac.new(SECRET.encode(), raw, hashlib.sha256).digest())
-                                     and json.loads(raw)["sub"] == USER)
-                except (ValueError, KeyError, IndexError):
-                    pass
+                bearer = self.headers.get('Authorization', '')
+                owner.auth_received.append((cookie, bearer))
+                authenticated = cookie == 'hermes_session_at=' + SESSION + '; hermes_session_provider=basic' or bearer == 'Bearer ' + TOKEN
                 rolled_back = json.loads(owner.state.read_text())["sha"] == ROLLBACK
                 failing = not rolled_back or owner.mode == "rollback_health_fail"
                 status = 200
@@ -175,13 +185,15 @@ class PostDeployTests(unittest.TestCase):
             rc = check.main(self.argv() + list(extra))
         self.assertEqual(stderr.getvalue(), "")
         self.logs = [json.loads(line) for line in stdout.getvalue().splitlines()]
-        for canary in (SECRET, USER, CURSOR, "payload-canary", "private stderr canary", str(self.root)):
+        for canary in (PASSWORD, SESSION, TOKEN, USER, CURSOR, "payload-canary", "private stderr canary", str(self.root)):
             self.assertNotIn(canary, stdout.getvalue())
         allowed = {"phase", "check", "status", "time", "http_status", "bytes", "elapsed_ms", "round", "rounds", "exit_code"}
         for row in self.logs:
             self.assertLessEqual(set(row), allowed)
         self.sleeps = sleep.call_args_list
         self.calls = [json.loads(line) for line in self.calls_file.read_text().splitlines()] if self.calls_file.exists() else []
+        for canary in (PASSWORD, SESSION, TOKEN, USER):
+            self.assertNotIn(canary, json.dumps(self.calls))
         return rc
 
     def mutations(self):
@@ -189,6 +201,8 @@ class PostDeployTests(unittest.TestCase):
 
     def test_pass_three_rounds_cursor_chain_and_timing(self):
         self.assertEqual(self.run_gate(), 0)
+        self.assertEqual(self.logins, [('/auth/password-login', {'provider': 'basic', 'username': USER, 'password': PASSWORD})])
+        self.assertEqual(sum(not cookie and not bearer for cookie, bearer in self.auth_received), 3)
         self.assertEqual(self.received, [CURSOR, CURSOR + "1", CURSOR + "2"])
         self.assertEqual([call.args for call in self.sleeps], [(10.0,), (10.0,)])
         self.assertEqual(self.mutations(), [])
@@ -292,7 +306,7 @@ class PostDeployTests(unittest.TestCase):
         self.assertEqual(self.received, [])
 
     def test_bad_auth_does_not_print_or_modify_in_check_only(self):
-        self.auth.write_text(SECRET)
+        self.auth.write_text(PASSWORD)
         self.assertEqual(self.run_gate("--check-only"), 1)
         self.assertEqual(self.mutations(), [])
 
@@ -314,7 +328,59 @@ class PostDeployTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertEqual(result.stderr, "")
         self.assertEqual(json.loads(result.stdout.splitlines()[-1])["rounds"], 3)
-        self.assertNotIn(SECRET, result.stdout)
+        self.assertNotIn(PASSWORD, result.stdout)
+
+    def test_host_issued_cookie_and_token_files(self):
+        for key, value in [('QUEST_AUTH_COOKIE', 'hermes_session_at=' + SESSION + '; hermes_session_provider=basic'),
+                           ('QUEST_AUTH_TOKEN', TOKEN)]:
+            with self.subTest(key=key):
+                self.auth.write_text(key + '=' + repr(value) + '\n')
+                self.assertEqual(self.run_gate('--check-only'), 0)
+                self.assertEqual(self.logins, [])
+                self.assertEqual(self.mutations(), [])
+
+    def test_login_rejection_redirect_or_missing_session_fails_closed(self):
+        for mode in ('login_401', 'login_redirect', 'login_no_cookie'):
+            with self.subTest(mode=mode):
+                self.mode = mode
+                self.assertEqual(self.run_gate('--check-only'), 1)
+                self.assertEqual(self.auth_received, [])
+                self.assertEqual(self.mutations(), [])
+
+    def test_unrelated_signing_fields_are_not_parsed(self):
+        with self.auth.open('a') as f:
+            f.write("HERMES_DASHBOARD_BASIC_AUTH_SECRET='unclosed-ignored\n")
+        self.assertEqual(self.run_gate('--check-only'), 0)
+
+    def test_signing_secret_and_password_hash_cannot_authenticate(self):
+        self.auth.write_text("HERMES_DASHBOARD_BASIC_AUTH_USERNAME='" + USER + "'\n"
+                             "HERMES_DASHBOARD_BASIC_AUTH_SECRET='synthetic-unused'\n"
+                             "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD_HASH='synthetic-unused'\n")
+        self.assertEqual(self.run_gate('--check-only'), 1)
+        self.assertEqual(self.logins, [])
+        self.assertEqual(self.auth_received, [])
+
+    def test_auth_file_permissions_symlink_and_fifo_fail_closed(self):
+        self.auth.chmod(0o644)
+        self.assertEqual(self.run_gate('--check-only'), 1)
+        self.auth.chmod(0o600)
+        saved = self.root / 'saved-auth'
+        self.auth.rename(saved)
+        self.auth.symlink_to(saved)
+        self.assertEqual(self.run_gate('--check-only'), 1)
+        self.auth.unlink()
+        os.mkfifo(self.auth, 0o600)
+        self.assertEqual(self.run_gate('--check-only'), 1)
+        self.assertEqual(self.logins, [])
+
+    def test_ambiguous_duplicate_and_header_injection_credentials_rejected(self):
+        for data in ("QUEST_AUTH_TOKEN='a'\nQUEST_AUTH_COOKIE='b'\n",
+                     "QUEST_AUTH_TOKEN='a'\nQUEST_AUTH_TOKEN='b'\n",
+                     "QUEST_AUTH_TOKEN='a\rX: b'\n"):
+            with self.subTest():
+                self.auth.write_text(data)
+                self.assertEqual(self.run_gate('--check-only'), 1)
+                self.assertEqual(self.logins, [])
 
 
 if __name__ == "__main__":

@@ -315,12 +315,14 @@ export function createGuestChannel({ getWindow, nonce, rest, accent = () => null
   }
 
   const answer = async message => {
-    const id = message.id
+    let id
     let path
     try {
       path = validateGuestRequest(message)
+      id = message.id
     } catch (error) {
       stats.denied += 1
+      id = message && message.id
       if (Number.isSafeInteger(id) && id > 0) reply({ id, error: error.message })
       return
     }

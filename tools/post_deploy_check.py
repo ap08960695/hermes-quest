@@ -7,19 +7,20 @@ QUEST_AUTH_FILE). Default failure action: detach rollback SHA, restart the user
 hermes-dashboard service, verify rollback with the same three-round gate, exit 1.
 --check-only never checks out or restarts anything. Exit 2 means rollback failed
 (or configuration/preflight failed). No reset/stash/force checkout is used.
+Auth file: owner-only ordinary QUEST_AUTH_COOKIE / QUEST_AUTH_TOKEN, or username
+and password for the public Basic login endpoint. See docs/post-deploy-check.md.
 """
 from __future__ import annotations
 
 import argparse
-import base64
-import hashlib
-import hmac
+from http.cookies import SimpleCookie
 import json
 import math
 import os
 from pathlib import Path
 import re
 import shlex
+import stat
 import subprocess
 import time
 from urllib import error, parse, request
@@ -48,34 +49,39 @@ class NoRedirect(request.HTTPRedirectHandler):
         return None
 
 
-def auth_cookie(path):
+def auth_values(path):
+    """Read only ordinary login/session fields from an owner-only regular file."""
+    keys = {"QUEST_AUTH_COOKIE", "QUEST_AUTH_TOKEN",
+            "HERMES_DASHBOARD_BASIC_AUTH_USERNAME", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"}
     values = {}
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, encoding="utf-8") as source:
+        info = os.fstat(source.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                or stat.S_IMODE(info.st_mode) & 0o077 or info.st_size > 65536):
+            raise CheckError("auth_file")
+        lines = source.read(65537)
+    if len(lines) > 65536:
+        raise CheckError("auth_file")
+    for line in lines.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
         if line.startswith("export "):
             line = line[7:]
-        key, value = line.split("=", 1)
+        key, separator, value = line.partition("=")
+        key = key.strip()
+        if key not in keys:
+            continue  # Do not parse or use host signing configuration / password hashes.
         parts = shlex.split(value, comments=True)
-        if len(parts) != 1:
+        if not separator or len(parts) != 1 or key in values or not parts[0] or any(c in parts[0] for c in "\r\n\0"):
             raise CheckError("auth_file")
-        values[key.strip()] = parts[0]
-    raw_secret = values["HERMES_DASHBOARD_BASIC_AUTH_SECRET"]
-    secret = raw_secret.encode()
-    for decode in (base64.b64decode, bytes.fromhex):
-        try:
-            decoded = decode(raw_secret)
-            if len(decoded) >= 16:
-                secret = decoded
-                break
-        except (ValueError, TypeError):
-            pass
-    raw = json.dumps({"sub": values["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"],
-                      "kind": "access", "exp": int(time.time()) + 3600},
-                     separators=(",", ":")).encode()
-    token = base64.urlsafe_b64encode(raw + hmac.new(secret, raw, hashlib.sha256).digest()).decode()
-    return "hermes_session_at=" + token + "; hermes_session_provider=basic"
+        values[key] = parts[0]
+    modes = sum(("QUEST_AUTH_COOKIE" in values, "QUEST_AUTH_TOKEN" in values,
+                 "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD" in values))
+    if modes != 1:
+        raise CheckError("auth_file")
+    return values
 
 
 class Gate:
@@ -83,7 +89,7 @@ class Gate:
         self.args = args
         self.plugin = Path(args.plugin_dir).resolve()
         self.opener = request.build_opener(request.ProxyHandler({}), NoRedirect())
-        self.cookie = None
+        self.auth_headers = {}
         self.phase = "candidate"
         self.root_valid = False
 
@@ -117,7 +123,7 @@ class Gate:
             raise CheckError("clean_tree")
 
     def http(self, check, path, expected=200, authenticated=True, round_number=0):
-        headers = {"Cookie": self.cookie or ""} if authenticated else {}
+        headers = self.auth_headers if authenticated else {}
         req = request.Request(self.args.base_url.rstrip("/") + path, headers=headers)
         start = time.monotonic()
         code, body = 0, b""
@@ -156,11 +162,40 @@ class Gate:
             raise CheckError("cursor")
         return cursor
 
+    def authenticate(self):
+        values = auth_values(self.args.auth_file)
+        if "QUEST_AUTH_COOKIE" in values:
+            self.auth_headers = {"Cookie": values["QUEST_AUTH_COOKIE"]}
+        elif "QUEST_AUTH_TOKEN" in values:
+            self.auth_headers = {"Authorization": "Bearer " + values["QUEST_AUTH_TOKEN"]}
+        else:
+            payload = json.dumps({"provider": "basic", "username": values["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"],
+                                  "password": values["HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"]}).encode()
+            req = request.Request(self.args.base_url.rstrip("/") + "/auth/password-login",
+                                  data=payload, headers={"Content-Type": "application/json"}, method="POST")
+            try:
+                with self.opener.open(req, timeout=self.args.timeout) as response:
+                    if response.code != 200:
+                        raise CheckError("login")
+                    cookies = SimpleCookie()
+                    for value in response.headers.get_all("Set-Cookie", []):
+                        cookies.load(value)
+                    # Forward the host-issued session unchanged, never manufacture claims/signatures.
+                    if not cookies.get("hermes_session_at") or not cookies["hermes_session_at"].value:
+                        raise CheckError("login")
+                    self.auth_headers = {"Cookie": "; ".join(f"{key}={cookie.coded_value}" for key, cookie in cookies.items())}
+            except error.HTTPError as exc:
+                exc.close()
+                raise CheckError("login") from None
+            except (OSError, error.URLError, ValueError):
+                raise CheckError("login") from None
+        emit(self.phase, "authentication", "pass")
+
     def verify(self, sha):
         self.head(sha)
         self.clean()
-        # New cookie per phase; never send it to redirects or proxy destinations.
-        self.cookie = auth_cookie(self.args.auth_file)
+        # Ordinary host-issued auth per phase; no redirects or proxy destinations.
+        self.authenticate()
         desktop = (self.plugin / "dashboard" / "desktop_transport.py").is_file()
         protected = [("replay", API + "/replay"), ("events", API + "/events"),
                      ("quest_page", API + "/static/index.html")]

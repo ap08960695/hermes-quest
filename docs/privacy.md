@@ -8,7 +8,10 @@ unless you opt in.
 Hermes Quest does not send data off your machine. It has no telemetry, analytics, crash reporting, update check
 or remote logging, and the plugin's runtime code (game page, API, extractor) calls no external service. The
 repository's `tools/post_deploy_check.py` is a maintainer script that probes a dashboard URL you give it; it is
-not loaded by the plugin. The game page loads files from its own
+not loaded by the plugin. It accepts an operator's protected session/token file or sends username/password
+from that file to the dashboard's public `/auth/password-login` endpoint. It never parses host signing secrets,
+creates a credential provider, or signs cookies. Auth values are not passed in argv or printed in its JSONL logs.
+See [deployment gate](post-deploy-check.md). The game page loads files from its own
 package and from the dashboard's `/api/plugins/hermes-quest/` routes only; the Desktop guest page is sandboxed
 with `connect-src 'none'` and reaches the backend only through the Desktop app's authenticated transport. The
 only traffic is between your browser/Desktop app and the Hermes dashboard/backend you already run. Installing
@@ -17,12 +20,15 @@ or updating the plugin contacts GitHub or the plugin catalog, which is part of H
 ## What Quest reads, runs and writes
 
 - Reads, read-only: `kanban.db`, each profile's `state.db`, `config.yaml`, `profile.yaml` and `logs/agent.log`
-  under the Hermes home, and `bot-status.json` if present. The extractor opens databases with `mode=ro` and
+  under the effective Quest data home, and `bot-status.json` if present (`botstatus_path` may override it).
+  Without an explicit Quest `hermes_home`, the backend resolves the official shared root even for a named
+  profile at `<root>/profiles/<name>`; explicit `hermes_home` selects that configured home instead.
+  The extractor opens databases with `mode=ro` and
   `PRAGMA query_only` and does not open any memory store.
 - Runs: one bundled Python extractor subprocess per `/replay` or `/events` request (30 second limit), about every
   10 seconds while a Quest tab is open; plus one background thread inside the dashboard process that samples
   `bot-status.json` about every 30 seconds. Set `HERMES_QUEST_SAMPLER=off` to disable the sampler.
-- Writes: only the Quest state folder, `<hermes_home>/hermes-quest` (or `history_dir`): `session-ref.key`,
+- Writes: only the effective `history_dir`, default `<effective Quest data home>/hermes-quest`: `session-ref.key`,
   `botstatus-history.jsonl` with its rotated copies, `state.json` and `.lock`. Quest also stores panel layout in
   your browser's local storage. Nothing else is written.
 
@@ -132,8 +138,14 @@ session-reference formula; it is not an authentication or task-prose opt-in chan
 
 `hermes plugins remove hermes-quest` deletes the package and its `plugins` entry in `config.yaml`, but it does
 **not** delete the Quest state folder, which is the only place Quest keeps data outside the checkout:
-`<hermes_home>/hermes-quest` (or your `history_dir`). To purge it: stop the dashboard, then
-`rm -r "$HERMES_HOME/hermes-quest"`. If you plan to reinstall, keep `session-ref.key` (0600) and back it up
+the effective `history_dir`, default `<effective Quest data home>/hermes-quest`. A default named-profile
+backend uses `<root>/hermes-quest`, not `<root>/profiles/<name>/hermes-quest`; an explicit Quest `hermes_home`
+or `history_dir` may put state elsewhere. Before removing the package, use the read-only inspection in
+[README: Remove](../README.md#remove) with the actual service interpreter/environment/working directory.
+Inspect that exact directory and stop all backends that write it, then delete only the inspected Quest-owned
+state directory (never the shared Hermes root or unrelated contents). Relative overrides are relative to the
+backend working directory. Do not infer the purge path from process `HERMES_HOME` alone.
+If you plan to reinstall, keep `session-ref.key` (0600) and back it up
 privately: a new key replaces every session reference once (see above). Also delete the optional Quest config JSON
 (`$HERMES_HOME/hermes-quest.json` or the `HERMES_QUEST_CONFIG` path). In Hermes Desktop turn the Desktop switch off
 and rescan; the app copy is `$HERMES_HOME/desktop-plugins/hermes-quest` on the computer that runs the app. The
