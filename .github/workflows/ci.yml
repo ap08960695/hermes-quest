@@ -61,6 +61,11 @@ jobs:
         run: |
           node tools/test_scene_state.cjs
           node tools/test_idle_rewards.cjs
+          node tools/test_idle_city.cjs
+          node tools/test_idle_progression.cjs
+          node tools/test_idle_loot.cjs
+          node tools/test_idle_recap.cjs
+
           node --test tools/test_mobile_measurement.cjs
           node tools/backtest.test.js
           node dashboard/test_game.cjs
@@ -93,10 +98,19 @@ jobs:
           npx playwright install --with-deps chromium firefox
       - name: Replay security regressions (both engines)
         run: node tools/test_replay_security.cjs
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Desktop bootstrap fixture dependency
+        run: python3 -m pip install 'fastapi>=0.115,<1'
       - name: UI inventory (both engines, portrait/landscape, zoom 1 and 3)
         run: node tools/test_ui_inventory.cjs "$RUNNER_TEMP/ui-regressions/inventory"
       - name: Clarity scene, copy, states and privacy (both engines, five viewports)
         run: node tools/test_clarity_scene.cjs "$RUNNER_TEMP/ui-regressions/clarity-scene"
+      - name: Idle UI, visit acknowledgement and Desktop bootstrap (synthetic only)
+        run: node tools/test_idle_integration.cjs "$RUNNER_TEMP/ui-regressions/idle"
+      - name: Time bar label and explicit units (both engines)
+        run: node tools/test_time_bar_label.cjs "$RUNNER_TEMP/ui-regressions/time-bar"
       - name: Shared-worker quest context and partial session availability (both engines)
         run: node tools/test_clarity_web_followup.cjs "$RUNNER_TEMP/ui-regressions/clarity-web-followup"
       - name: Selected rendering and private presentation (both engines)

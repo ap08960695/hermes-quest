@@ -11,6 +11,54 @@ const workView = {all:false, focus:null, key:'', pairs:[], savedCamera:null, but
 function workingSnapshot() {
   return ctx.S.work?.has?{asOf:ctx.S.work.asOf,items:ctx.S.work.items(),resting:ctx.S.work.resting,latestOrder:ctx.S.work.latestOrder,progress:ctx.S.work.progress()}:null;
 }
+// Recap is a visit snapshot, not a replay reward or an all-time completion ledger.
+let visitRecap=null, recapStorage=true;
+function initIdleRecap({events=ctx.D.events,meta=ctx.D.meta,progress=ctx.D.working?.progress}={}) {
+  const R=globalThis.QuestIdleRecap,button=ctx.$('#idle-recap');
+  if(!R||!button)return;
+  let seen=[];
+  try {seen=R.decodeSeen(window.localStorage.getItem(R.STORAGE_KEY));} catch (_) {recapStorage=false;}
+  const history={eventOrder:ctx.eventOrder,eventKey:ctx.eventKey};
+  visitRecap=R.summarize({events,meta,seen,progress},history);
+  button.hidden=ctx.privacyPending;
+  button.textContent=visitRecap.coverage==='complete'?'Since last visit · '+visitRecap.counts.completed+' completed':'Since last visit · unknown';
+  button.onclick=()=>{
+    if(ctx.privacyPending)return;
+    ctx.UI?.detail([visitRecap.text,visitRecap.weekly.text,
+      'Counts cover retained events only, not every task ever completed.',
+      ...(recapStorage?[]:["Away summary isn't available in this view yet. Previous visits cannot be remembered here, so totals stay unknown."])],'Since last visit');
+    // Explicit presentation is the only acknowledgement path; scrubbing/polling never writes seen IDs.
+    if(ctx.UI)try {window.localStorage.setItem(R.STORAGE_KEY,R.encodeSeen(R.acknowledge(events,seen,history)));} catch (_) {recapStorage=false;}
+  };
+}
+function guildLines() {
+  const snap=workingSnapshot(),p=snap?.progress;
+  const hall=globalThis.QuestIdleCity.guildhallModel(p?.level,ctx.W.props);
+  const milestones=globalThis.QuestIdleProgression.evaluate(p),trophies=globalThis.QuestIdleCollection.collection(p);
+  const tokens=globalThis.HQIdleLoot.stageTokens(snap?.items);
+  return [hall.label,hall.detail,'The castle is your Guildhall. Decorations reflect this board’s Guild level.',
+    globalThis.QuestIdleRecap.weekly(p).text,
+    milestones.next?'Next milestone: Guild level '+milestones.next.level+(milestones.next.xp_remaining===null?' · XP remaining unknown':' · '+milestones.next.xp_remaining+' XP remaining'):
+      milestones.mode==='unknown'?'Next milestone: unknown':'All three Guild milestones reached',
+    ...trophies.trophies.map(t=>'Trophy · '+t.name+' · '+t.condition+' · '+t.label),trophies.note,
+    'Stage tokens · completed work on this board (cosmetic, not currency)',
+    ...(tokens.length?tokens.map(t=>t.label):[snap?'No stage tokens on this board yet.':'Stage tokens: unknown.']),
+    'Stage tokens can disappear when work is archived or reopened. No random drops or idle rewards.',
+    ...(ctx.pollStale?['Stale data · live updates paused']:[])];
+}
+function renderIdle() {
+  const button=ctx.$('#idle-recap');if(button)button.hidden=!visitRecap||!workingSnapshot()||ctx.privacyPending;
+  const snap=workingSnapshot(),p=snap?.progress;
+  const hall=globalThis.QuestIdleCity?.guildhallModel(p?.level,ctx.W?.props);
+  if(!hall)return;
+  const next=globalThis.QuestIdleProgression.evaluate(p).next;
+  const summary=hall.label+' · '+(next?'next milestone at level '+next.level:hall.known?'milestones reached':'progress unknown');
+  const label=ctx.$('#guild-summary');if(label)label.textContent=summary;
+  for(const id of ['guild-details','working-guild']){const b=ctx.$('#'+id);if(b){
+    b.onclick=()=>{if(!ctx.privacyPending)ctx.UI?.detail(guildLines(),'Guildhall, trophies and stage tokens',{refresh:guildLines});};
+    if(id==='working-guild')b.textContent=summary+' · Trophies & tokens';
+  }}
+}
 function workBinding(item) {
   return item?.bot_ref ? ctx.S.heroes[item.bot_ref] || null : null;
 }
@@ -399,6 +447,7 @@ function renderCamps() {
 }
 const TASK_STATES={quest:workStates.quest,fight:workStates.fight,blocked:workStates.blocked,caged:workStates.caged,done:workStates.done,failed:workStates.failed,archived:workStates.archived};
 function renderOverview() {
+  renderIdle();
   renderWorking();
   if(workingSnapshot()){
     const rows=workItems(),tasks=rows.filter(i=>i.status!=='archived').sort((a,b)=>['running','blocked','failed','unknown','done'].indexOf(a.status)-['running','blocked','failed','unknown','done'].indexOf(b.status)).map(i=>({key:i.ref,completed:i.status==='done',blocked:i.status==='blocked',summary:'Hero · '+i.display_name+' · '+i.quest_label+' · '+workStatus(i.status),details:()=>focusWork(i.ref,true)}));
@@ -439,8 +488,9 @@ function hud(dt) {
   renderFeed();renderCamps();ctx.UI.resources(ctx.S.mana,ctx.S.tokenNetByWallet);renderOverview();
   ctx.UI.playback((ctx.S.play?'Playing':'Paused')+' · '+ctx.S.speed+'× · Live-follow '+(ctx.following?'on':'off')+' · Replay time: '+fmt(ctx.S.t)+' · Saved range: '+fmt(ctx.D.meta.from_)+'–'+fmt(ctx.D.meta.to));
 }
-function ui() {
+function ui(recap) {
   ctx.resize();addEventListener('resize',ctx.resize);
+  initIdleRecap(recap);
   document.addEventListener('visibilitychange',ctx.visibility);
   ctx.$('#speeds').onclick=()=>{ctx.following=false;const speeds=[30,120,600];ctx.S.speed=speeds[(speeds.indexOf(ctx.S.speed)+1)%speeds.length];hudT=1;hud(0);};
   ctx.$('#play').onclick=()=>{ctx.following=false;ctx.S.play=!ctx.S.play;hudT=1;hud(0);};
@@ -553,6 +603,7 @@ function heroDetails(h) {
 }
 return {
   get CLOCK_FORMAT(){return CLOCK_FORMAT},
+  get initIdleRecap(){return initIdleRecap}, get guildLines(){return guildLines},
   get workingSnapshot(){return workingSnapshot}, get workItems(){return workItems}, get workView(){return workView},
   get workingPairs(){return workingPairs}, get fitWorking(){return fitWorking}, get renderWorking(){return renderWorking}, get focusWork(){return focusWork},
   get fmt(){return fmt},

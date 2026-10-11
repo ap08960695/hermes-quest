@@ -152,6 +152,7 @@ function draw() {
   for (const [k,r] of Object.entries(ctx.W.regions)) banner(v,k,r);
   inspectionLinks(v); ctx.inspect.picks = [];
   const ents = [...(ctx.W.layered ? ctx.W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
+    ...guildDecorations().map(p=>({y:p.y,f:()=>prop(v,p)})),
     ...(Object.values(ctx.S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: ctx.W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
     ...Object.values(ctx.S.tasks).filter(t => t.alpha > 0).map(t => ({y: t.mx !== undefined ? t.my : t.y, f: () => monster(v, t)})),
     ...Object.values(ctx.S.heroes).map(h => ({y: h.y, f: () => heroDraw(v, h)})),
@@ -172,6 +173,10 @@ function draw() {
   vignette();
 }
 const SHADOWS = new Map(), FLASH = new Map();
+function guildDecorations() {
+  const model=globalThis.QuestIdleCity?.guildhallModel(ctx.workingSnapshot?.()?.progress?.level,ctx.W?.props);
+  return !model?.anchor?[]:model.decorations.map(p=>({...p,x:model.anchor.x+p.dx,y:model.anchor.y+p.dy}));
+}
 function drawWorking() {
   ctx.renderWorking();ctx.fitWorking();const v=view();
   ctx.UI?.sceneOverflow([]);ctx.UI?.selected(null);ctx.UI?.clear();ctx.inspect.picks=[];
@@ -180,6 +185,7 @@ function drawWorking() {
   if(ctx.BG)ctx.cx.drawImage(ctx.BG,v.ox,v.oy,ctx.W.size[0]*v.Z,ctx.W.size[1]*v.Z);
   if (!ctx.workView.pairs.length) emptyScene(Object.keys(ctx.S.heroes).length);
   for(const p of ctx.W.layered?ctx.W.props:[])prop(v,p);
+  for(const p of guildDecorations())prop(v,p);
   for(const pair of ctx.workView.pairs){
     if(pair.hero)heroDraw(v,pair.hero);
     else {const [x,y]=P(v,pair.x-60,pair.y-20);ctx.cx.strokeStyle='#ffd36b';ctx.cx.strokeRect(x-12*v.Z,y-24*v.Z,24*v.Z,24*v.Z);}
@@ -473,7 +479,7 @@ function monster(v, t) {
 function timeBarDuration(sec) {
   if (!Number.isFinite(sec) || sec < 0) return null;
   const s = Math.ceil(sec);
-  return s >= 60 ? Math.ceil(s / 60) + 'M' : s + 'S';
+  return s >= 60 ? Math.ceil(s / 60) + ' MIN' : s + ' SEC';
 }
 function timeBarText(t) {
   const budget = Number(t.max_rt) > 0 ? Number(t.max_rt) : 1800;

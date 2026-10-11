@@ -294,6 +294,8 @@ def _static_target(asset_path: str) -> Path:
     relative = PurePosixPath(asset_path)
     allowed = asset_path in {
         "index.html", "game.js", "npcs.js", "font.js", "ui-glyphs.js", "ui-panels.js", "quest/c-ui.js",
+        "quest/idle-progression.js", "quest/idle-collection.js", "quest/idle-city.js",
+        "quest/idle-loot.js", "quest/idle-recap.js",
         "quest/geometry.js", "quest/appearance.js", "quest/state.js",
         "quest/actions.js", "quest/combat.js", "quest/social.js", "quest/simulation.js",
         "quest/render.js", "quest/ui.js", "quest/history.js", "quest/transport.js",

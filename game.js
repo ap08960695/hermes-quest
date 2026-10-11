@@ -31,6 +31,9 @@ async function boot() {
   const data = params.get('data') || '';
   const replay = !ctx.liveFeed && /^data\/[A-Za-z0-9_-][A-Za-z0-9._-]*\.json$/.test(data) && !data.includes('..') ? data : 'data/demo.json';
   [D, W] = await Promise.all([ctx.json(ctx.liveFeed ? `${ctx.API}replay?hours=12` : replay), ctx.json('data/world.json')]);
+  // Preserve source visit data before history adds local archive markers and moves
+  // working progress into its reducer. Those markers are not backend event IDs.
+  const recap={events:D.events.slice(),meta:{...D.meta},progress:D.working?.progress};
   ctx.loadReplay(D);
   BG = await img('assets/px/ground.png');
   for (const c of Object.keys(ctx.CLS_HUE)) SPR[c] = await img(`assets/px/${c}.png`);
@@ -45,10 +48,12 @@ async function boot() {
   MMETA2 = await fetch('assets/px/monsters2/meta.json').then(r => r.ok ? r.json() : {}).catch(() => ({}));
   for (const k of Object.keys(MMETA2)) MON2[k] = await img(`assets/px/monsters2/${k}.png`);
   for (const p of W.props || []) if (!BLD[p.img]) BLD[p.img] = await img(`assets/px/${p.src || 'buildings'}/${p.img}.png`);
+  // Existing cosmetic sprites only; decoration models never alter the world's props.
+  for(const p of globalThis.QuestIdleCity.TIERS.flatMap(t=>t.adds))if(!BLD[p.img])BLD[p.img]=await img(`assets/px/${p.src}/${p.img}.png`);
   if (window.NPCS) await NPCS.load(W, D, img);                      // M4 villagers (npcs.js)
   MONMETA = await fetch('assets/sprites/monsters.json').then(r => r.ok ? r.json() : null).catch(() => null);
   if (UI) UI.mode(D.meta.source === 'demo' ? 'DEMO' : ctx.liveFeed ? 'LIVE' : 'REPLAY');
-  ctx.ui();
+  ctx.ui(recap);
   if (ctx.liveFeed) {
     ctx.goLive(); ctx.pollFailures = 0; ctx.pollStale = false; ctx.lastPollOk = Date.now();
     ctx.connectedStatus(D);

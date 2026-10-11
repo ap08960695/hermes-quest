@@ -43,18 +43,18 @@ const server=http.createServer((req,res)=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-300,max_rt:1800,hp:.83,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
           const labels=r.text.filter(x=>x.startsWith('TIME L'));
           assert.equal(labels.length,1,'labels: '+JSON.stringify(r.text));
-          assert.match(labels[0],/^TIME LEFT (\d+M|\d+S)$/);assert.equal(labels[0],'TIME LEFT 25M');
+          assert.match(labels[0],/^TIME LEFT (\d+ MIN|\d+ SEC)$/);assert.equal(labels[0],'TIME LEFT 25 MIN');
           await page.screenshot({path:path.join(out,`${engine}-${width}-running.png`)});
         });
-        await rec('seconds use S unit and never go negative',async()=>{
+        await rec('seconds use SEC unit and never go negative',async()=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-1780,max_rt:1800,hp:.1,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(r.text.includes('TIME LEFT 20S'),JSON.stringify(r.text));
+          assert(r.text.includes('TIME LEFT 20 SEC'),JSON.stringify(r.text));
           const o=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-9999,max_rt:1800,hp:.08,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(o.text.includes('TIME LEFT 0S'),JSON.stringify(o.text));
+          assert(o.text.includes('TIME LEFT 0 SEC'),JSON.stringify(o.text));
         });
         await rec('no start time falls back to TIME LIMIT, not a made-up remainder',async()=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:null,max_rt:1200,hp:1,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(r.text.includes('TIME LIMIT 20M'),JSON.stringify(r.text));assert(!r.text.some(x=>x.startsWith('TIME LEFT')));
+          assert(r.text.includes('TIME LIMIT 20 MIN'),JSON.stringify(r.text));assert(!r.text.some(x=>x.startsWith('TIME LEFT')));
         });
         await rec('crowded scene labels only the selected quest unless zoomed in',async()=>{
           const r=await run(`const ids=D.tasks.map(t=>t.id);ids.forEach((id,i)=>Object.assign(task(id),{state:'fight',runStart:S.t-60,max_rt:1800,hp:.9,alpha:1,region:'forge',emerge:0,dying:false,x:700+i*20,y:500,mx:700+i*20,my:500}));selectedScene=ids[0];cam.x=700;cam.y=500;cam.zi=1;`);

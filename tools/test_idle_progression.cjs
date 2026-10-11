@@ -138,8 +138,6 @@ test('trophy catalog is fixed: 3 unique ids, English name + condition, tied to m
 });
 
 test('works with the real reducer progress object (existing level/xp, no new counter)', () => {
-  const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-  assert.ok(!/idle-(progression|collection)/.test(html), 'UI wiring belongs to the integration card');
   const state = fs.readFileSync(path.join(root, 'quest/state.js'), 'utf8');
   assert.match(state, /'wins_today', 'xp', 'gold', 'level', 'level_progress'/);   // field names this module consumes
   const p = {wins_today: 1, xp: 230, gold: 23, level: 3, level_progress: 30};
