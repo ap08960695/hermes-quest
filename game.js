@@ -22,6 +22,9 @@ let MON2 = {}, MMETA2 = {}, SPRV = {};
 let D, W, BG, SPR = {}, MONS = null, MONMETA = null, BLD = {}, MIMG = {}, HMETA = {fw: 128, fh: 96, ax: 48, base: 91, walk: [0, 1, 2, 3], atk: [4, 5, 6, 7], idle: []};
 async function boot() {
   try {
+  document.querySelector('#quest-load-error')?.remove();
+  ctx.connection('Loading','loading');
+  ctx.UI?.feed([],{loading:true,empty:'Loading activity…'});
   const params = new URLSearchParams(window.location?.search || '');
   ctx.liveFeed = params.get('live') === '1' || (window.location?.pathname || '').startsWith(ctx.API);
   // Only standalone replays may override the source, and only literal data/ files.
@@ -50,9 +53,20 @@ async function boot() {
     ctx.goLive(); ctx.pollFailures = 0; ctx.pollStale = false; ctx.lastPollOk = Date.now();
     ctx.connectedStatus(D);
     if (!document.hidden) ctx.pollTimer = setTimeout(ctx.pollEvents, 10000);
-  } else { ctx.reset(D.meta.from_); ctx.connection('Replay file', 'file'); }
+  } else { ctx.reset(D.meta.from_); ctx.connection(D.meta.source==='demo'?'Sample data':'Saved history (not live)', 'file'); }
+  if(!D.tasks.length&&!D.bots.length){const [x,y]=W.size.map(n=>n/2);Object.assign(ctx.cam,{x,y,tx:x,ty:y,zi:Math.min(innerWidth/W.size[0],innerHeight/W.size[1])});}
   if (!document.hidden) raf = requestAnimationFrame(loop);
-  } catch (e) { ctx.connection(e?.questConfig ? e.message : 'Unable to load data · reload to retry', 'offline'); }
+  } catch (e) {
+    const status=Number.isInteger(e?.status)?e.status:'unavailable';
+    const text="Couldn't load Quest data ("+status+')';
+    ctx.connection(text,'offline',{status});
+    // Initial errors must be actionable even before game controls were wired.
+    const panel=document.createElement('section');panel.id='quest-load-error';panel.setAttribute('role','alert');
+    panel.style.cssText='position:fixed;left:16px;right:16px;top:40%;max-width:420px;margin:auto;padding:20px;background:#172235;color:#fff;z-index:20;font:16px system-ui;text-align:center';
+    const message=document.createElement('p');message.textContent=text;panel.append(message);
+    if(e?.questConfig){const help=document.createElement('p');help.textContent=e.message;panel.append(help);}
+    const retry=document.createElement('button');retry.textContent='Retry';retry.onclick=()=>{retry.disabled=true;ctx.boot();};panel.append(retry);document.body.append(panel);retry.focus();
+  }
 }
 
 // ---------- render ----------
