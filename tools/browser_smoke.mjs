@@ -449,7 +449,7 @@ async function runRetention(browser,base) {
     ({base:b0}=await setup());
     await page.evaluate(()=>quest(S.tasks['retention-5']||D.tasks.find(t=>t.id==='retention-5')));
     await evict(b0);after=await snap();
-    check(after.dialogOpen&&after.text.includes('retention-5'),'detail for a retained task closed or lost content');
+    check(after.dialogOpen&&after.text.includes('Synthetic task 5')&&!after.text.includes('retention-5'),'detail for a retained task closed, lost its permitted title, or exposed a raw ID');
     // 6) Production poll path: pollEvents (HTTP) -> connection() with the previous overview -> dialog close
     // -> HUD rebuilds the summary lists. mergeDelta+hud alone cannot see focus handed to a Details button
     // that the next HUD pass deletes, so the delta is served over the real /events route.
@@ -508,7 +508,6 @@ async function runSceneTruth(browser,base) {
   try {
     await page.goto(base+'/',{waitUntil:'load'});
     await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Sample data normal',null,{polling:100});
-    await page.locator('#hint-dismiss').click();
     await page.evaluate(()=>{reset(0);
       // Hold idle social timers for this standing fixture, not product behavior:
       // all 25 entities must settle in their assigned yards, not wander out of

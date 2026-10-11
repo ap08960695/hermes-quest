@@ -104,8 +104,12 @@
     // System/Unicode fallback labels can be taller than the bitmap's 18px lane.
     // Try above as well as below the anchor; adjacent full names must not disappear.
     const lanes=pin?[0,1,-1,2,-2,3,-3]:[0],step=Math.max(18,im.height+4);
-    for(const lane of lanes){
-      const top=y+lane*step;if(fits(x-2,top-2,im.width+4,im.height+4)){image(im,x,top);break;}}
+    const candidates=lanes.map(lane=>y+lane*step);
+    // Mixed bitmap/system-font heights leave gaps that a fixed lane grid misses.
+    if(pin)candidates.push(...[...reserved,...drawn].flatMap(r=>
+      [Math.ceil(r.bottom+4),Math.floor(r.top-im.height-4)]).sort((a,b)=>Math.abs(a-y)-Math.abs(b-y)));
+    for(const top of candidates){
+      if(fits(x-2,top-2,im.width+4,im.height+4)){image(im,x,top);break;}}
   }
   let overflowKey='',overflowGroups=[];
   function selected(label,id='quests') {
