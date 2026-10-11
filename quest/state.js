@@ -79,7 +79,9 @@ function parseWorkingBlock(block) {
   const p = isObj(block.progress) ? block.progress : null;
   const fields = p && ['wins_today', 'xp', 'gold', 'level', 'level_progress'].map(k => nonNegInt(p[k]));
   return {asOf, items, order, resting: nonNegInt(block.resting_count) ?? 0,
-    progress: fields && fields.every(v => v !== null) ? {wins_today: fields[0], xp: fields[1], gold: fields[2], level: fields[3], level_progress: fields[4]} : null};
+    progress: fields && fields.every(v => v !== null) ? {wins_today: fields[0], xp: fields[1], gold: fields[2], level: fields[3], level_progress: fields[4],
+      // Optional coverage-bound backend aggregate; never derive it from browser credits.
+      ...(Object.hasOwn(p, 'done_days_7d') ? {done_days_7d: nonNegInt(p.done_days_7d) !== null && p.done_days_7d <= 7 ? p.done_days_7d : null} : {})} : null};
 }
 // New producers identify the immutable source action; old payloads retain tuple behavior.
 const orderKey = o => o.source_action_ref ?? JSON.stringify([o.at, o.action_label, o.task_ref, o.recipient_bot_ref]);
