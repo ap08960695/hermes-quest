@@ -20,18 +20,31 @@ button{width:44px;height:44px;min-width:44px;min-height:44px;padding:2px;backgro
 button.on,button:focus-visible{outline:2px solid var(--gold)}
 canvas{image-rendering:pixelated;display:block;flex:none}
 button{color:var(--ink);font:inherit}
-.text-button{width:auto;padding:8px}
+.text-button{width:auto;height:auto;padding:8px;max-width:100%;white-space:normal}
+.named-control{width:auto!important;height:auto!important;max-width:100%;gap:4px;padding:4px 8px;white-space:normal}
+.control-name,.detail-text{font-family:system-ui,sans-serif;overflow-wrap:anywhere}
+.detail-text{display:block;font-size:16px;line-height:1.5;white-space:pre-wrap}
+#dialog-heading{font:600 20px/1.3 system-ui,sans-serif;margin:8px 80px 12px 0;overflow-wrap:anywhere}
+.campaign-count{font:16px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}
+#first-run{position:fixed;z-index:5;left:8px;top:60px;width:min(340px,calc(100vw - 16px));max-height:30dvh;overflow:auto;padding:8px}
+body:has(#menu:not([hidden])) #first-run,body:has(#quest:not([hidden])) #first-run,body:has(#character-card:not([hidden])) #first-run{display:none}
+#first-run p{margin:0 0 8px}
+#first-run .menu-controls{padding:0}
+#quick-help{background:var(--navy)}
+#clock{width:auto!important;max-width:100%;overflow-wrap:anywhere}
 select{min-height:44px;max-width:100%;background:#1b2742;color:var(--ink);border:1px solid var(--line)}
 select:focus-visible{outline:2px solid var(--gold)}
 #focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px;max-width:calc(100vw - 16px)}
 #live-note{flex:0 0 100%;font-size:11px;padding:2px 6px;background:var(--panel);border:1px solid var(--red);border-radius:4px;color:#ffbba7}
 #focus-bar.inspection-side #mode{display:none}
+#focus-bar.inspection-side #quick-help{display:none}
 #focus-bar.inspection-side #issues{width:100%;height:auto;overflow-wrap:anywhere}
 #focus-bar.inspection-side #live-note{overflow-wrap:anywhere}
-#menu-toggle{width:64px;background:var(--navy)}
+#menu-toggle{width:auto;max-width:100%;padding:4px 8px;background:var(--navy)}
 #tag{position:static;display:flex;align-items:center;gap:2px;padding:0;min-width:0}
 #mode{font-size:11px;padding:0 4px}
-#connection{width:36px;height:36px}
+#connection{width:auto;height:44px;font-size:11px;padding:2px 4px}
+#connection canvas{display:none}
 #issues{width:auto;max-width:100%;height:auto;overflow-wrap:anywhere;font-size:11px;color:#ffbba7}
 #menu{z-index:4;left:8px;top:60px;width:min(376px,calc(100vw - 16px));max-height:calc(100dvh - 68px);overflow:auto;padding:8px}
 #menu details{border-bottom:1px solid var(--line);padding:4px 0}
@@ -44,8 +57,8 @@ select:focus-visible{outline:2px solid var(--gold)}
 #scrub{width:100%;min-height:44px;flex:auto}
 #tabs{display:flex;gap:4px}
 #mana{gap:8px;flex-wrap:wrap}
-#mana>div{width:68px;display:flex;align-items:center;flex-wrap:wrap;gap:2px}
-#mana .percentage{width:48px;height:16px}
+#mana>div{width:100%;display:flex;align-items:center;flex-wrap:wrap;gap:2px}
+#mana .percentage{height:auto;flex:1}
 #mana i{width:100%;height:4px;margin:0}
 #camp,#chron{position:static;box-shadow:none;border:0;border-radius:0;padding:4px}
 .drawer-close{float:right}
@@ -91,6 +104,7 @@ select:focus-visible{outline:2px solid var(--gold)}
 <div id="ui-stage" aria-hidden="true"></div>
 <div id="focus-bar">
   <button id="menu-toggle" aria-label="Menu" aria-expanded="false" aria-controls="menu">Menu</button>
+  <button id="quick-help" class="text-button">Help</button>
   <div id="tag" class="panel"><span id="mode">Loading</span><button id="connection" aria-label="Loading connection details"></button></div>
   <button id="issues" hidden aria-label="Issues"></button>
   <div id="live-note" hidden></div>
@@ -113,11 +127,11 @@ select:focus-visible{outline:2px solid var(--gold)}
     <div class="mana" id="mana"></div>
     <p>Simulated mana, not a real provider quota.</p>
     <h3>Heroes</h3><div id="heroes-list"></div><button id="heroes-all" class="text-button">View all heroes</button>
-    <h3>Tasks</h3><div id="tasks-list"></div><button id="tasks-all" class="text-button">View all tasks</button>
+    <h3>Quests</h3><div id="tasks-list"></div><button id="tasks-all" class="text-button">View all quests</button>
     <p>Details and lists cover only the loaded replay range and retained history.</p>
     <span id="tabs"><button id="quests" data-t="camp" aria-label="Quests"></button><button id="log" data-t="chron" aria-label="Log"></button></span>
-    <section id="camp" hidden aria-label="Campaigns"><button id="camp-close" class="drawer-close" aria-label="Close campaigns"></button><div id="camps"></div><button id="camps-all" class="text-button">View all campaigns</button></section>
-    <section id="chron" hidden aria-label="Activity feed"><button id="chron-close" class="drawer-close" aria-label="Close activity feed"></button>
+    <section id="camp" hidden aria-label="Campaigns"><button id="camp-close" class="drawer-close" aria-label="Close campaigns"></button><h3>Campaigns</h3><div id="camps"></div><button id="camps-all" class="text-button">View all campaigns</button></section>
+    <section id="chron" hidden aria-label="Activity log"><button id="chron-close" class="drawer-close" aria-label="Close activity log"></button><h3>Activity log</h3>
       <div class="menu-controls"><label for="feed-filter">Activity</label><span id="feed-filter-slot"></span><button id="feed-all" class="text-button">View all activity</button></div>
       <p>Latest retained activity; not an all-time log.</p><div id="feed"></div>
     </section>
@@ -125,6 +139,11 @@ select:focus-visible{outline:2px solid var(--gold)}
   <details id="group-world"><summary>World</summary><p>Explore the map and its activity markers.</p><div class="menu-controls"><button id="world" aria-label="Map"></button><button id="world-help" class="text-button">Icon legend</button></div></details>
   <details id="group-settings"><summary>Settings</summary><div class="menu-controls"><button id="calm" aria-label="Reduce motion and flashes"></button><button id="help" aria-label="Icon help"></button><button id="hide-panels" class="text-button">Hide panels</button></div><p>Menu and group visibility are saved only on this device. Closing panels does not pause playback or live updates.</p></details>
 </nav>
+<section id="first-run" class="panel" aria-label="Welcome to Quest" hidden>
+  <p>Heroes are workers. Quests are tasks. Select either for details.</p>
+  <p>Saved history is not live. Quest titles may be hidden by privacy settings.</p>
+  <div class="menu-controls"><button id="hint-dismiss" class="text-button">Got it</button><button id="hint-help" class="text-button">Help</button></div>
+</section>
 <section id="working-panel" class="panel" aria-label="Working quests" hidden>
   <h2 id="working-count">Working</h2>
   <button id="working-toggle" class="text-button" aria-pressed="false">Show all</button>

@@ -34,24 +34,23 @@ const server=http.createServer((req,res)=>{
             await new Promise(r=>setTimeout(r,200));
             const row=document.querySelector('#feed .bitmap-row');
             return {text:row.textContent,icons:row.querySelector('div').children.length,
-              accessibleClipped:getComputedStyle(row.querySelector('.sr-only')).clipPath==='inset(50%)',
+              meaningsVisible:getComputedStyle(row.querySelector('.detail-text')).clipPath==='none'&&row.querySelector('.detail-text').getBoundingClientRect().height>0,
               emojiShaped:shaped.some(t=>/\p{Extended_Pictographic}/u.test(t))};
           });
-          assert.equal(labels.icons,5);assert(labels.accessibleClipped);assert.equal(labels.emojiShaped,false);
+          assert.equal(labels.icons,5);assert(labels.meaningsVisible);assert.equal(labels.emojiShaped,false);
           for(const meaning of ['Impact or command failure','Message','Council advice','Navigate','New monster'])assert(labels.text.includes(meaning));
           if(out&&zoom===1)await page.screenshot({path:path.join(out,engine+'-'+width+'x'+height+'-feed.png')});
           const counters=await page.evaluate(async()=>{
             UIPanels.drawer('camp');const results=[];
             for(const count of ['1/9 เควส','1234/9999 เควส · ⚔1','99999/999999 เควส ⚔12345']) {
               UIPanels.camps([{title:'synthetic',count,stages:[]}]);await new Promise(r=>setTimeout(r,100));
-              const el=document.querySelector('.campaign-count'),c=el.querySelector('canvas'),r=c.getBoundingClientRect();
-              const data=c.getContext('2d').getImageData(0,0,c.width,c.height).data;
-              results.push({count,label:el.getAttribute('aria-label'),width:r.width,height:r.height,
-                ink:data.some((v,i)=>i%4===3&&v),alpha:[...new Set(Array.from(data).filter((v,i)=>i%4===3))]});
+              const el=document.querySelector('.campaign-count'),r=el.getBoundingClientRect();
+              results.push({count,label:el.getAttribute('aria-label'),text:el.textContent,width:r.width,height:r.height,
+                fits:r.right<=innerWidth&&r.left>=0});
             }
             return results;
           });
-          for(const c of counters){assert.equal(c.width,200);assert.equal(c.height,36);assert(c.ink);assert(c.label.includes(c.count.split(' ')[0]));assert.deepEqual(c.alpha.sort((a,b)=>a-b),[0,255]);}
+          for(const c of counters){const [done,total]=c.count.split(' ')[0].split('/');assert(c.height>0&&c.fits);assert(c.text.startsWith(done+' of '+total+' quests complete'));assert.equal(c.label,c.text);}
           if(out&&zoom===1)await page.screenshot({path:path.join(out,engine+'-'+width+'x'+height+'-count.png')});
           const privacy=await page.evaluate(async()=>{
             UIPanels.drawer('chron');UIPanels.feed([{text:'💬 UI_INVENTORY_CANARY'}]);
