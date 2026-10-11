@@ -38,7 +38,7 @@ const server=http.createServer((req,res)=>{try{
   fs.mkdirSync(out,{recursive:true});await new Promise(r=>server.listen(0,'127.0.0.1',r));const records=[];
   try{for(const [engine,type] of Object.entries({chromium,firefox})){
     const browser=require('./parity/browser_loader.cjs').enable(await type.launch({headless:true}));
-    try{for(const surface of ['web','sdk-guest'])for(const [width,height] of [[1440,900],[390,844]]){
+    try{for(const surface of ['web','sdk-guest'])for(const [width,height] of [[1440,900],[1024,768],[760,768],[764,768],[800,768],[390,844]]){
       const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
       await page.addInitScript(()=>window.__questTestGlobals=true);
       await page.goto('http://127.0.0.1:'+server.address().port+(surface==='web'?'/':'/sdk-guest'));
@@ -49,9 +49,10 @@ const server=http.createServer((req,res)=>{try{
       const check=async(name,fn)=>{try{const detail=await fn();records.push({engine,surface,width,height,name,pass:true,...detail});}catch(e){records.push({engine,surface,width,height,name,pass:false,error:e.message});}};
       const snapshot=()=>frame.evaluate(()=>JSON.stringify({progress:S.work.progress(),items:S.work.items(),props:W.props,vault:S.vault,fx:S.fx}));
       // Fixed expected thresholds are independent of the implementation's next_level.
-      for(const [level,target] of [[0,1],[1,5],[4,5],[5,10],[9,10],[10,null]])await check('board level '+level,async()=>{
-        await load(fixture(level));const before=await snapshot();
-        const expected=(target===null?'Guildhall tiers complete':'Next Guildhall tier · Level '+target)+' · on this board';
+      for(const [level,target] of [[0,1],[1,5],[4,5],[5,10],[9,10],[10,null],[83,null]])await check('board level '+level,async()=>{
+        const d=fixture(level);if(level===83)Object.assign(d.working.progress,{xp:8240,level_progress:40});
+        await load(d);const before=await snapshot();
+        const expected=(target===null?'Next: Lv '+(level+1)+' · '+(level===83?60:100)+' XP to go':'Next Guildhall tier · Level '+target)+' · on this board';
         assert.equal(await frame.locator('#working-guild').textContent(),expected);
         assert(await frame.locator('#working-guild').isVisible());assert(await frame.locator('#quest').isHidden());assert(await frame.locator('#menu').isHidden());
         assert((await frame.locator('#working-rewards').textContent()).includes('Guild level '+level));
@@ -60,7 +61,7 @@ const server=http.createServer((req,res)=>{try{
         const children=await frame.locator('#working-panel').evaluate(el=>[...el.children].map(e=>e.id));assert.equal(children.filter(id=>id==='working-guild').length,1);
         await frame.evaluate(()=>{S.t+=60;hudT=1;hud(0);resize();draw();});assert.equal(await snapshot(),before,'render/elapsed time changes no progress, rewards or world');
         assert.equal(await frame.locator('#working-guild').textContent(),expected);
-        if(engine==='chromium'&&level===5){const colours=await frame.evaluate(()=>{const c=document.querySelector('#stage'),p=c.getContext('2d').getImageData(0,0,c.width,c.height).data,s=new Set();for(let i=0;i<p.length;i+=256)s.add(p.slice(i,i+4).join());return s.size;});assert(colours>2);await page.screenshot({path:path.join(out,`${engine}-${surface}-${width}-next-tier.png`)});}
+        if(engine==='chromium'&&(level===5||level===83)){const colours=await frame.evaluate(()=>{const c=document.querySelector('#stage'),p=c.getContext('2d').getImageData(0,0,c.width,c.height).data,s=new Set();for(let i=0;i<p.length;i+=256)s.add(p.slice(i,i+4).join());return s.size;});assert(colours>2);await page.screenshot({path:path.join(out,`${engine}-${surface}-${width}-goal-${level}.png`)});}
         await frame.locator('#working-guild').focus();await page.keyboard.press('Enter');assert(await frame.locator('#quest').isVisible());
         const text=await frame.locator('#quest').textContent();assert(text.includes('Guildhall')&&text.includes('Stage tokens'));
         if(width===390){const b=await frame.locator('#quest').boundingBox();assert(b.y>height/2&&b.height<=height*.38+1);}
@@ -75,6 +76,23 @@ const server=http.createServer((req,res)=>{try{
           const result=await frame.evaluate(level=>{const original=S.work.progress;try{S.work.progress=()=>({xp:0,level,career_xp:900});hudT=1;hud(0);return document.querySelector('#working-guild').textContent;}finally{S.work.progress=original;}},level);
           assert.equal(result,'Next Guildhall tier · unknown · on this board');
         }
+        const text=await frame.evaluate(()=>{const original=S.work.progress;try{S.work.progress=()=>({xp:null,level:83});hudT=1;hud(0);return document.querySelector('#working-guild').textContent;}finally{S.work.progress=original;}});
+        assert.equal(text,'Next: Lv 84 · XP to go unknown · on this board');
+      });
+      await check('recap, connection and blocked status do not cover active count or Working panel',async()=>{
+        const d=fixture();d.working.items.push({...d.working.items[0],ref:'synthetic-blocked',status:'blocked'});await load(d);
+        await frame.evaluate(()=>{UI.status('Connected','online',{source:'Live'});hudT=1;hud(0);resize();draw();});
+        const metric=await frame.evaluate(()=>{
+          const rect=id=>document.querySelector(id).getBoundingClientRect().toJSON();
+          const p=rect('#working-panel'),bar=rect('#focus-bar'),h=rect('#working-count');
+          return {p,bar,h,controls:['#idle-recap','#tag','#issues'].map(id=>({id,text:document.querySelector(id).textContent,r:rect(id),hidden:document.querySelector(id).hidden}))};
+        });
+        const overlap=(a,b)=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;
+        assert(!overlap(metric.bar,metric.p),'HUD overlaps Working panel');
+        for(const c of metric.controls){assert(!c.hidden,c.id+' hidden');assert(!overlap(c.r,metric.h),c.id+' covers count');assert(c.r.left>=0&&c.r.right<=width,c.id+' outside viewport');}
+        assert(metric.controls.find(c=>c.id==='#issues').text.includes('blocked'));
+        if(engine==='chromium')await page.screenshot({path:path.join(out,`${engine}-${surface}-${width}-status.png`)});
+        return metric;
       });
       await check('no Working snapshot hides main panel rather than guessing',async()=>{
         const d=fixture();delete d.working;await load(d);assert(await frame.locator('#working-panel').isHidden());

@@ -167,7 +167,7 @@ const ACTIONS = {
     t.state = 'done'; ctx.S.vault++;
     if (fx) {
       t.flash = 1; t.dying = 1; ctx.S.stop = .07; ctx.S.trauma = Math.min(1, ctx.S.trauma + .35);
-      ctx.coins(t.x, t.y - 10); ctx.num(t.x, t.y - 46, 'QUEST CLEAR!', '#ffd36b', 1.6);
+      ctx.coins(t.x, t.y - 10, 1); ctx.num(t.x, t.y - 46, 'QUEST CLEAR!', '#ffd36b', 1.6);
       ctx.say(`🏆 Quest complete: <b>${ctx.esc(t.title)}</b>`, e.t);
       ctx.cheerAround(t);
     } else t.alpha = 0;

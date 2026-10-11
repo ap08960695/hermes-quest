@@ -79,6 +79,9 @@ function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b') {
   lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, pin, width, color));
 }
 function emptyScene(heroes) {
+  // The last real completion can leave an empty scene while its payoff is still flying.
+  // Give that transient cue priority; show the scoped empty message after it expires.
+  if(ctx.S.fx.some(f=>f.k==='num'&&String(f.text).includes('CLEAR')&&f.life>0))return;
   const scope=ctx.workingSnapshot?.()?ctx.workView.all?'in replay scene':'on this board':'in this history range';
   sceneLabel('No active quests '+scope, innerWidth / 2, innerHeight / 2);
   if (!heroes) sceneLabel('No heroes in this history range', innerWidth / 2, innerHeight / 2 + 44);
@@ -273,7 +276,8 @@ function banner(v, key, r) {
   const [px,py] = r.plaza?.label || [r.spot[0], im ? pr.y-im.height-10 : r.spot[1]-60];
   const x = v.ox + N(px) * v.Z, y = v.oy + N(py) * v.Z;
   const n = Object.values(ctx.S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
-  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,280,false,'#7fc8b8');
+  // A visible desktop plaza keeps its name at high zoom; collision lanes still yield to quest labels.
+  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,280,true,'#7fc8b8');
     if(n||key==='vault')sceneLabel(key==='vault'?ctx.gameGoldText():compact(n)+' '+(n===1?'quest in replay scene':'quests in replay scene'),x/ctx.DPR,y/ctx.DPR-44,280,false,'#7fc8b8');}
 }
 function heroDraw(v, h) {
@@ -580,7 +584,8 @@ function fxDraw(v, f) {
   }
   if (f.k === 'p') { const [x, y] = P(v, f.x, f.y); ctx.cx.fillStyle = f.color; ctx.cx.fillRect(x, y, 2 * v.Z, 2 * v.Z); }
   else if (f.k === 'num') { const [x, y] = P(v, f.x, f.y - 18 * ctx.ease(Math.min(1, k * 1.6))); ctx.cx.globalAlpha = Math.min(1, f.life * 2); nameplate(x, y, f.text, f.color); ctx.cx.globalAlpha = 1; }
-  else if (f.k === 'coin') { const e = ctx.ease(k), [x, y] = P(v, ctx.lerp(f.x0, f.x1, e), ctx.lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 60); emoji('🪙', x, y, 7 * v.z); }
+  else if (f.k === 'coin') { const e = ctx.ease(k), [x, y] = P(v, ctx.lerp(f.x0, f.x1, e), ctx.lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 60); emoji('🪙', x, y, 7 * v.z);
+    if(f.label)sceneLabel(f.label,x/ctx.DPR,y/ctx.DPR-24); }
   else if (f.k === 'arrows') { const e = ctx.ease(k); for (let i = 0; i < 3; i++) { const [x, y] = P(v, ctx.lerp(f.x0, f.x1, e) - i * 6, ctx.lerp(f.y0, f.y1, e) + i * 2); ctx.cx.fillStyle = '#e8f0ff'; ctx.cx.fillRect(x, y, 6 * v.Z, v.Z); } }
   else if (f.k === 'portal') { const [x, y] = P(v, f.x, f.y); const r = (8 + Math.sin(k * 20) * 2) * v.z * Math.min(1, k * 4) * Math.min(1, f.life * 2); ctx.cx.strokeStyle = '#7fc8ff'; ctx.cx.lineWidth = 3 * ctx.DPR; ctx.cx.beginPath(); ctx.cx.ellipse(x, y - 14 * v.z, r * .6, r * 1.3, 0, 0, 7); ctx.cx.stroke(); }
   else if (f.k === 'raven') { const e = ctx.ease(k), [x, y] = P(v, ctx.lerp(f.x0, f.x1, e), ctx.lerp(f.y0, f.y1, e) - Math.sin(e * Math.PI) * 50); emoji(f.icon || '🐦‍⬛', x, y, 9 * v.z); }

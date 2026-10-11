@@ -545,8 +545,9 @@ async function runSceneTruth(browser,base) {
         views.push(metric);check(metric.totalBodies===25,'standing fixture lost or hid an entity: '+metric.totalBodies);
         check(metric.bodyPairs.length<=2,region+' idle body pairs '+metric.bodyPairs.length);
         check(metric.labelPairs===0,'overlapping scene overlays');check(!metric.scroll,'scene horizontal overflow');check(metric.marching===0,'monsters did not settle');
-        // Decorative region labels may yield to real quests or be offscreen at high zoom.
-        // Their names must remain accessible through the real World control at every size.
+        // Desktop keeps the visible plaza name at both zooms; mobile omits decorative banners.
+        // Their names must also remain accessible through the real World control at every size.
+        if(width===1280)check(metric.labels.some(l=>l.drawn&&l.text.toUpperCase().includes(({forge:'FORGE CITY',port:'STEAM PORT',castle:'ROYAL CASTLE'})[region])),'region name not drawn in desktop scene: '+JSON.stringify({region,zoom,labels:metric.labels}));
         check(metric.labels.every(l=>!/t_[a-f\d]+|[a-f\d]{8,}/i.test(l.text)),'opaque scene name');
         check(await page.evaluate(canvasColours)>20,'scene canvas blank before capture');
         await page.screenshot({path:path.join(outDir,`${browserName}-scene-${width}-${region}-z${zoom}.png`)});

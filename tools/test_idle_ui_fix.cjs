@@ -98,11 +98,33 @@ const server=http.createServer((req,res)=>{try{
           S.fx=[];liveFeed=true;following=true;S.play=true;const items=S.work.items(),progress=S.work.progress();items[0].status='done';
           const delta={events:[],tasks:[],bots:[],cursor:null,working:{as_of:S.work.asOf+1,items,resting_count:2,latest_order:null,progress:{...progress,xp:150,gold:811,level_progress:50}}};
           mergeDelta(delta);const first=S.fx.filter(f=>f.k==='num'&&f.text.includes('CLEAR')).length;mergeDelta(delta);const second=S.fx.filter(f=>f.k==='num'&&f.text.includes('CLEAR')).length;
-          S.play=false;hudT=1;hud(0);labels=[];draw();return {first,second,text:labels.map(a=>a[0]).join(' '),gold:S.work.progress().gold};
+          S.play=false;hudT=1;hud(0);labels=[];draw();return {first,second,text:labels.map(a=>a[0]).join(' '),gold:S.work.progress().gold,coinLabels:S.fx.filter(f=>f.k==='coin'&&f.label).map(f=>f.label)};
         });
         assert.equal(result.first,1);assert.equal(result.second,1);assert(result.text.includes('Quest complete'),result.text);assert.equal(result.gold,811);
+        assert.deepEqual(result.coinLabels,['+1 game gold']);assert(result.text.includes('+1 game gold'));
         await capture('victory');await page.evaluate(()=>{update(2);labels=[];draw();});assert(!(await page.evaluate(()=>labels.map(a=>a[0]).join(' '))).includes('Quest complete'));
         await load();assert.equal(await page.evaluate(()=>S.fx.filter(f=>f.k==='num'&&f.text.includes('CLEAR')).length),0);return result;
+      });
+      await check('last live completion takes priority over empty scene, then scoped empty returns',async()=>{
+        await page.evaluate(()=>{S.fx=[];liveFeed=true;following=true;S.play=true;const items=S.work.items().map(i=>({...i,status:'done'}));
+          mergeDelta({events:[],tasks:[],bots:[],cursor:null,working:{as_of:S.work.asOf+1,items,resting_count:2,latest_order:null,progress:{...S.work.progress(),xp:160,gold:812,level_progress:60}}});
+          S.play=false;hudT=1;hud(0);labels=[];resize();draw();});
+        const text=await page.evaluate(()=>labels.map(a=>a[0]).join(' '));
+        assert(text.includes('Quest complete'));assert(!text.includes('No active quests'),text);
+        assert.equal(await page.locator('#working-count').textContent(),'0 active quests');await capture('last-live-completion');
+        await page.evaluate(()=>{update(2);labels=[];draw();});
+        assert((await page.evaluate(()=>labels.map(a=>a[0]).join(' '))).includes('No active quests on this board'));
+        await capture('last-completion-expired');return {text};
+      });
+      await check('coin label has no invented number when reward is absent',async()=>{
+        const r=await page.evaluate(()=>{const before=JSON.stringify(S.work.progress());S.fx=[];HQModules.createCombat({S,W}).coins(workView.pairs[0].x,workView.pairs[0].y);labels=[];draw();return {before,after:JSON.stringify(S.work.progress()),labels:S.fx.filter(f=>f.k==='coin'&&f.label).map(f=>f.label)};});
+        assert.equal(r.before,r.after);assert.deepEqual(r.labels,['game gold']);return r;
+      });
+      await check('Menu is opaque over scene time text and Settings remain operable',async()=>{
+        await page.locator('#menu-toggle').click();await page.locator('#group-settings').evaluate(el=>el.open=true);
+        const color=await page.locator('#menu').evaluate(el=>getComputedStyle(el).backgroundColor);assert.equal(color,'rgb(17, 27, 48)');
+        await page.locator('#calm').click();await capture('opaque-menu-settings');
+        await page.locator('#hide-panels').click();assert(await page.locator('#menu').isHidden());await page.locator('#menu-toggle').click();assert(await page.locator('#menu').isVisible());await page.locator('#menu-toggle').click();return {color};
       });
       await check('estimated countdown and zone colors are distinct',async()=>{
         const d=structuredClone(demo);delete d.working;await page.evaluate(d=>{loadReplay(d);cancelAnimationFrame(raf);S.play=false;

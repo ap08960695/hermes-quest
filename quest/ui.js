@@ -67,7 +67,8 @@ function renderIdle() {
   // Replace the existing detail row, not the XP ratio or another scene label.
   // Use the board-level tier model only: absent level never implies completion.
   const goal=!hall.known?'Next Guildhall tier · unknown':hall.next_level!==null?
-    'Next Guildhall tier · Level '+hall.next_level:'Guildhall tiers complete';
+    'Next Guildhall tier · Level '+hall.next_level:
+    'Next: Lv '+(p.level+1)+' · '+(Number.isFinite(p.xp)?(100-p.xp%100)+' XP to go':'XP to go unknown');
   const summary=goal+' · on this board';
   const label=ctx.$('#guild-summary');if(label)label.textContent=hall.label+' · '+summary;
   for(const id of ['guild-details','working-guild']){const b=ctx.$('#'+id);if(b){

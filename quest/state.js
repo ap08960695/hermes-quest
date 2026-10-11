@@ -104,7 +104,7 @@ function planWork(block, {mode = 'delta', animate = false} = {}) {
     seen.add(item.ref); credits.push({ref: item.ref, at: baseline ? null : parsed.asOf});
     // First-ever snapshot is a baseline: already-finished work is credited silently (no fireworks at boot).
     if (!baseline) fires.push({hook: 'onComplete', info: {ref: item.ref, bot_ref: item.bot_ref, task_ref: item.task_ref, display_name: item.display_name, class_label: item.class_label,
-      quest_label: item.quest_label, quest_kind: item.quest_kind, group_label: item.group_label, at: parsed.asOf, animate, mode}});
+      quest_label: item.quest_label, quest_kind: item.quest_kind, group_label: item.group_label, reward_gold: GOLD_PER_DONE, at: parsed.asOf, animate, mode}});
   }
   let orderFire = null;
   if (parsed.order) {

@@ -77,7 +77,8 @@ function stepWorkCombat(dt) {
 // ---------- FX ----------
 function num(x, y, text, color, life = 1.1) { ctx.S.fx.push({k: 'num', x, y, text, color, life, max: life}); }
 function burst(x, y, color, n) { if (ctx.calm) n = Math.ceil(n / 3); for (let i = 0; i < n; i++) ctx.S.fx.push({k: 'p', x, y, vx: (Math.random() - .5) * 90, vy: -Math.random() * 90, color, life: .5 + Math.random() * .4}); }
-function coins(x, y) { const [vx, vy] = ctx.W.regions.vault.spot; for (let i = 0; i < 8; i++) ctx.S.fx.push({k: 'coin', x, y, x0: x, y0: y, x1: vx + (Math.random() - .5) * 30, y1: vy - 10, life: 1.2 + i * .06, max: 1.2 + i * .06}); }
+function coins(x, y, gold = null) { const [vx, vy] = ctx.W.regions.vault.spot; for (let i = 0; i < 8; i++) ctx.S.fx.push({k: 'coin', x, y, x0: x, y0: y, x1: vx + (Math.random() - .5) * 30, y1: vy - 10, life: 1.2 + i * .06, max: 1.2 + i * .06,
+  label: i===0 ? (Number.isFinite(gold)&&gold>=0?'+'+gold+' game gold':'game gold') : null}); }
 function portal(t) { ctx.S.fx.push({k: 'portal', x: t.x - 34, y: t.y, life: 2.2, max: 2.2}); }
 function raven(t) { const [x, y] = ctx.spotOf(ctx.regionOf(ctx.captainId())); ctx.S.fx.push({k: 'raven', x0: x, y0: y - 40, x1: t.x, y1: t.y - 40, life: 1.6, max: 1.6}); }
 // Order courier: a scroll (or other icon) flies from the Captain to the recipient. Lifetime scales with the distance so a long
@@ -89,8 +90,8 @@ function courier(x0, y0, x1, y1, {icon = '📜'} = {}) {
 }
 // Victory + loot for one real completion: coins fly to the vault, QUEST CLEAR! floats up, a gold ring and sparks mark the spot.
 // Presentation only: it never touches the vault counter, XP, gold or any task.
-function victory(x, y) {
-  coins(x, y); num(x, y - 36, 'QUEST CLEAR!', '#ffd36b', 1.6);
+function victory(x, y, gold = null) {
+  coins(x, y, gold); num(x, y - 36, 'QUEST CLEAR!', '#ffd36b', 1.6);
   ctx.S.fx.push({k: 'ring', x, y: y - 10, color: '#ffd36b', r: 30, life: .5, max: .5});
   burst(x, y - 14, '#ffd36b', 12);
   ctx.S.trauma = Math.min(1, ctx.S.trauma + .12);

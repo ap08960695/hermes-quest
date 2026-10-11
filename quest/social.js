@@ -152,7 +152,7 @@ function onComplete(item, {animate = true} = {}) {
   const t = ctx.S.tasks[item.task_ref ?? item.task ?? ref], h = heroFor(item.bot_ref || item.bot, item.display_name);
   const [x, y] = pair ? [pair.x, pair.y - 20] : ctx.S.work?.has && !ctx.workView?.all ? ctx.plazaOf(ctx.defaultRegion()).center : t && t.alpha > 0 && !t.dying ? [t.x, t.y - 10] : h ? [h.x, h.y - 20] : ctx.W.regions.vault.spot;
   const firstFx = ctx.S.fx.length;
-  ctx.victory(x, y);
+  ctx.victory(x, y, item.reward_gold);
   if(ctx.S.work?.has)for(const f of ctx.S.fx.slice(firstFx)){f.working=true;if(f.k==='coin'){f.x1=x+80;f.y1=y-60;}}
   ctx.cheerAround({x, y});
   if (h && !ctx.restLocked(h)) { h.cheer = .9; h.bubble = {text: '🎉', until: 1.6}; }

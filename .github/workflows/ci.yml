@@ -115,6 +115,8 @@ jobs:
         run: node tools/test_time_bar_label.cjs "$RUNNER_TEMP/ui-regressions/time-bar"
       - name: Board gold, scoped mobile scene, completion cue and reading sheets
         run: node tools/test_idle_ui_fix.cjs "$RUNNER_TEMP/ui-regressions/idle-ui-fix"
+      - name: Board goals and status layout at Web and SDK guest breakpoints
+        run: node tools/test_idle_next_goal.cjs "$RUNNER_TEMP/ui-regressions/idle-next-goal"
       - name: Shared-worker quest context and partial session availability (both engines)
         run: node tools/test_clarity_web_followup.cjs "$RUNNER_TEMP/ui-regressions/clarity-web-followup"
       - name: Selected rendering and private presentation (both engines)
