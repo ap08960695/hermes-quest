@@ -52,7 +52,7 @@ async function boot() {
     if (!document.hidden) ctx.pollTimer = setTimeout(ctx.pollEvents, 10000);
   } else { ctx.reset(D.meta.from_); ctx.connection('Replay file', 'file'); }
   if (!document.hidden) raf = requestAnimationFrame(loop);
-  } catch (e) { ctx.connection('Unable to load data · reload to retry', 'offline'); }
+  } catch (e) { ctx.connection(e?.questConfig ? e.message : 'Unable to load data · reload to retry', 'offline'); }
 }
 
 // ---------- render ----------

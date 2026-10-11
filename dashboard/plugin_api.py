@@ -108,7 +108,7 @@ def _extract(mode: str, value: str, show_profile_names: bool = False) -> dict:
         return payload
     except (OSError, subprocess.SubprocessError, ValueError):
         # Do not expose stderr: it can contain private paths, DB details, or data.
-        raise HTTPException(status_code=503, detail="Quest data is unavailable") from None
+        raise HTTPException(status_code=503, detail="Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)") from None
 
 
 def _history_settings(root=None, env=None):

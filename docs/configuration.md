@@ -1,8 +1,9 @@
 # Configuration
 
 The extractor (`tools/extract.py`) is configured by a JSON file. Point to it with the `HERMES_QUEST_CONFIG`
-environment variable, or with `--config` on the command line. With neither, built-in defaults are used. The
-dashboard plugin passes the environment of the dashboard process to the extractor, so set the variable there.
+environment variable, or with `--config` on the command line. With neither, built-in defaults are used only
+when the backend recognizes the home (see below). The dashboard plugin passes the environment of the dashboard
+process to the extractor, so set the variable there and restart that process.
 
 A copy of every option is in [`config.example.json`](../config.example.json).
 
@@ -26,6 +27,12 @@ Notes:
   `get_default_hermes_root` resolver to read the shared board and profile roster.
   Only the root itself or a direct `profiles/<name>` home can select that root;
   unsupported discovery fails closed (HTTP 503), without guessing parent paths.
+  Default root/direct profile installs need no config; a direct profile still reads the shared root.
+  An isolated/custom home nested beneath the native root that is neither the root nor a direct profile
+  **must** set `HERMES_QUEST_CONFIG` to a JSON file containing an explicit `hermes_home`.
+  Follow the executable steps in [README: Custom HERMES_HOME](../README.md#custom-hermes_home).
+  A variable pointing to a JSON without `hermes_home` does not bypass discovery. No-config rejection
+  must not be worked around by moving reads to an unrelated home or weakening the guard.
   The sampler and session-key store use the same resolved home. Existing explicit
   `history_dir` and `botstatus_path` settings still take precedence.
 - An explicit Quest `hermes_home` always wins, including a profile-local home.

@@ -122,5 +122,35 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
   assert.equal(run('cursor'), cursorBefore, 'cursor must not advance on failure');
   assert.equal(playbackProbe(), probe, 'speed/play/follow/camera unchanged by stale warning');
   assert.equal(run('S.play'), true);
+
+  // Data 503 carries fixed guidance through direct HTTP and sanitized SDK bridges.
+  // Never display raw backend/error prose, even when it includes paths.
+  const hint = 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)';
+  for (const bridge of [false, true]) {
+    box.fetch = async () => {
+      if (bridge) throw new Error('HTTP 503');
+      return {ok: false, status: 503, json: async () => ({detail: '/private/error/CANARY'})};
+    };
+    box.window.location = {search: '?live=1'};
+    calls.length = 0;
+    await run('boot()');
+    assert.equal(calls.at(-1).text, hint, 'initial load explains configuration');
+    assert.equal(el('#issues').textContent, hint, 'guidance is visible, not just a tooltip');
+    assert.equal(el('#issues').hidden, false);
+    run('pollFailures = 0; pollStale = false');
+    await run('pollEvents()');
+    assert.equal(calls.at(-1).text, hint, 'first failed poll explains configuration');
+    await run('pollEvents()'); await run('pollEvents()');
+    assert.equal(calls.at(-1).state, 'stale', 'existing three-failure gate retained');
+    assert(el('#issues').textContent.includes(hint), 'guidance survives overview refresh');
+    for (const bad of ['CANARY', '/private/', '/', '\\']) assert(!el('#issues').textContent.includes(bad));
+    assert.equal(run('cursor'), cursorBefore, 'failed data reads never advance cursor');
+  }
+  // Untrusted error strings and non-data 503s retain the generic load message.
+  box.fetch = async () => { throw new Error('/private/error/CANARY'); };
+  await run('boot()');
+  assert.equal(calls.at(-1).text, 'Unable to load data · reload to retry');
+  box.fetch = async () => ({ok: false, status: 503});
+  await assert.rejects(run("json('data/world.json')"), e => e.message === 'HTTP 503' && !e.questConfig);
   console.log('PASS test_live_stale');
 })().catch(e => { console.error(e); process.exit(1); });

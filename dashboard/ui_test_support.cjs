@@ -42,8 +42,12 @@ module.exports = function loadUI(box, el) {
   }
   // Match initially closed drawers, so these timeline tests don't invoke font rasterization.
   for (const id of ['#camp', '#chron', '#quest']) box.document.querySelector(id).hidden = true;
-  return state => el('#connection').getAttribute('aria-label') === ({
+  return state => {
+    const label = el('#connection').getAttribute('aria-label');
+    if (state === 'offline' && label === 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME) alert') return true;
+    return label === ({
     file: 'Replay file normal', online: 'Connected · 10s normal',
     offline: 'Offline · retrying in 10s alert'
-  })[state];
+    })[state];
+  };
 };

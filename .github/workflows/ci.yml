@@ -67,6 +67,7 @@ jobs:
           node desktop/test_plugin.cjs
           node dashboard/test_defaults.cjs
           node dashboard/test_dashboard_auth.cjs
+          node tools/test_live_stale.cjs
           # test_api_migration.cjs receives real synthetic API fixtures from
           # test_live_contract.py in the redaction/privacy step above.
       - name: Live-host checks intentionally skipped

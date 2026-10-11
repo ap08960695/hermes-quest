@@ -300,7 +300,7 @@
     const issueCount=data.blocked+data.errors.length;
     const badge=$('#issues'),down=connectionState==='offline'||connectionState==='snapshot'||connectionState==='stale';badge.hidden=!issueCount&&!down;
     const label=[data.blocked?data.blocked+' blocked':null,data.errors.length?data.errors.length+' issues':null,
-      connectionState==='stale'?'Live paused · not updating':connectionState==='offline'?'Offline':connectionState==='snapshot'?connectionText:null].filter(Boolean).join(' · ');
+      down?connectionText:null].filter(Boolean).join(' · ');
     badge.textContent=label;badge.setAttribute('aria-label',label||'No observed issues');
     badge.onclick=()=>detail([data.blocked+' tasks blocked',...data.errors,
       ...(down?[connectionText,...staleLines()]:[]),
@@ -416,7 +416,7 @@
     if(was==='stale'||state==='stale')bounds();
     if(overviewData)overview(overviewData);
     else if(state==='offline'||state==='snapshot'||state==='stale'){
-      $('#issues').hidden=false;$('#issues').textContent=state==='stale'?'Live paused · not updating':state==='offline'?'Offline':text;
+      $('#issues').hidden=false;$('#issues').textContent=text;
       $('#issues').setAttribute('aria-label',text);$('#issues').onclick=$('#connection').onclick;
     }
   }

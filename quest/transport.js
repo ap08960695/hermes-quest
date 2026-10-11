@@ -27,6 +27,14 @@ async function json(url) {
       if (!r.ok) { const err = new Error(`HTTP ${r.status}`); err.status = r.status; throw err; }
       return await r.json();
     })()]);
+  } catch (e) {
+    // Bridges expose only HTTP status, never backend prose. Use fixed local guidance
+    // for 503 on the data API; do not display a response body or arbitrary error text.
+    if (url.startsWith(API) && (e?.status === 503 || e?.message === 'HTTP 503')) {
+      const err = new Error('Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)');
+      err.status = 503; err.questConfig = true; throw err;
+    }
+    throw e;
   } finally { clearTimeout(timer); }
 }
 // Three failed polls in a row (~30 s) or any 4xx means live data is not updating: say so on screen with a
@@ -35,12 +43,12 @@ function pollFailed(e) {
   pollFailures++;
   const status = Number.isInteger(e?.status) ? e.status : 0, client = status >= 400 && status < 500;
   // Once the warning is up it stays up (with the latest reason) until a poll really succeeds: a different failure kind must not downgrade it.
-  if (!pollStale && pollFailures < 3 && !client) { connection('Offline · retrying in 10s', 'offline'); return; }
+  if (!pollStale && pollFailures < 3 && !client) { connection(e?.questConfig ? e.message : 'Offline · retrying in 10s', 'offline'); return; }
   pollStale = true;
   const reason = status === 401 || status === 403 ? 'sign-in needed' : client ? 'server rejected' : status >= 500 ? 'server error'
     : e?.name === 'TypeError' || e?.message === 'Transport timeout' ? 'offline' : 'update failed';
   const updated = lastPollOk === null ? null : new Date(lastPollOk).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
-  connection('Live paused · not updating · ' + (updated ? 'last update ' + updated : 'no update yet') + ' · ' + reason, 'stale', {updated, reason});
+  connection('Live paused · not updating · ' + (updated ? 'last update ' + updated : 'no update yet') + ' · ' + reason + (e?.questConfig ? ' · ' + e.message : ''), 'stale', {updated, reason});
 }
 async function pollEvents() {
   if (pollBusy || document.hidden) return;

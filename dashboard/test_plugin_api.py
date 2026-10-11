@@ -159,7 +159,10 @@ class QuestAPItests(unittest.TestCase):
         self.put("tools/extract.py", 'raise RuntimeError("/private/path/secret")')
         response = self.client.get(PREFIX + "/replay")
         self.assertEqual(response.status_code, 503)
-        self.assertEqual(response.json(), {"detail": "Quest data is unavailable"})
+        detail = response.json()['detail']
+        self.assertEqual(detail, 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)')
+        for path in ('/private/path/secret', str(self.root), '/', '\\'):
+            self.assertNotIn(path, detail)
 
     def test_invalid_payload_and_timeout_are_sanitized(self):
         self.put("tools/extract.py", MODERN + '\ndef build_replay(cfg, hours):\n    return []\n')

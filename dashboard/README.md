@@ -45,7 +45,7 @@ to a temporary file and explicit `HOURS`/`T0`. It never writes the real
 and explicitly identify `state: legacy-fallback` and `meta.incremental: false`.
 The legacy snapshot retains legacy privacy behavior: do not treat it as M3-safe
 or use it for public screenshots. Import/extraction failures return a generic
-503 without stderr, filesystem paths, or database details.
+503 with fixed configuration guidance, without stderr, filesystem paths, or database details.
 
 ## `show_titles` configuration
 
@@ -87,7 +87,11 @@ ln -s "$(pwd)" "$HERMES_HOME/plugins/hermes-quest"
 hermes plugins enable hermes-quest --no-allow-tool-override
 ```
 
-Then restart the existing dashboard. The same sequence is the canonical
+For a nested isolated/custom home that is not the native root or a direct named profile,
+first set `HERMES_QUEST_CONFIG` to JSON containing `hermes_home` as shown in
+[README: Custom HERMES_HOME](../README.md#custom-hermes_home); this is required, not optional.
+Default root/direct profile installs may omit it and use the shared-root view.
+Then restart the existing dashboard with the same environment. The same sequence is the canonical
 "Quick start: Hermes dashboard plugin" in the root README. The root
 `plugin.yaml` and `__init__.py` register the dashboard-only package; the
 plugin adds no agent tools or hooks. Do not enable it in a different

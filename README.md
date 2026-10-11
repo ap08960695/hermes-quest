@@ -143,7 +143,7 @@ in `QUEST_TAG`. Keep the whole repository layout.
 
 ```bash
 export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
-QUEST_TAG=v0.1.2        # replace with the newest release tag
+QUEST_TAG=v0.1.3        # replace with the newest release tag
 mkdir -p "$HERMES_HOME/plugins"
 git clone --branch "$QUEST_TAG" https://github.com/ap08960695/hermes-quest.git "$HERMES_HOME/plugins/hermes-quest"
 hermes plugins enable hermes-quest --no-allow-tool-override
@@ -157,10 +157,23 @@ over it: use the update steps below. For development, the local-checkout symlink
 `hermes plugins enable` turns on the web dashboard tab and the backend API. Hermes Desktop has its own, separate
 switch: see [Install in Hermes Desktop](#install-in-hermes-desktop).
 
-### 3. Optional configuration and title opt-in
+### 3. Configuration and title opt-in
 
-Without a configuration file, extraction uses `HERMES_HOME`, automatically discovers profiles/Captain and
-keeps `show_titles` false. To explicitly select this same data home and safe defaults:
+For the default root (`~/.hermes`) or a direct named profile (`profiles/<name>` beneath that root),
+configuration is optional: the backend reads the shared Hermes root, automatically discovers profiles/Captain,
+and keeps `show_titles` false. A profile home does not limit this default shared-root view to that profile.
+
+#### Custom HERMES_HOME
+
+An isolated/custom home nested inside the native Hermes root, but not the root itself or a direct
+`profiles/<name>` home, **requires explicit configuration**. For example, `~/.hermes/quest-sandbox`
+is not a named profile. Without configuration the backend rejects it with HTTP 503 rather than reading
+another home's data. Other custom roots may be recognized by Hermes, but explicit configuration is
+recommended whenever you want a strictly isolated data home.
+
+After installing in your chosen `HERMES_HOME`, run both commands below **before starting the dashboard**.
+The JSON must contain `hermes_home`; setting the variable alone or using a JSON without this key is not enough.
+These commands also let a default-root/profile user explicitly select that home instead of the shared root:
 
 ```bash
 export HERMES_QUEST_CONFIG="$HERMES_HOME/hermes-quest.json"
@@ -177,7 +190,8 @@ and [docs/privacy.md](docs/privacy.md).
 ### 4. Restart the dashboard and open the tab
 
 Stop the existing dashboard in the terminal/service that owns it, then start it with the same exported
-`HERMES_HOME` and optional `HERMES_QUEST_CONFIG`. If a service manages your dashboard, set these in its
+`HERMES_HOME` and `HERMES_QUEST_CONFIG` when configured (required for the nested custom-home case above).
+If a service manages your dashboard, set these in its
 service environment and restart that service instead; exports in another shell do not reach a running service.
 
 Start the dashboard with its default settings:
@@ -315,7 +329,7 @@ local storage for the dashboard site and are removed by clearing site data. See 
 | --- | --- |
 | `hermes: command not found` | Export `$HOME/.local/bin` on PATH or reload your shell after installing Hermes. |
 | No Quest tab / API 404 | Check `hermes plugins list`, the checkout's `dashboard/manifest.json`, and that enable/start use the same Hermes home. Restart the actual dashboard process, then reload. |
-| Tab visible but data unavailable / API 503 | Check that `HERMES_QUEST_CONFIG` is valid JSON and its `hermes_home` exists and is readable by the dashboard. Inspect host logs privately; API errors deliberately hide paths. |
+| Tab visible but data unavailable / API 503 | For a nested custom home, follow [Custom HERMES_HOME](#custom-hermes_home): set `HERMES_QUEST_CONFIG` and include `hermes_home` in the JSON. Check the home exists and is readable; restart the actual backend with those variables. Other extraction failures can also return 503; inspect host logs privately, as API errors deliberately hide paths. |
 | World is empty | Expected on a clean home or a window with no recent activity. Use the standalone synthetic demo to see battles. |
 | Configuration has no effect | Set the variable in the dashboard/service environment and restart; shell exports do not change an existing process. |
 | Desktop: no Quest entry in the sidebar | Run Settings, Plugins, Rescan and turn on the **Desktop** switch. With a remote backend, the package must also be installed on the computer that runs the Desktop app. |
