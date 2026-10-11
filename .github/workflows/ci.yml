@@ -97,6 +97,8 @@ jobs:
         run: node tools/test_ui_inventory.cjs "$RUNNER_TEMP/ui-regressions/inventory"
       - name: Clarity scene, copy, states and privacy (both engines, five viewports)
         run: node tools/test_clarity_scene.cjs "$RUNNER_TEMP/ui-regressions/clarity-scene"
+      - name: Shared-worker quest context and partial session availability (both engines)
+        run: node tools/test_clarity_web_followup.cjs "$RUNNER_TEMP/ui-regressions/clarity-web-followup"
       - name: Selected rendering and private presentation (both engines)
         run: node tools/test_scene_selection.cjs "$RUNNER_TEMP/ui-regressions/selection"
       - name: Working view focus and privacy (both engines, three viewports)

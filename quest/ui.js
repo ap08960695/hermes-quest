@@ -402,7 +402,7 @@ function renderOverview() {
   renderWorking();
   if(workingSnapshot()){
     const rows=workItems(),tasks=rows.filter(i=>i.status!=='archived').sort((a,b)=>['running','blocked','failed','unknown','done'].indexOf(a.status)-['running','blocked','failed','unknown','done'].indexOf(b.status)).map(i=>({key:i.ref,completed:i.status==='done',blocked:i.status==='blocked',summary:'Hero · '+i.display_name+' · '+i.quest_label+' · '+workStatus(i.status),details:()=>focusWork(i.ref,true)}));
-    ctx.UI.overview({tasks,heroes:rows.filter(i=>i.status==='running').map(i=>({key:i.ref,summary:'Hero · '+i.display_name+' · '+i.class_label,details:()=>focusWork(i.ref,true)})),blocked:rows.filter(i=>i.status==='blocked').length,errors:rows.filter(i=>i.status==='failed').map(()=>workStates.failed),empty:'No quests in this history range',summary:rows.filter(i=>i.status==='running').length+' active quests'+(ctx.pollStale?' · Stale data':''),...stalePayload()});return;
+    ctx.UI.overview({tasks,heroes:rows.filter(i=>i.status==='running').map(i=>({key:i.ref,summary:'Hero · '+i.display_name+' · '+i.class_label+' · '+i.quest_label,details:()=>focusWork(i.ref,true)})),blocked:rows.filter(i=>i.status==='blocked').length,errors:rows.filter(i=>i.status==='failed').map(()=>workStates.failed),empty:'No quests in this history range',summary:rows.filter(i=>i.status==='running').length+' active quests'+(ctx.pollStale?' · Stale data':''),...stalePayload()});return;
   }
   const states=Object.values(ctx.S.tasks),blocked=states.filter(t=>t.state==='blocked'||t.chained).length;
   const working=states.filter(t=>t.state==='fight').length,waiting=states.filter(t=>['quest','caged'].includes(t.state)).length;

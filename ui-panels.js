@@ -280,7 +280,7 @@
   }
   const groups=['playback','overview','world','settings'], preferenceKey='quest-menu-v1';
   let overviewKey='', overviewData=null, lastFeed=[], lastCamps=[], feedOptions={}, campOptions={}, allFeed=false, allCamps=false;
-  let connectionState='loading', connectionText='Loading…', sourceMode='Loading', staleInfo=null;
+  let connectionState='loading', connectionText='Loading…', sourceMode='Loading', staleInfo=null, sessionUnavailable=false;
   function savePreference() {
     const value={menu:!$('#menu').hidden,groups:Object.fromEntries(groups.map(id=>[id,!!$('#group-'+id).open]))};
     try {root.localStorage.setItem(preferenceKey,JSON.stringify(value));} catch (_) { /* Storage is optional. */ }
@@ -341,12 +341,12 @@
   function overviewView(data) {
     overviewData=data;
     const issueCount=data.blocked+data.errors.length;
-    const badge=$('#issues'),down=connectionState==='offline'||connectionState==='snapshot'||connectionState==='stale';badge.hidden=!issueCount&&!down;
+    const badge=$('#issues'),down=connectionState==='offline'||connectionState==='snapshot'||connectionState==='stale'||sessionUnavailable;badge.hidden=!issueCount&&!down;
     const label=[data.blocked?data.blocked+' blocked quests':null,data.errors.length?data.errors.length+' issues':null,
       down?connectionText:null].filter(Boolean).join(' · ');
     badge.textContent=label;badge.setAttribute('aria-label',label||'No observed issues');
     badge.onclick=()=>detail([data.blocked+' blocked quests',...data.errors,
-      ...(down?[connectionText,...staleLines()]:[]),
+      ...(down?[connectionText,...staleLines(),...sessionLines()]:[]),
       ...data.tasks.filter(t=>t.blocked).map(t=>t.summary),'Open Overview for permitted quest details.'],'Issues');
     $('#overview-summary').textContent=[data.summary,...panelStaleLines(data)].join(' · ');
     if($('#menu').hidden||!$('#group-overview').open)return;
@@ -361,7 +361,7 @@
   function mode(text) {
     sourceMode=text;
     const source=({DEMO:'Sample data',Replay:'Saved history (not live)',Live:'Live data',Snapshot:'Saved history (not live)'})[text]||text;
-    const connectionLabel={loading:'Loading',online:'Connected',snapshot:'Live paused',offline:'Offline',stale:'Live paused',file:'Saved history (not live)'}[connectionState]||'Unknown';
+    const connectionLabel=connectionState==='online'&&sessionUnavailable?'Kanban connected · Session activity unavailable':{loading:'Loading',online:'Connected',snapshot:'Live paused',offline:'Offline',stale:'Live paused',file:'Saved history (not live)'}[connectionState]||'Unknown';
     $('#mode').textContent=source;
     $('#mode').setAttribute('aria-label',source+(connectionState==='file'?'':' · '+connectionLabel));
   }
@@ -447,19 +447,26 @@
       staleInfo.updated?'Last successful update: '+staleInfo.updated+'.':'No successful update yet.','Reason: '+staleInfo.reason+'.',
       'Retrying in '+(staleInfo.retrySeconds||10)+' sec.','The game keeps running on the data it already has and returns to Live by itself after one successful update.']:[];
   }
+  function sessionLines() {
+    if(!sessionUnavailable)return [];
+    // Fixed public guidance only: never render a backend reason, key or path.
+    return ['Worker tool calls, messages, helper links and token usage cannot be shown safely while session activity is unavailable.',
+      connectionState==='online'?'Kanban quest status, assignments and completed-quest rewards still update. Kanban polling has not stopped.':'The game keeps the Kanban data it already has; check connection status above for live updates.',
+      'Open Setup help. Check that Hermes can read worker history and write its private Quest settings, then restart Hermes and retry. Do not delete or share private settings.'];
+  }
   function status(text,state,extra) {
     const was=connectionState;
-    connectionState=state;connectionText=text;staleInfo=state==='stale'?(extra||{updated:null,reason:'update failed'}):null;mode(extra?.source||sourceMode);
+    connectionState=state;connectionText=text;sessionUnavailable=extra?.sessionUnavailable===true;staleInfo=state==='stale'?(extra||{updated:null,reason:'update failed'}):null;mode(extra?.source||sourceMode);
     // Activity rendering can be skipped while Menu is closed. Its open detail
     // still follows connection transitions, independently of drawer visibility.
     feedOptions={...feedOptions,stale:state==='stale',staleInfo};
     campOptions={...campOptions,stale:state==='stale',staleInfo};
     refreshDialogStatus();
     control('#connection',({online:'connected',file:'snapshot',stale:'offline'})[state]||state,text,state==='offline'||state==='stale'?'alert':'normal');
-    $('#connection .control-name').textContent=state==='offline'&&extra?.status?'Server error ('+extra.status+')':({loading:'Loading',online:'Connected',file:'Data source',snapshot:'Live paused',offline:'Offline',stale:'Live paused'})[state]||'Connection details';
+    $('#connection .control-name').textContent=state==='online'&&sessionUnavailable?'Kanban connected':state==='offline'&&extra?.status?'Server error ('+extra.status+')':({loading:'Loading',online:'Connected',file:'Data source',snapshot:'Live paused',offline:'Offline',stale:'Live paused'})[state]||'Connection details';
     $('#connection').title=text;
     $('#connection').onclick=()=>{
-      detail([sourceMode+' data source',connectionText,...staleLines(),
+      detail([sourceMode+' data source',connectionText,...staleLines(),...sessionLines(),
         'Playback and live-follow are separate from connection status.','Live updates poll about every 10 seconds while this browser page is visible.'],'Connection details');
       const help=document.createElement('button');help.className='text-button';help.textContent='Setup help';help.onclick=setup;$('#quest .detail-content').append(help);
     };
@@ -473,13 +480,13 @@
     else if(say&&state!=='stale')say.textContent='';
     bounds();
     if(overviewData)overview(overviewData);
-    else if(state==='offline'||state==='snapshot'||state==='stale'){
+    else if(state==='offline'||state==='snapshot'||state==='stale'||sessionUnavailable){
       $('#issues').hidden=false;$('#issues').textContent=text;
       $('#issues').setAttribute('aria-label',text);$('#issues').onclick=$('#connection').onclick;
     }
   }
   function setup() {
-    detail(['If Quest cannot load your data, check that Hermes is running and you are signed in, then retry.',
+    detail([...sessionLines(),'If Quest cannot load your data, check that Hermes is running and you are signed in, then retry.',
       'Using a custom Hermes folder? Point Quest to that folder using the Custom Hermes home instructions in the README, then restart Hermes.',
       'Live updates retry automatically every 10 seconds. Saved history does not update itself.'],'Setup');
     const content=$('#quest .detail-content'),button=document.createElement('button');button.className='text-button';button.textContent='Technical details';

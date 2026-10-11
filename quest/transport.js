@@ -8,11 +8,12 @@ const TRANSPORT_MS = 35000;
 let pollBusy = false;
 // Live health: consecutive failed polls and the last time a fetch fully succeeded (ms). UI-only; never read by the scene.
 let pollFailures = 0, lastPollOk = null, pollStale = false, pollReason = null;
-function connection(text, state, extra = {}) { if (ctx.UI) ctx.UI.status(text, state, {...extra,source:ctx.D?.meta.source==='demo'?'Sample data':liveFeed?'Live data':'Saved history (not live)',following,stale:pollStale}); }
+function connection(text, state, extra = {}) { if (ctx.UI) ctx.UI.status(text, state, {...extra,source:ctx.D?.meta.source==='demo'?'Sample data':liveFeed?'Live data':'Saved history (not live)',following,stale:pollStale,sessionUnavailable:ctx.D?.session_data?.status==='unavailable'}); }
 function connectedStatus(payload) {
-  if (ctx.D.session_data?.status === 'unavailable') return connection('Session activity unavailable', 'snapshot');
   pollReason=null;
-  connection(payload.state === 'legacy-fallback' ? 'Saved history (not live)' : 'Connected', payload.state === 'legacy-fallback' ? 'snapshot' : 'online');
+  const saved = payload.state === 'legacy-fallback';
+  const text = saved ? 'Saved history (not live)' : 'Connected';
+  connection(text+(ctx.D.session_data?.status==='unavailable'?' · Session activity unavailable':''), saved ? 'snapshot' : 'online');
 }
 async function json(url) {
   // One deadline covers both headers and body, allowing backend extraction 30s.
