@@ -1,4 +1,4 @@
-/* Pixel-only visible UI; semantic controls and offscreen text remain accessible. MIT. */
+/* Pixel artwork with visible, local-system-font text fallbacks. MIT. */
 (function(root) {
   'use strict';
   const $=s=>document.querySelector(s), T=root.UIText, I=root.UIGlyphs;
@@ -10,7 +10,13 @@
     const c=document.createElement('canvas');c.width=c.height=36;
     I.draw(c.getContext('2d'),id,2,2,2,state);icons.set(key,c);return c;
   }
+  function systemImage(text,color='#e8dfc6') {
+    const c=document.createElement('canvas'),g=c.getContext('2d');g.font='bold 14px system-ui, sans-serif';
+    c.width=Math.max(1,Math.ceil(g.measureText(text).width)+8);c.height=22;
+    g.font='bold 14px system-ui, sans-serif';g.fillStyle=color;g.fillText(text,4,16);return c;
+  }
   function numericImage(text,color='#e8dfc6') {
+    if(Array.from(text).some(ch=>!Object.hasOwn(T.glyphs,ch)))return systemImage(text,color);
     const key=text+color;if(numbers.has(key))return numbers.get(key);
     const c=document.createElement('canvas');c.width=Math.max(1,T.measure(text,2));c.height=16;
     T.draw(c.getContext('2d'),text,0,0,{scale:2,color});
@@ -25,11 +31,23 @@
     c.style.width=im.width+'px';c.style.height=im.height+'px';
     const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.drawImage(im,0,0,c.width,c.height);
   }
-  function control(selector,id,label,state='normal') {paint($(selector),iconImage(id,state),label+' '+state);}
-  function number(selector,text,label) {paint($(selector),numericImage(text),label+': '+text);}
+  function control(selector,id,label,state='normal') {
+    const el=$(selector);if(!el)return;paint(el,iconImage(id,state),label+' '+state);
+    let name=el.querySelector('.control-name');if(!name){name=document.createElement('span');name.className='control-name';el.append(name);}
+    name.textContent=label;el.title=label;el.classList.add('named-control');
+  }
+  function number(selector,text,label) {
+    const el=$(selector);if(!el)return;
+    const value=selector==='#speeds'?text+'×':text;
+    if(selector==='#speeds')label='Replay speed';
+    el.textContent=value;el.setAttribute('aria-label',label+': '+value);el.title=label+': '+value;
+  }
   const visible=el=>el&&!el.hidden&&getComputedStyle(el).display!=='none'&&(!el.getClientRects||el.getClientRects().length>0);
   function bounds() {
-    const fixed=['#focus-bar','#menu','#quest','#character-card','#scene-overflow','#scene-selected','#working-panel'].map($).filter(visible).map(el=>el.getBoundingClientRect());
+    const top=($('#focus-bar')?.getBoundingClientRect().bottom||52)+8;
+    const menuEl=$('#menu');if(menuEl){menuEl.style.top=top+'px';menuEl.style.maxHeight=Math.max(44,innerHeight-top-8)+'px';}
+    const hint=$('#first-run');if(hint)hint.style.top=top+'px';
+    const fixed=['#focus-bar','#menu','#quest','#character-card','#scene-overflow','#scene-selected','#working-panel','#first-run'].map($).filter(visible).map(el=>el.getBoundingClientRect());
     reserved=fixed.map(r=>({left:r.left-8,top:r.top-8,right:r.right+8,bottom:r.bottom+8}));
     const outer=fixed.filter((r,i)=>!fixed.some((o,j)=>i!==j&&r.left>=o.left&&r.top>=o.top&&r.right<=o.right&&r.bottom<=o.bottom));
     const area=innerWidth*innerHeight,covered=outer.reduce((n,r)=>n+r.width*r.height,0),ratio=innerWidth<=760||innerHeight<=500?.25:.2;
@@ -71,7 +89,7 @@
           const parts=T.graphemes(label);let value=await T.bitmap(label,{maxWidth:1024,color:'#ffd36b'});
           while(parts.length&&value.width>width){parts.pop();value=await T.bitmap(parts.join('')+'...',{maxWidth:1024,color:'#ffd36b'});}
           if(token===epoch){const canvas=value.lines[0].canvas;canvas._unicode=true;sceneLabels.set(key,canvas);}
-        })().catch(()=>{if(token===epoch)sceneLabels.set(key,numericImage('!','#ffd36b'));});
+        })().catch(()=>{if(token===epoch)sceneLabels.set(key,systemImage(label,'#ffd36b'));});
         if(sceneLabels.size>64)sceneLabels.delete(sceneLabels.keys().next().value);
       }
       im=sceneLabels.get(key)||numericImage('...','#ffd36b');
@@ -157,22 +175,24 @@
     text=plain(text);const token=epoch;
     const row=document.createElement('div');row.className='bitmap-row';
     const parts=text.split(symbolPattern), meanings=parts.map(part=>symbol(part)?.[1]||part).join(' ');
-    const accessible=document.createElement('span');accessible.className='sr-only';accessible.textContent=meanings;
+    const accessible=document.createElement('span');accessible.className='detail-text';accessible.textContent=meanings||'Details unavailable';
     row.append(accessible);parent.append(row);
     const glyphs=parts.map(symbol).filter(Boolean);
     if(glyphs.length){const strip=document.createElement('div');strip.style.cssText='display:flex;flex-wrap:wrap;gap:2px';row.append(strip);
       for(const [id] of glyphs){const holder=document.createElement('span');paint(holder,iconImage(id),id);strip.append(holder.firstChild);}}
+    if(glyphs.length)return; // The words describe the symbols on touch and when fonts fail.
     text=parts.filter(part=>!symbol(part)).join('');
     try {
       const value=await T.bitmap(text||'-',{maxWidth:Math.max(32,parent.clientWidth-(parent.classList.contains('legend-row')?68:24))});
       if(token!==epoch||!row.isConnected)return;
+      if(!text.trim())return; // A symbol-only row still needs its visible meaning.
+      accessible.className='sr-only';
       for(const b of value.lines){const c=document.createElement('canvas');const d=Math.ceil(root.devicePixelRatio||1);
         c.width=b.width*d;c.height=b.height*d;c.style.width=b.width+'px';c.style.height=b.height+'px';c.setAttribute('aria-hidden','true');
         const g=c.getContext('2d');g.imageSmoothingEnabled=false;g.drawImage(b.canvas,0,0,c.width,c.height);row.append(c);}
     } catch(e) {
       if(token!==epoch||!row.isConnected)return;
-      const c=document.createElement('canvas');c.width=c.height=36;I.draw(c.getContext('2d'),'offline',2,2,2,'alert');
-      c.setAttribute('aria-hidden','true');row.append(c);accessible.textContent=meanings+' — Detail font unavailable';row.setAttribute('role','status');
+      accessible.className='detail-text';row.dataset.textFallback='true';
     }
   }
   // The open dialog is bound to retained identities. returnFocus/returnSpec remember the opener
@@ -201,10 +221,11 @@
   // focus returns to its opener), undefined to keep the current content, or new lines to show.
   function detail(lines,label='Details',binding=null) {
     if($('#quest').hidden){remember(document.activeElement);if(binding?.focus)returnSpec={focus:binding.focus};}
-    const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);live=null;
-    const button=document.createElement('button');button.className='close';button.setAttribute('aria-label','Close');
-    button.append(iconImage('close').cloneNode(true)); // Canvas pixels do not clone; paint explicitly below.
-    el.append(button);paint(button,iconImage('close'),'Close');button.onclick=close;
+    label=({'Quest':'Quest details','Task details':'Quest details','Working quest':'Quest details','Hero':'Hero details','Helper':'Hero details','World':'World locations','Region':'Location details','All tasks':'All quests'})[label]||label;
+    const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);el.setAttribute('aria-labelledby','dialog-heading');live=null;
+    const button=document.createElement('button');button.className='close text-button';button.textContent='Close';button.setAttribute('aria-label','Close '+label);
+    el.append(button);button.onclick=close;
+    const heading=document.createElement('h2');heading.id='dialog-heading';heading.textContent=label;el.append(heading);
     const content=document.createElement('div');content.className='detail-content';el.append(content);
     for(const text of lines)line(content,text);bounds();button.focus();
     if(binding)live={kind:'detail',refresh:binding.refresh,key:JSON.stringify(lines),at:performance.now()};
@@ -246,6 +267,7 @@
   function menu(open,restoreFocus=false) {
     $('#menu').hidden=!open;$('#menu-toggle').setAttribute('aria-expanded',String(open));
     $('#menu-toggle').setAttribute('aria-label',open?'Close menu':'Menu');
+    $('#menu-toggle').textContent=open?'Close menu':'Menu';
     savePreference();bounds();
     if(!open&&restoreFocus)$('#menu-toggle').focus();
     if(open&&overviewData)overview(overviewData);
@@ -292,34 +314,35 @@
     if(!completed.length)return;
     if(!data.tasks.some(t=>!t.completed))el.replaceChildren();
     const group=document.createElement('details'),heading=document.createElement('summary');
-    heading.textContent='Completed · '+completed.length;group.append(heading);group.open=wasOpen;
+    heading.textContent='Completed quests · '+completed.length;group.append(heading);group.open=wasOpen;
     const rows=document.createElement('div');group.append(rows);itemList(rows,completed,data.empty);el.append(group);
   }
   function overviewView(data) {
     overviewData=data;
     const issueCount=data.blocked+data.errors.length;
     const badge=$('#issues'),down=connectionState==='offline'||connectionState==='snapshot'||connectionState==='stale';badge.hidden=!issueCount&&!down;
-    const label=[data.blocked?data.blocked+' blocked':null,data.errors.length?data.errors.length+' issues':null,
+    const label=[data.blocked?data.blocked+' blocked quests':null,data.errors.length?data.errors.length+' issues':null,
       down?connectionText:null].filter(Boolean).join(' · ');
     badge.textContent=label;badge.setAttribute('aria-label',label||'No observed issues');
-    badge.onclick=()=>detail([data.blocked+' tasks blocked',...data.errors,
+    badge.onclick=()=>detail([data.blocked+' blocked quests',...data.errors,
       ...(down?[connectionText,...staleLines()]:[]),
-      ...data.tasks.filter(t=>t.blocked).map(t=>t.summary),'Open Overview for permitted task details.'],'Issues');
+      ...data.tasks.filter(t=>t.blocked).map(t=>t.summary),'Open Overview for permitted quest details.'],'Issues');
     $('#overview-summary').textContent=data.summary;
     if($('#menu').hidden||!$('#group-overview').open)return;
     const key=JSON.stringify([data.summary,data.tasks.map(t=>[t.key,t.summary,t.completed]),data.heroes.map(h=>[h.key,h.summary])]);
     if(key===overviewKey)return;overviewKey=key;
     keepListFocus('#tasks-list','#tasks-all',()=>overviewTasks(data));
     keepListFocus('#heroes-list','#heroes-all',()=>itemList('#heroes-list',data.heroes,'No heroes in this replay range'));
-    $('#tasks-all').onclick=()=>listDialog('All tasks',()=>overviewData?.tasks,overviewData.empty);
+    $('#tasks-all').onclick=()=>listDialog('All quests',()=>overviewData?.tasks,overviewData.empty);
     $('#heroes-all').onclick=()=>listDialog('All heroes',()=>overviewData?.heroes,'No heroes in this replay range');
   }
   function playback(text) {$('#playback-summary').textContent=text;}
   function mode(text) {
     sourceMode=text;
-    const connectionLabel={loading:'Loading',online:'Connected',snapshot:'Snapshot',offline:'Offline',stale:'Paused',file:'Replay'}[connectionState]||'Unknown';
-    $('#mode').textContent=text+(text==='DEMO'&&connectionState==='file'?'':' · '+connectionLabel);
-    $('#mode').setAttribute('aria-label',text+' data source · '+connectionLabel);
+    const source=({DEMO:'Sample data',Replay:'Saved history (not live)',Live:'Live data',Snapshot:'Saved history (not live)'})[text]||text;
+    const connectionLabel={loading:'Loading',online:'Connected',snapshot:'Live paused',offline:'Offline',stale:'Live paused',file:'Saved history (not live)'}[connectionState]||'Unknown';
+    $('#mode').textContent=source;
+    $('#mode').setAttribute('aria-label',source+(connectionState==='file'?'':' · '+connectionLabel));
   }
   function privacy() {
     const work=$('#working-panel');if(work){work.hidden=true;$('#working-rows').replaceChildren();$('#working-order').textContent='';$('#working-rewards').textContent='';}
@@ -333,7 +356,9 @@
   }
   function drawer(which) {
     const el=$('#'+which), open=el.hidden;menu(true);$('#group-overview').open=true;
-    el.hidden=!open;savePreference();bounds();return open;
+    el.hidden=!open;savePreference();bounds();
+    if(open){el.scrollIntoView({block:'nearest'});$('#'+which+'-close').focus();}
+    return open;
   }
   let feedKey='',campKey='';
   function feed(entries) {
@@ -342,22 +367,16 @@
     const selected=entries.filter(f=>filter==='all'||(filter==='issues'?issue(f):!issue(f)));
     const key=JSON.stringify([selected,allFeed,filter]);if(key===feedKey)return;feedKey=key;const el=$('#feed');el.replaceChildren();
     const shown=selected.slice(0,allFeed?selected.length:5);
-    if(!shown.length)line(el,'No activity matching this filter in retained history');
+    if(!shown.length)line(el,'No activity for this filter in saved history');
     for(const f of shown){const row=document.createElement('section');el.append(row);line(row,f.text);
       button(row,'Details',()=>detail([f.detailText||f.text,'Activity from the current retained replay history'],'Activity details'));}
-    $('#feed-all').textContent=allFeed?'Show latest activity':'View all activity';
+    $('#feed-all').textContent=allFeed?'Show recent activity':'View all activity';
   }
   function campaignCount(parent,value) {
     const text=plain(value), match=/^(\d+)\/(\d+)(?:\s+(?:quests|เควส))?(?:\s*(?:·\s*)?⚔\uFE0F?\s*(\d+))?$/.exec(text);
-    // Fixed four-cell fields; larger values retain their exact accessible value.
-    const compact=n=>n.length>4?'999+':n;
-    const im=document.createElement('canvas');im.width=200;im.height=36;
-    const g=im.getContext('2d');g.imageSmoothingEnabled=false;
-    T.draw(g,match?compact(match[1]):'?',0,10,{scale:2});T.draw(g,'/',48,10,{scale:2});
-    T.draw(g,match?compact(match[2]):'?',60,10,{scale:2});g.drawImage(iconImage('sword'),112,0);
-    if(match?.[3]!==undefined)T.draw(g,compact(match[3]),152,10,{scale:2});
-    const row=document.createElement('div');row.className='campaign-count';row.setAttribute('role','img');parent.append(row);
-    paint(row,im,text.replace(/เควส/g,'quests').split(symbolPattern).map(part=>symbol(part)?.[1]||part).join(' '));
+    const row=document.createElement('div');row.className='campaign-count';
+    row.textContent=match?match[1]+' of '+match[2]+' quests complete'+(match[3]===undefined?'':' · '+match[3]+' observed attacks'):text||'Quest count: unavailable';
+    row.setAttribute('aria-label',row.textContent);parent.append(row);
   }
   function camps(rows) {
     lastCamps=rows;if($('#camp').hidden)return;
@@ -367,9 +386,9 @@
       const section=document.createElement('section');section.className='campaign';el.append(section);
       line(section,r.title);campaignCount(section,r.count);
       const pips=document.createElement('div');pips.className='pips';section.append(pips);
-      for(const p of r.stages){const c=document.createElement('canvas');c.width=c.height=36;c.setAttribute('role','img');c.setAttribute('aria-label',p.id+' '+p.state);c.getContext('2d').drawImage(iconImage(p.id,p.state),0,0);pips.append(c);}
+      for(const p of r.stages){const name=document.createElement('span');name.textContent=p.id+' stage: '+p.state;pips.append(name);}
       if(r.blocked)line(section,r.blocked);
-      button(section,'Details',()=>detail([r.title,r.count,...r.stages.map(p=>p.id+' '+p.state),r.blocked||'No blocked tasks observed'],'Campaign details'));
+      button(section,'Details',()=>detail([r.title,section.querySelector('.campaign-count').textContent,...r.stages.map(p=>p.id+' stage: '+p.state),r.blocked||'No blocked quests observed'],'Campaign details'));
     }
     $('#camps-all').textContent=allCamps?'Show recent campaigns':'View all campaigns';
   }
@@ -390,7 +409,8 @@
         ' used tokens; simulated capacity 100,000 tokens per wallet per replay epoch, not a real quota'+
         (notes.length?'; '+notes.join('; '):'');
       box.setAttribute('role','img');box.setAttribute('aria-label',label);
-      paint(box.querySelector('.percentage'),numericImage(n+'%'),label);box.querySelector('b').style.width=n+'%';
+      const provider=({claude:'Claude',codex:'Codex',agy:'Gemini'})[wallet]||wallet;
+      box.querySelector('.percentage').textContent=provider+' simulated mana: '+n+'%';box.querySelector('b').style.width=n+'%';
     }
   }
   function staleLines() {
@@ -402,6 +422,7 @@
     const was=connectionState;
     connectionState=state;connectionText=text;staleInfo=state==='stale'?(extra||{updated:null,reason:'update failed'}):null;mode(sourceMode);
     control('#connection',({online:'connected',file:'snapshot',stale:'offline'})[state]||state,text,state==='offline'||state==='stale'?'alert':'normal');
+    $('#connection .control-name').textContent=({loading:'Loading',online:'Connected',file:'Data source',snapshot:'Live paused',offline:'Offline',stale:'Live paused'})[state]||'Connection details';
     $('#connection').title=text;
     $('#connection').onclick=()=>detail([sourceMode+' data source',connectionText,...staleLines(),
       'Playback and live-follow are separate from connection status.','Live updates poll about every 10 seconds while this browser page is visible.'],'Connection details');
@@ -413,7 +434,7 @@
     if(say&&state==='stale'&&was!=='stale')say.textContent='Live paused. Not updating. '+(staleInfo.updated?'Last update '+staleInfo.updated+'. ':'')+'Reason: '+staleInfo.reason+'.';
     else if(say&&was==='stale'&&(state==='online'||state==='snapshot'))say.textContent='Live updates resumed.'; // only a real successful poll; never on another failure
     else if(say&&state!=='stale')say.textContent='';
-    if(was==='stale'||state==='stale')bounds();
+    bounds();
     if(overviewData)overview(overviewData);
     else if(state==='offline'||state==='snapshot'||state==='stale'){
       $('#issues').hidden=false;$('#issues').textContent=text;
@@ -421,8 +442,9 @@
     }
   }
   function legend() {
-    const labels={'play':'Play','pause':'Pause','live-follow':'Follow live','speed':'Speed 30 / 120 / 600','clock':'Replay time','scrub-start':'History start','scrub-end':'Latest','world':'Map','calm':'Reduce motion and flashes','quests':'Quests','log':'Log','close':'Close','info':'Help','demo':'Simulated data','connected':'Connected','offline':'Disconnected','snapshot':'History snapshot','loading':'Loading','mana-claude':'Claude resources','mana-codex':'Codex resources','mana-gemini':'Gemini resources','heart':'Hero HP unavailable','mana':'Simulated mana, not a real quota','level':'Effect level from effort, not EXP','coin':'Completed quests','plan':'Plan','build':'Build','test':'Test','review':'Review','deploy':'Deploy','verify':'Verify results','chain':'Blocked or waiting for a dependency','sleep':'Rest','sword':'Attack from work activity','crit':'Critical attack effect','read':'Read','search':'Search','vision':'View image','write':'Write','memory':'Memory','message':'Message','delegate':'Delegate','commit':'Commit work','push':'Push work','merge':'Merge work','compress':'Compress context'};
-    detail([], 'Icon help');const content=$('#quest .detail-content');
+    const labels={'play':'Play — Resume replay','pause':'Pause — Pause replay','live-follow':'Follow live — Follow the newest live update','speed':'Replay speed: 30× / 120× / 600× — Playback speed relative to real time','clock':'Replay time — Current time in the selected replay','scrub-start':'Oldest saved event — Start of retained history','scrub-end':'Latest saved event — End of retained history; not necessarily live','world':'World locations — Select a location to focus the camera','calm':'Reduce effects — Reduce motion and flashes','quests':'Campaigns — Open grouped quests','log':'Activity log — Open recent retained events','close':'Close — Close the current panel or dialog','info':'Help — Open this icon guide','demo':'Sample data — Fictional example data','connected':'Connected — Live data source is reachable','offline':'Offline — Live source is not reachable','snapshot':'Saved history — Saved replay data; not live','loading':'Loading — Waiting for data','mana-claude':'Claude simulated mana — Game-only meter; not a Claude quota','mana-codex':'Codex simulated mana — Game-only meter; not a Codex quota','mana-gemini':'Gemini simulated mana — Game-only meter; not a Gemini quota','heart':'Hero health: not available — Heroes do not have a health meter','mana':'Simulated mana — not a real quota','level':'Effect level from effort, not XP — Glow reflects reasoning effort','coin':'Completed quests — Coin animation marks observed quest completion','plan':'Plan stage — Quest planning stage','build':'Build stage — Quest implementation stage','test':'Test stage — Quest testing stage','review':'Review stage — Quest review stage','deploy':'Deploy stage — Quest release/deployment stage','verify':'Verify stage — Quest verification stage','chain':'Waiting on a dependency — Another required Quest must finish first','sleep':'Resting — Idle animation; no work progress is implied','sword':'Attack from observed work — Combat represents observed activity; not a separate action','crit':'Critical attack effect — Visual only; does not change actual Quest state','read':'Read — Reading activity','search':'Search — Search activity','vision':'View image — Image inspection activity','write':'Write — Writing activity','memory':'Memory — Memory activity','message':'Message — Details may be privacy-filtered','delegate':'Delegate — Work handed to another agent','commit':'Commit work — Save a change in version control','push':'Push work — Send a change to a remote repository','merge':'Merge work — Combine a change into another branch','compress':'Compress context — Context compression activity'};
+    detail([], 'Help');const content=$('#quest .detail-content');
+    line(content,'Heroes are workers. Quests are tasks. Select either for details. Saved history is not live. Quest titles may be hidden by privacy settings. Villagers are decorative scenery, not workers or quests.');
     for(const id of I.ids){const row=document.createElement('div');row.className='legend-row';content.append(row);
       const im=iconImage(id),c=document.createElement('canvas');c.width=im.width;c.height=im.height;c.setAttribute('aria-hidden','true');c.getContext('2d').drawImage(im,0,0);row.append(c);
       line(row,labels[id]||id);}
@@ -432,10 +454,13 @@
   }
   function init() {
     if(!T||!I)throw Error('Pixel UI dependencies unavailable');
-    control('#world','world','Map');control('#calm','calm','Reduce effects');control('#quests','quests','Quests');control('#log','log','Log');
+    control('#world','world','World locations');control('#calm','calm','Reduce effects');control('#quests','quests','Campaigns');control('#log','log','Activity log');
     control('#help','info','Help');control('#live','live-follow','Follow live');
-    for(const id of ['camp','chron']){const b=$('#'+id+'-close');paint(b,iconImage('close'),'Close');b.onclick=()=>{$('#'+id).hidden=true;bounds();};}
+    for(const id of ['camp','chron']){const b=$('#'+id+'-close');b.textContent='Close';b.classList.add('text-button');b.onclick=()=>{$('#'+id).hidden=true;$('#'+(id==='camp'?'quests':'log')).focus();bounds();};}
     $('#help').onclick=legend;$('#world-help').onclick=legend;
+    $('#quick-help').onclick=$('#hint-help').onclick=legend;
+    try {$('#first-run').hidden=root.localStorage.getItem('quest-hint-v1')==='dismissed';} catch (_) {$('#first-run').hidden=false;}
+    $('#hint-dismiss').onclick=()=>{$('#first-run').hidden=true;try {root.localStorage.setItem('quest-hint-v1','dismissed');} catch (_) {} $('#quick-help').focus();bounds();};
     $('#menu-toggle').onclick=()=>menu($('#menu').hidden,!$('#menu').hidden);
     $('#hide-panels').onclick=()=>menu(false,true);
     // The desktop bootstrap audit refuses a literal <select> in index.html, so build the same control at runtime.

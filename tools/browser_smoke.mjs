@@ -242,9 +242,9 @@ async function runLiveMenu(browser,base) {
     check(JSON.stringify(Object.keys(saved).sort())===JSON.stringify(['groups','menu'])&&Object.values(saved.groups).every(v=>typeof v==='boolean'),'Non-UI data in preference');
     // Explicit failure states use the real delta/error path, not a painted status stub.
     state='legacy-fallback';await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});
-    check((await page.locator('#mode').textContent()).includes('Snapshot'),'Snapshot falsely connected');
+    check((await page.locator('#connection .control-name').textContent()).includes('Live paused'),'Saved snapshot falsely connected');
     state='offline';await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});
-    check((await page.locator('#mode').textContent()).includes('Offline'),'Offline falsely connected');
+    check((await page.locator('#connection .control-name').textContent()).includes('Offline'),'Offline falsely connected');
     await page.click('#menu-toggle');check(await page.locator('#issues').isVisible(),'Offline/blocked hidden in focus mode');
     await page.screenshot({path:path.join(outDir,browserName+'-synthetic-live-focus.png')});
     check(errors.length===0,errors.join('; '));
@@ -261,7 +261,7 @@ async function runLiveStale(browser,base) {
   const reasonFor=failure=>failure===401?'sign-in needed':typeof failure==='number'&&failure<500?'server rejected':failure==='network'?'offline':'server error';
   const checkStale=(v,failure,message)=>{
     const reason=reasonFor(failure),hint=failure===503?' · '+configHint:'';
-    check(v.stale&&/ · Paused$/.test(v.mode||'')&&new RegExp('^Last update \\d\\d:\\d\\d · '+reason+'$').test(v.note||'')&&
+    check(v.stale&&/ · Live paused$/.test(v.mode||'')&&new RegExp('^Last update \\d\\d:\\d\\d · '+reason+'$').test(v.note||'')&&
       v.issues==='Live paused · not updating · '+v.note.replace(/^Last update/,'last update')+hint,message+': '+JSON.stringify(v));
   };
   for(const [width,height] of [[1280,800],[375,667],[320,568]]){
@@ -279,7 +279,7 @@ async function runLiveStale(browser,base) {
       await page.waitForFunction(()=>typeof loop.last==='number'&&cursor!=='');
       const poll=async next=>{mode=next;await page.evaluate(async()=>{clearTimeout(pollTimer);await pollEvents();});};
       const view=()=>page.evaluate(()=>{const h=s=>{const e=document.querySelector(s);return e&&!e.hidden?e.textContent:null;},r=document.querySelector('#focus-bar').getBoundingClientRect();
-        return {mode:h('#mode'),issues:h('#issues'),note:h('#live-note'),announce:document.querySelector('#live-announce').textContent,
+        return {mode:h('#mode')+' · '+h('#connection .control-name'),issues:h('#issues'),note:h('#live-note'),announce:document.querySelector('#live-announce').textContent,
           stale:pollStale,failures:pollFailures,boundary:cursor,
           live:document.querySelector('#live-announce').getAttribute('aria-live'),role:document.querySelector('#live-announce').getAttribute('role'),
           menuClosed:document.querySelector('#menu').hidden,fits:r.left>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,
@@ -858,6 +858,9 @@ const server = await serve();
 const base = `http://127.0.0.1:${server.address().port}`;
 console.log(`serving ${root} at ${base} (${browserName})`);
 const browser = createRequire(import.meta.url)('./parity/browser_loader.cjs').enable(await playwright[browserName].launch());
+// This suite exercises the post-onboarding world; first-run visibility/dismissal has its own clarity regression.
+const createContext=browser.newContext.bind(browser);
+browser.newContext=async options=>{const ctx=await createContext(options);await ctx.addInitScript(()=>{try{localStorage.setItem('quest-hint-v1','dismissed');}catch{}});return ctx;};
 console.log(`${browserName} ${browser.version()}`);
 let failed = 0;
 for (const vp of args.includes('--inspect-only')||args.includes('--regressions-only')?[]:VIEWPORTS) {
