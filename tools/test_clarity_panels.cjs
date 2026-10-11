@@ -76,6 +76,48 @@ async function capture(page,frame,tag,action){
           assert.equal(await frame.evaluate(()=>localStorage.getItem('quest-hint-v1')),'dismissed');
         }else {await frame.locator('#hint-dismiss').click();assert(await frame.locator('#first-run').isHidden());}
       }
+      if(!before){
+        // Actual inspection + persistent selected identity, including the data: SDK guest.
+        const inspectHero=()=>frame.evaluate(()=>{const g=window.__questTest;g.showInspection(Object.keys(g.S.heroes)[0]);g.draw();});
+        const visibleAtCenter=selector=>frame.locator(selector).evaluate(el=>{
+          const r=el.getBoundingClientRect(),top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+          return !!top&&(top===el||el.contains(top));
+        });
+        await inspectHero();assert(await frame.locator('#scene-selected').isVisible());
+        const identity=await frame.locator('#scene-selected').getAttribute('aria-label');
+        const unchanged=()=>frame.evaluate(()=>{const g=window.__questTest;return JSON.stringify([g.S.t,g.S.speed,g.S.play,g.S.heroes,g.S.tasks]);});
+        const state=await unchanged();
+        for(let repeat=0;repeat<2;repeat++){
+          await frame.locator('#menu-toggle').click();
+          // Check synchronously, without relying on the next animation clearing inspection.
+          assert(await frame.locator('#scene-selected').isHidden(),'Menu owns selected-banner space');
+          assert(await frame.locator('#character-card').isHidden(),'Menu owns inspection space');
+          await frame.locator('#group-playback summary').evaluate(el=>{el.parentElement.open=true;});
+          for(const selector of ['#group-playback summary','#playback-summary','#play','#speeds','#scrub']){
+            assert(await visibleAtCenter(selector),'unobscured '+selector);
+          }
+          await capture(page,frame,tag,'selected-menu-'+repeat);
+          await frame.evaluate(()=>window.__questTest.draw());
+          await frame.locator('#menu-toggle').click();await frame.evaluate(()=>window.__questTest.draw());
+          assert.equal(await frame.locator('#scene-selected').getAttribute('aria-label'),identity);
+          assert(await frame.locator('#scene-selected').isVisible());
+          await inspectHero();assert(await frame.locator('#character-card').isVisible());
+          assert.equal(await frame.evaluate(()=>window.__questTest.inspect.follow),true);
+        }
+        await frame.locator('#quick-help').click();
+        assert(await frame.locator('#scene-selected').isHidden(),'Help owns selected-banner space');
+        assert(await frame.locator('#character-card').isHidden());
+        assert(await visibleAtCenter('#dialog-heading'),'Help heading unobscured');
+        await capture(page,frame,tag,'selected-help');
+        await frame.evaluate(()=>window.__questTest.draw());await frame.locator('#quest .close').click();
+        await frame.evaluate(()=>{const g=window.__questTest;g.clearInspection();document.querySelector('#first-run').hidden=false;g.draw();});
+        assert(await frame.locator('#first-run').isVisible());
+        assert(await frame.locator('#scene-selected').isHidden(),'Welcome hint owns selected-banner space');
+        assert(await visibleAtCenter('#first-run p:first-child'));await capture(page,frame,tag,'selected-hint');
+        await frame.locator('#hint-dismiss').click();await frame.evaluate(()=>window.__questTest.draw());
+        assert(await frame.locator('#scene-selected').isVisible());
+        assert.equal(await unchanged(),state,'overlay transitions preserve replay and simulation');
+      }
       for(const [label,heading] of [['Working quest','Quest details'],['Hero','Hero details'],['Quest','Quest details'],['Region','Location details'],['World','World locations'],['Activity details','Activity details'],['Campaign details','Campaign details'],['Connection details','Connection details'],['Character chooser','Character chooser']]){
         await frame.evaluate(label=>UIPanels.detail(['Quest title hidden to protect privacy','Unsupported glyph: Ж','<img src=x onerror=window.CLARITY_XSS=1>'],label),label);
         const v=await capture(page,frame,tag,heading.replaceAll(' ','-'));

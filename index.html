@@ -28,6 +28,10 @@ button{color:var(--ink);font:inherit}
 .campaign-count{font:16px/1.5 system-ui,sans-serif;overflow-wrap:anywhere}
 #first-run{position:fixed;z-index:5;left:8px;top:60px;width:min(340px,calc(100vw - 16px));max-height:30dvh;overflow:auto;padding:8px}
 body:has(#menu:not([hidden])) #first-run,body:has(#quest:not([hidden])) #first-run,body:has(#character-card:not([hidden])) #first-run{display:none}
+/* Menu/dialogs own their space immediately, even before the next scene draw. */
+body:has(#menu:not([hidden])) :is(#scene-selected,#character-card),body:has(#quest:not([hidden])) :is(#scene-selected,#character-card){display:none!important}
+/* Match the welcome hint's existing inspection suppression; keep its text clear. */
+body:has(#first-run:not([hidden])):not(:has(#character-card:not([hidden]))) #scene-selected{display:none!important}
 #first-run p{margin:0 0 8px}
 #first-run .menu-controls{padding:0}
 #quick-help{background:var(--navy)}
