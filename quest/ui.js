@@ -274,7 +274,17 @@ function renderInspection() {
     ctx.cam.zi=Math.min(inspect.zoom,(innerWidth-20)/width,(innerHeight-20)/height);
     inspect.fittedZoom=ctx.cam.zi;inspect.fit=ctx.cam.zi<inspect.zoom;
   }
-  layoutInspection(width*ctx.cam.zi,height*ctx.cam.zi);
+  const frame=layoutInspection(width*ctx.cam.zi,height*ctx.cam.zi);
+  if(inspect.follow){
+    // Wrapped stale guidance can leave less room than the bare viewport.
+    // Fit the camera to the measured card/status gap, never move or scale the actor.
+    const fitted=Math.min(ctx.cam.zi,Math.max(1,frame.right-frame.left)/width,
+      Math.max(1,frame.bottom-frame.top)/height);
+    if(fitted<ctx.cam.zi){
+      ctx.cam.zi=fitted;inspect.fittedZoom=fitted;inspect.fit=fitted<inspect.zoom;
+      layoutInspection(width*fitted,height*fitted);
+    }
+  }
   const h = ctx.S.heroes[inspect.bot], s = selectedSession(), rows = characterSessions(inspect.bot), b = ctx.D.bots.find(b => b.id === inspect.bot);
   if (inspect.bot && !h) stopInspectionFollow();
   const lines = inspect.choices ? [] : !h ? ['Character unavailable','Follow off'] : [

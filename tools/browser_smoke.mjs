@@ -816,7 +816,7 @@ async function runInspectionRegressions(browser,base,vp) {
     results.framing=await page.evaluate(()=>{
       const clear=(a,b)=>Math.max(b.left-a.right,a.left-b.right,b.top-a.bottom,a.top-b.bottom)>=8;
       const rows=[];
-      for(const stale of [false,true])for(const zoom of [1,3,4])for(const pose of ['standing','attack','rest']){
+      const capture=(stale,zoom,pose)=>{
         if(stale)pollFailed({status:422});else UI.status('Replay file','file');
         cam.zi=zoom;Object.assign(S.heroes.child,{atk:pose==='attack'?.2:-1,sleep:pose==='rest',down:0});
         for(let i=0;i<8;i++){draw();renderInspection();followCharacter(1);}
@@ -825,10 +825,17 @@ async function runInspectionRegressions(browser,base,vp) {
           clear:!!p&&clear(p.body,c)&&clear(p.body,bar)&&p.body.left>=8&&p.body.top>=8&&p.body.right<=innerWidth-8&&p.body.bottom<=innerHeight-8,
           warning:!stale||(!$('#issues').hidden&&!$('#live-note').hidden&&$('#issues').textContent.includes('Stale data')),
           zoomDisclosed:cam.zi===zoom||$('#character-content').textContent.includes('Zoom adjusted to fit this screen.')});
+      };
+      for(const stale of [false,true])for(const zoom of [1,3,4])for(const pose of ['standing','attack','rest'])capture(stale,zoom,pose);
+      if(innerWidth===320){
+        // System-font metrics vary across hosts. A wrapped warning must still fit.
+        const style=document.createElement('style');style.textContent='#focus-bar,#focus-bar *{font-size:15px!important}';document.head.append(style);
+        capture(true,4,'rest');rows[rows.length-1].wrappedWarning=true;style.remove();
       }
       return rows;
     });
-    for(const r of results.framing)check(r.clear&&r.warning&&r.zoomDisclosed,`F3: ${r.pose} zoom ${r.zoom} stale ${r.stale} clears card/warning/viewport by 8 px`);
+    fs.writeFileSync(path.join(outDir,`${browserName}-${vp.name}-framing.json`),JSON.stringify(results.framing,null,2));
+    for(const r of results.framing)check(r.clear&&r.warning&&r.zoomDisclosed,`F3: ${r.pose} zoom ${r.zoom} stale ${r.stale} clears card/warning/viewport by 8 px: ${JSON.stringify(r)}`);
     await page.screenshot({path:path.join(outDir,`${browserName}-${vp.name}-regression-follow.png`)});
     // Captain contract: fit is temporary camera state, never replay state.
     await page.setViewportSize({width:375,height:667});
