@@ -16,6 +16,9 @@ function createClient({root = path.resolve(__dirname, '../..'), sandbox = {}, le
     vm.runInContext(fs.readFileSync(path.join(root, rel), 'utf8'), box, {filename: rel});
   }
   sandbox.NPCS = sandbox.window.NPCS;
+  // Browser globals share window; vm clients may supply a separate window stub.
+  for (const name of ['QuestIdleProgression', 'QuestIdleCollection', 'QuestIdleCity'])
+    sandbox[name] = sandbox.window[name];
   let source = fs.readFileSync(path.join(root, 'game.js'), 'utf8');
   if (legacy) source = source.replace(/\nboot\(\);\s*$/, '\n') +
     '\n;globalThis.__legacyGame={S,update,reset,ACTIONS,STRIDE,WALK_V,get D(){return D},set D(v){D=v},get W(){return W},set W(v){W=v}};';
