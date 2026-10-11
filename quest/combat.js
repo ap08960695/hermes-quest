@@ -6,22 +6,33 @@
 // One game damage point = one real tool call or assistant message (never tokens/rewards).
 // The task/run binding prevents a shared bot's other quest from borrowing its hits.
 const workCombat = new Map();
-let workEvents=[];
-function clearWorkCombat(){workCombat.clear();workEvents=[];}
+let workEvents=[],sparTime=0;
+const reducedMotion=typeof matchMedia==='function'?matchMedia('(prefers-reduced-motion: reduce)'):null;
+let motionReduced=reducedMotion?.matches||false;
+reducedMotion?.addEventListener('change',e=>{motionReduced=e.matches;});
+function clearWorkCombat(){workCombat.clear();workEvents=[];sparTime=0;}
+function workSparring(index=0) {
+  if(ctx.calm||motionReduced)return 0;
+  const phase=(sparTime+index*.7)%3;
+  return phase<.9?Math.sin(phase/.9*Math.PI):0;
+}
 function observeWork(e, animate) {
-  if (!animate || !ctx.S.work?.has || !['tool','activity'].includes(e.kind)) return;
+  if (!animate || !ctx.S.work?.has || !['tool','activity'].includes(e.kind) || document.hidden) return;
   // Bind on the next frame, after mergeDelta commits its authoritative work snapshot.
   workEvents.push(e);
 }
 function stepWorkCombat(dt) {
+  if(ctx.S.play)sparTime+=dt;
   for(const e of workEvents){
     const item=ctx.S.work.active().find(i=>i.worker_observed&&i.task_ref===e.task&&i.bot_ref===e.bot);
     if(!item||(item.started_at!=null&&e.t<item.started_at))continue;
     let a=workCombat.get(item.ref);
-    if(!a||a.run!==item.run_ref){a={run:item.run_ref,pending:[],atk:-1,flash:0,hit:0,combo:0,last:-Infinity,total:0};workCombat.set(item.ref,a);}
+    if(!a||a.run!==item.run_ref){a={run:item.run_ref,pending:[],seen:new Set(),atk:-1,flash:0,hit:0,combo:0,last:-Infinity,total:0,cooldown:0};workCombat.set(item.ref,a);}
+    const key=ctx.eventKey(e);if(a.seen.has(key))continue;a.seen.add(key);
+    if(a.seen.size>4000)a.seen.delete(a.seen.values().next().value);
     a.combo=e.t-a.last<=5&&e.t>=a.last?a.combo+1:1;a.last=e.t;
     // Bound burst storage without discarding observed calls or inventing damage.
-    if(a.pending.length<32)a.pending.push({combo:a.combo,damage:1});
+    if(a.pending.length<32)a.pending.push({combo:a.combo,damage:1,at:e.t});
     else {const tail=a.pending[a.pending.length-1];tail.combo=a.combo;tail.damage++;}
   }
   workEvents=[];
@@ -30,7 +41,8 @@ function stepWorkCombat(dt) {
     if(!item||item.status!=='running'||item.run_ref!==a.run){workCombat.delete(ref);continue;}
     if(!ctx.S.play)continue;
     a.flash=Math.max(0,a.flash-dt);a.hit=Math.max(0,a.hit-dt);
-    if(a.atk<0){if(a.pending.length){a.current=a.pending.shift();a.atk=0;}}
+    a.cooldown=Math.max(0,a.cooldown-dt);
+    if(a.atk<0){if(a.pending.length&&!a.cooldown){a.current=a.pending.shift();a.atk=0;a.cooldown=.9;}}
     else {const before=a.atk;a.atk+=dt;
       if(before<.22&&a.atk>=.22){a.flash=.18;a.hit=1.1;a.damage=a.current.damage;a.total+=a.damage;a.hitCombo=a.current.combo;}
       if(a.atk>=.65)a.atk=-1;
@@ -132,6 +144,7 @@ function monsterHit(t, h) {
 }
 return {
   get workCombat(){return workCombat},
+  get workSparring(){return workSparring},
   get clearWorkCombat(){return clearWorkCombat},
   get observeWork(){return observeWork},
   get stepWorkCombat(){return stepWorkCombat},

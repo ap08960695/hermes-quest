@@ -139,7 +139,14 @@ function drawWorking() {
     const sceneLabel=number&&UIText.measure(compactLabel,2)>labelWidth?number:compactLabel;
     ctx.UI?.screenLabel(sceneLabel,(v.ox+pair.monster.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
     const a=pair.monster.activity;
+    if(pair.hero?.spar>0) {
+      // Muted block cue: no impact flash, damage or reward.
+      const [sx,sy]=P(v,pair.x,pair.y-30);ctx.cx.strokeStyle='#7fc8b8';ctx.cx.lineWidth=2*v.Z;
+      ctx.cx.beginPath();ctx.cx.arc(sx,sy,10*v.Z,-1.2,1.2);ctx.cx.stroke();
+    }
     if(a?.hit>0){
+      ctx.UI?.screenLabel('Observed action · '+Math.floor(Math.max(0,ctx.S.t-a.current.at))+'s ago',
+        (v.ox+pair.x*v.Z)/ctx.DPR,(v.oy+(pair.y+20)*v.Z)/ctx.DPR,false,240);
       const x=v.ox+pair.monster.x*v.Z,y=v.oy+(pair.y-50-(1.1-a.hit)*22)*v.Z;
       ctx.UI?.screenLabel(a.damage+' DMG',x/ctx.DPR,y/ctx.DPR);
       if(a.hitCombo>1)ctx.UI?.screenLabel('COMBO X'+a.hitCombo,x/ctx.DPR,y/ctx.DPR-22);
@@ -213,8 +220,9 @@ function heroDraw(v, h) {
   else if (ctx.HMETA.idle.length && h.atk < 0 && !h.sleep) fr = ctx.HMETA.idle[Math.floor(now * 5 + h.homeK) % ctx.HMETA.idle.length];   // breathing loop
   else if (h.atk < 0 && !h.sleep) bob = Math.floor((now + h.homeK * .37) % 1.6 / .8);                                    // 1px idle bob
   if (h.atk >= 0) fr = ctx.atkFrame(h.atk);
+  if(h.spar>0){fr=ctx.atkFrame(.12);bob=-Math.round(h.spar*4);}
   if(h.preparing&&ctx.S.play&&!ctx.calm){fr=ctx.atkFrame(.19*(.5+.5*Math.sin(ctx.S.rt*2.5+h.homeK)));bob=-Math.round(Math.sin(ctx.S.rt*2.5+h.homeK)*2);}
-  const knockX = -Math.round(ctx.ease(h.knock || 0) * 10) * (h.face || 1);
+  const knockX = -Math.round(ctx.ease(h.knock || 0) * 10) * (h.face || 1)-Math.round((h.spar||0)*10);
   const jump = h.cheer > 0 ? -Math.round(Math.sin((1 - h.cheer / .9) * Math.PI * 2) ** 2 * 8) : 0;
   const sink = h.meditate > 0 ? 3 : 0;
   const bx = N(h.x) + knockX + (h.atk >= 0 && h.cls !== 'commander' ? Math.round(ctx.lunge(h.atk)) * h.face : 0), by = N(h.y) + bob + jump + sink;
@@ -354,7 +362,7 @@ function monster(v, t) {
   if (t.region === 'camp' && t.slot >= 18) return;                          // camp yard shows the first 18 only
   const kind = ctx.mtype(t), key = `${kind}-${ctx.mtier(t)}`, im2 = ctx.MON2[key], M = ctx.MMETA2[key];
   const walking = !!(t.mpath && t.emerge <= 0);
-  const bx = N(t.mx !== undefined ? t.mx : t.x), by = N(t.mx !== undefined ? t.my : t.y);
+  const bx = N(t.mx !== undefined ? t.mx : t.x)-Math.round((t.spar||0)*12), by = N(t.mx !== undefined ? t.my : t.y);
   const alpha = t.alpha * (t.emerge > 0 ? 1 - t.emerge / .9 : 1);
   if (ctx.mtier(t) === 'l' && !t.dying) {                                       // elite: smouldering red ground ring
     ctx.cx.fillStyle = `rgba(220,40,30,${.18 + (ctx.calm?0:Math.sin(performance.now() / 300) * .06)})`;

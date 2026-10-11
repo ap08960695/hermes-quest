@@ -715,7 +715,19 @@ def _empty_working(as_of):
                 progress=dict(wins_today=0, xp=0, gold=0, level=1, level_progress=0))
 
 
-def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, captain_events, key):
+def _run_actions(db, sid, start, end, json1=True):
+    # Numeric-only, full-run projection, independent of replay window/cursor.
+    if not json1:
+        return None, None  # never fetch private call arguments to count actions
+    calls = "CASE WHEN json_valid(tool_calls) THEN CASE WHEN json_type(tool_calls)='array' THEN json_array_length(tool_calls) ELSE 0 END ELSE 0 END"
+    n = f"({calls}) + CASE WHEN role='assistant' AND ({calls})=0 AND coalesce(length(content),0)>0 THEN 1 ELSE 0 END"
+    row = db.execute(f'SELECT coalesce(sum(n),0),max(CASE WHEN n>0 THEN timestamp END) '
+                     f'FROM (SELECT timestamp,{n} AS n FROM messages '
+                     'WHERE session_id=? AND timestamp>=? AND timestamp<=?)', (sid, start, end)).fetchone()
+    return row[0], row[1]
+
+
+def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, captain_events, key, actions=None):
     """Read-only projection of CURRENT Kanban state (same snapshot as meta.as_of).
 
     One row per current card, including cards with multiple open runs. The newest
@@ -787,7 +799,9 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
                 status=status, started_at=_iso((run or {}).get('started_at') or t['started_at']),
                 display_name=name, class_label=class_label, quest_label=quest_label(t),
                 quest_kind=t['kind'], group_label=GROUP_LABEL, parent_ref=None,
-                worker_observed=observed))
+                worker_observed=observed,
+                action_count=(actions or {}).get((t['id'], (run or {}).get('id')), (None, None))[0],
+                last_action_at=_iso((actions or {}).get((t['id'], (run or {}).get('id')), (None, None))[1])))
     rows.sort(key=lambda r: r['_order'])
     items = []
     for index, row in enumerate(rows, 1):
@@ -801,20 +815,20 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
     candidates = []
     if captain:
         candidates += [(t['created_at'], 'create', t['id'], t['assignee'],
-                        _order_ref(key, ['create', t['id']]), (-1, -1)) for t in ordered
+                        _order_ref(key, ['create', t['id']]), ('', '', -1, -1)) for t in ordered
                        if t['created_by'] == captain and t['created_at']]
     def action_ref(e):
         if e['act'] == 'create':
             return _order_ref(key, ['create', e['task']])
         return e.get('source_action_ref') or (_order_ref(key, ['event', e['id']]) if e.get('id') else None)
 
-    candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'], action_ref(e), e.get('_source_order', (-1, -1)))
+    candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'], action_ref(e), e.get('_source_order', ('', '', -1, -1)))
                    for e in captain_events if e.get('act') in ORDER_LABEL
                    and e['task'] in tasks]
     candidates = [c for c in candidates if cutoff <= c[0] <= as_of]
     latest_order = None
     if candidates:
-        # Calls are projected in row/call order; the last source action wins ties.
+        # A stable source discriminator precedes DB-local row/call order on ties.
         _, (at, act, tid, recipient, source_ref, _) = max(enumerate(candidates), key=lambda c: (c[1][0], c[1][5], c[0]))
         latest_order = dict(
             source_action_ref=source_ref,
@@ -935,6 +949,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
     commenters = set()
     raw_tasks, raw_runs = {}, {}   # unsanitized current rows, consumed only by _build_working
     working_captain_events = []   # retained observations, independent of delta delivery
+    working_actions = {}
     try:
         commenters = {r[0] for r in k.execute('SELECT DISTINCT author FROM task_comments') if r[0]}
         captain = cfg['captain']
@@ -1096,6 +1111,18 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 sid_map[(prof, sid)] = tid
                 r = sessions[sid]
                 source = 'session-' + digest(sid)[:20]
+                runs_for_task = sorted(raw_runs.get(tid, []), key=lambda run: (run['started_at'] or 0, run['id']))
+                if raw_tasks[tid]['status'] == 'running':
+                    runs_for_task = [run for run in runs_for_task if run['ended_at'] is None]
+                for run in runs_for_task[-1:]:
+                    if run['profile'] != prof or not run['started_at']:
+                        continue
+                    count, last = _run_actions(s, sid, run['started_at'], run['ended_at'] or as_of, json1)
+                    if count is None:
+                        continue
+                    rk = (tid, run['id'])
+                    old_count, old_last = working_actions.get(rk, (0, None))
+                    working_actions[rk] = (old_count + count, max(old_last or 0, last or 0) or None)
                 last_stamp = message_activity.get(sid) or r['started_at']
                 activity = max(r['started_at'] or 0, r.get('ended_at') or 0,
                                r.get('last_activity_at') or 0, last_stamp or 0)
@@ -1203,7 +1230,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     act = CAP_ACT.get(m['name'])
                     tid = m['task_id'] or m['child_id']
                     if act and tid in tasks:
-                        working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act, _source_order=(m['seq'], m['call_index']),
+                        working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act, _source_order=(prof, m['session_id'], m['seq'], m['call_index']),
                                                            bot=m['assignee'], source_action_ref=_order_ref(
                                                                session_key, ['call', prof, m['session_id'], m['seq'], m['call_index']])))
                 deferred = previous.get('captain_pending', {})
@@ -1356,7 +1383,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
         if p not in raw_bots and re.fullmatch(r'[\w-]+', p):
             raw_bots[p] = _bot(p, cfg, captain, 'profile' if p in profiles else 'actor')
     working = _build_working(cfg, as_of, hours, captain, raw_tasks, raw_runs, raw_bots,
-                             profiles, working_captain_events + events, session_key)
+                             profiles, working_captain_events + events, session_key, working_actions)
     # Generated fallback names must survive names-off sanitization, and duplicate
     # alias disambiguation must agree between bot surfaces and working rows.
     display_labels = _display_labels(raw_bots, set(profiles), captain)

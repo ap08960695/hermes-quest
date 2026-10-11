@@ -53,7 +53,8 @@ function parseWorkItem(raw) {
     // Internal render bindings only; never copied to DOM/labels.
     bot_ref: typeof raw.bot_ref === 'string' ? raw.bot_ref : null,
     task_ref: typeof raw.task_ref === 'string' ? raw.task_ref : null,
-    run_ref: typeof raw.run_ref === 'string' ? raw.run_ref : null};
+    run_ref: typeof raw.run_ref === 'string' ? raw.run_ref : null,
+    action_count: nonNegInt(raw.action_count),last_action_at: toSeconds(raw.last_action_at)};
 }
 function parseWorkingBlock(block) {
   if (block === undefined || block === null) return null;   // old backend: no Working view data

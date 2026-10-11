@@ -124,10 +124,47 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  apply(e,true);apply({...e,kind:'activity'},true);
  update(.01);const windup=state();update(.23);const contact=state();
  S.play=false;update(.2);const paused=state();S.play=true;
- update(.5);update(.01);update(.23);const second=state();
+ update(.5);update(.2);update(.23);const second=state();
  const hp=pair().monster.hp;reset(S.t);return {foreign,silent,windup,contact,paused,second,hp,seek:state()};
  });
  assert.equal(r.foreign,null);assert.equal(r.silent,null);assert.equal(r.windup.total,0);assert.equal(r.contact.total,1);assert(r.contact.flash>0);assert.equal(r.contact.hitCombo,1);assert.deepEqual(r.paused,r.contact);assert.equal(r.second.total,2);assert.equal(r.second.hitCombo,2);assert.equal(r.hp,null);assert.equal(r.seek,null);
+ });
+ await check('R2 pre-start and wrong worker cannot borrow current-run hits',async()=>{
+ const r=await page.evaluate(()=>{const row=S.work.active()[0];S.play=true;D.meta.to=S.t+3600;
+ const e={t:row.started_at-1,kind:'tool',bot:row.bot_ref,task:row.task_ref,id:'old-run'};
+ apply(e,true);apply({...e,t:S.t,bot:'other-worker',id:'wrong-worker'},true);update(.01);
+ return workingPairs().find(p=>p.item.ref===row.ref).monster.activity||null;});assert.equal(r,null);
+ });
+ await check('R2 hidden observations are dropped and hit-stop drains into bounded pending storage',async()=>{
+ const r=await page.evaluate(()=>{const row=S.work.active()[0],e={t:S.t,kind:'tool',bot:row.bot_ref,task:row.task_ref};
+ Object.defineProperty(document,'hidden',{configurable:true,value:true});for(let i=0;i<1000;i++)apply({...e,id:'hidden-'+i},true);
+ delete document.hidden;update(.01);const hidden=workingPairs()[0].monster.activity||null;
+ S.play=true;S.stop=100;for(let i=0;i<1000;i++){apply({...e,id:'hit-stop-'+i},true);update(.01);}
+ const a=workingPairs()[0].monster.activity;return {hidden,total:a.total,pending:a.pending.length,damage:a.pending.reduce((n,p)=>n+p.damage,0)+(a.current?.damage||0)};});
+ assert.equal(r.hidden,null);assert.equal(r.total,0);assert(r.pending<=32);assert.equal(r.damage,1000);
+ });
+ await check('R2 sparring 60 seconds changes no HP, damage, actions, mana or rewards; pause and reduced motion',async()=>{
+ const d=fixture();Object.assign(d.working.items[0],{action_count:12,last_action_at:Date.parse(d.working.as_of)/1000-8});await load(d);
+ const r=await page.evaluate(()=>{S.play=true;S.speed=1;D.meta.to=S.t+3600;
+ const values=()=>JSON.stringify({progress:S.work.progress(),items:S.work.items(),mana:S.mana,vault:S.vault,hp:workingPairs().map(p=>p.monster.hp),damage:workingPairs().map(p=>p.monster.activity?.total||0)});
+ const before=values();let gap=0,maxGap=0,beats=0;for(let i=0;i<600;i++){update(.1);const p=workingPairs()[0];if(p.hero.spar>0){gap=0;beats++;}else{gap+=.1;maxGap=Math.max(maxGap,gap);}}
+ const after=values();S.play=false;const paused=workingPairs()[0].hero.spar;update(10);const freeze=workingPairs()[0].hero.spar;
+ document.querySelector('#calm').click();const calm=workingPairs()[0].hero.spar;document.querySelector('#calm').click();
+ S.t=Date.parse('2026-10-11T03:00:00Z')/1000;hudT=1;hud(0);return {before,after,maxGap,beats,paused,freeze,calm,row:document.querySelector('#working-rows button').textContent};});
+ assert.equal(r.before,r.after);assert(r.maxGap<4);assert(r.beats>0);assert.equal(r.freeze,r.paused);assert.equal(r.calm,0);assert(r.row.includes('12 actions this run · last 8s ago'));
+ await page.evaluate(()=>{S.play=true;update(.3);});await page.emulateMedia({reducedMotion:'reduce'});await page.waitForFunction(()=>matchMedia('(prefers-reduced-motion: reduce)').matches&&workingPairs()[0].hero.spar===0);assert.equal(await page.evaluate(()=>{update(.3);return workingPairs()[0].hero.spar;}),0);await page.emulateMedia({reducedMotion:'no-preference'});await page.waitForFunction(()=>!matchMedia('(prefers-reduced-motion: reduce)').matches&&workingPairs()[0].hero.spar>0);
+ });
+ await check('R2 live poll overlap and late batch retain queue, pace contacts and disclose source age',async()=>{
+ const r=await page.evaluate(()=>{const row=S.work.active()[0];liveFeed=true;following=true;S.play=true;S.speed=1;
+ const t=S.t-10,e={t,kind:'activity',bot:row.bot_ref,task:row.task_ref,id:'action-one'};
+ const delta=events=>({events,bots:[],tasks:[],cursor:null,working:{as_of:S.work.asOf+1,items:S.work.items(),resting_count:0,latest_order:null,progress:S.work.progress()}});
+ mergeDelta(delta([e,{...e,id:'action-two'}]));update(.01);mergeDelta(delta([e,{...e,id:'action-two'}]));
+ mergeDelta(delta([{...e,id:'action-three',t:t-1}]));
+ let last=0,clock=0;const contacts=[];for(let i=0;i<200;i++){update(.02);clock+=.02;const a=workingPairs()[0].monster.activity;if(a.total!==last){contacts.push(clock);last=a.total;}}
+ const labels=[],old=UIPanels.screenLabel;UIPanels.screenLabel=(s,...args)=>{labels.push(s);old(s,...args);};draw();UIPanels.screenLabel=old;
+ // Trigger one source-aged hit for the visible disclosure oracle.
+ apply({...e,id:'action-four'},true);update(.01);update(.3);UIPanels.screenLabel=(s,...args)=>{labels.push(s);old(s,...args);};draw();UIPanels.screenLabel=old;
+ return {total:last,contacts,labels};});assert.equal(r.total,3);assert.equal(r.contacts.length,3);for(let i=1;i<r.contacts.length;i++)assert(r.contacts[i]-r.contacts[i-1]>=.8);assert(r.labels.some(s=>/^Observed action · \d+s ago$/.test(s)));
  });
  await check('Working feel large real-action burst retains damage with bounded animation storage',async()=>{
  const d=fixture();await load(d);const r=await page.evaluate(()=>{

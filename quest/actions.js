@@ -23,7 +23,8 @@ function engage(h, t) {
 }
 
 function reset(t, liveKeys = null) {
-  ctx.clearWorkCombat?.();
+  // Late live batches rebuild event state, not pending cosmetic playback.
+  if(!liveKeys?.size)ctx.clearWorkCombat?.();
   const feed = ctx.S.feed, lastFeed = ctx.S.lastFeed, fx = ctx.S.fx;
   const activeBots = new Set(), activeTasks = new Set();
   ctx.restoreCheckpoint();

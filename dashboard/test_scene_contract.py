@@ -21,7 +21,8 @@ import extract  # noqa: E402
 
 FIXTURE = json.loads((ROOT / 'tools/fixtures/working_snapshot.json').read_text(encoding='utf-8'))
 ITEM_KEYS = {'ref', 'status', 'started_at', 'display_name', 'class_label', 'quest_label',
-             'quest_kind', 'group_label', 'parent_ref', 'worker_observed', 'bot_ref', 'task_ref', 'run_ref'}
+             'quest_kind', 'group_label', 'parent_ref', 'worker_observed', 'bot_ref', 'task_ref', 'run_ref',
+             'action_count', 'last_action_at'}
 WORKING_KEYS = {'as_of', 'items', 'resting_count', 'latest_order', 'progress'}
 PROGRESS_KEYS = {'wins_today', 'xp', 'gold', 'level', 'level_progress'}
 ORDER_KEYS = {'at', 'source_action_ref', 'action_label', 'quest_label', 'recipient_display_name', 'recipient_bot_ref', 'task_ref'}
@@ -133,6 +134,11 @@ class WorkingContractTests(unittest.TestCase):
                 # Additive internal source identity does not change the frozen display fixture.
                 ref = working['latest_order'].pop('source_action_ref')
                 self.assertRegex(ref, r'^o-[0-9a-f]{20}$')
+                # The golden fixture has no session DB: numeric activity is unknown,
+                # not a fabricated zero. Preserve all original display assertions.
+                for item in working['items']:
+                    self.assertIsNone(item.pop('action_count'))
+                    self.assertIsNone(item.pop('last_action_at'))
                 self.assertEqual(working, FIXTURE['expected'][mode])
 
     # --- schema ---------------------------------------------------------------------
@@ -575,6 +581,14 @@ CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content T
         first = s.replay()
         self.assertEqual(len([e for e in first['events'] if e['kind'] == 'activity']), 1)
         self.assertEqual(len([e for e in first['events'] if e['kind'] == 'tool']), 2)
+        row = next(i for i in first['working']['items'] if i['task_ref'] == 't_a0000001')
+        self.assertEqual(row['action_count'], 3)
+        self.assertEqual(row['last_action_at'], extract._iso(s.now - 20))
+        narrow = s.replay(hours=.001)  # all three actions precede the event window
+        self.assertFalse(any(e['kind'] in ('tool', 'activity') for e in narrow['events']))
+        self.assertEqual(next(i for i in narrow['working']['items'] if i['task_ref'] == row['task_ref'])['action_count'], 3)
+        for _ in range(2):
+            self.assertEqual(next(i for i in s.delta(first['cursor'])['working']['items'] if i['task_ref'] == row['task_ref'])['action_count'], 3)
         self.assertNotIn('PRIVATE_ACTIVITY_SENTINEL', json.dumps(first))
         self.assertFalse(any(e['kind'] in ('activity', 'tool') for e in s.delta(first['cursor'])['events']))
         self.assertEqual(s.delta(first['cursor'])['working']['progress'], first['working']['progress'])
@@ -635,6 +649,27 @@ CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content T
             db.execute("UPDATE tasks SET status='archived' WHERE status='done'")
         w = self.scene(mutate=only_non_done).replay()['working']
         self.assertEqual(w['progress'], dict(wins_today=0, xp=0, gold=0, level=1, level_progress=0))
+
+    def test_same_timestamp_order_uses_session_before_local_rowid(self):
+        s = self.scene()
+        path = Path(s.tmp.name) / 'profiles' / FIXTURE['captain'] / 'state.db'
+        db = sqlite3.connect(path)
+        db.executescript('''
+CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,model TEXT,started_at REAL,ended_at REAL,parent_session_id TEXT,message_count INTEGER,tool_call_count INTEGER);
+CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,tool_name TEXT,tool_calls TEXT,timestamp REAL,tool_call_id TEXT,token_count INTEGER);
+''')
+        for sid, seq, name in [('aaa', 100, 'kanban_comment'), ('zzz', 1, 'kanban_link')]:
+            db.execute('INSERT INTO sessions VALUES(?,?,?,?,?,?,?,?)', (sid, 'cli', 'gpt', s.now-200, None, None, 1, 1))
+            args = {'task_id': 't_a0000001'} if name == 'kanban_comment' else {'child_id': 't_a0000001'}
+            call = json.dumps([{'function': {'name': name, 'arguments': args}}])
+            db.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?,?,?)', (seq, sid, 'assistant', '', None, call, s.now-10, None, None))
+        db.commit(); db.close()
+        replay = s.replay()
+        self.assertEqual(replay['working']['latest_order']['action_label'], 'Linked quests')
+        for _ in range(3):
+            delta = s.delta(replay['cursor'])
+            self.assertEqual(delta['working']['latest_order'], replay['working']['latest_order'])
+            replay = delta
 
     def test_wins_today_uses_the_backend_machine_timezone(self):
         fixture = copy.deepcopy(FIXTURE)
