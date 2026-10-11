@@ -60,6 +60,9 @@ synthetic.
   At equal timestamps, replay orders these by bot, keyed session reference, then ordinals; independent
   sources have a deterministic tie-break, not an inferred causal relationship. Old events without ordinals
   retain their ID tie-break. These fields contain no tool names, arguments, message text or raw session IDs.
+  `source_seq` is a message rowid across the entire profile, not a session-local counter.
+  Gaps can therefore roughly reveal the volume of messages in other sessions, but do not
+  expose their content or identifiers.
 - Database access is read-only (`mode=ro`, `PRAGMA query_only`).
 
 ## What redaction masks (opt-in text)

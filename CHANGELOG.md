@@ -4,6 +4,28 @@ All notable changes to Hermes Quest are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v0.1.3 - 2026-10-11
+
+### Added
+
+- Working view is the default: one hero per running card, a clickable work panel,
+  and idle bots grouped at the Inn; Show all keeps the full world available.
+- Display the Captain's latest order and keep it visible in a sticky mobile panel.
+- Earn 10 XP and 1 gold per completed task, with wins counted from real work.
+- Drive attacks, damage and progress from observed activity; pace queued actions
+  and fill quiet moments with cosmetic sparring that grants no damage or rewards.
+
+### Fixed
+
+- Preserve source order for equal-time replay activities and late combat batches.
+- Keep Working identities, elapsed time, focus return and privacy caches consistent.
+
+### Known limitations
+
+- Payloads with more than 2,000 work items are rejected rather than truncated.
+- Celebration effects may replay after their completion credit has been evicted.
+- A poll with 20,000 queued actions can take about 75 ms in a single frame.
+
 ## v0.1.2 - 2026-10-10
 
 ### Security
