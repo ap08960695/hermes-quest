@@ -11,6 +11,11 @@ const workView = {all:false, focus:null, key:'', pairs:[], savedCamera:null, but
 function workingSnapshot() {
   return ctx.S.work?.has?{asOf:ctx.S.work.asOf,items:ctx.S.work.items(),resting:ctx.S.work.resting,latestOrder:ctx.S.work.latestOrder,progress:ctx.S.work.progress()}:null;
 }
+// Presentation only: never reconcile the legacy replay wallet into board progress.
+function gameGoldText() {
+  const snap=workingSnapshot(),gold=snap?snap.progress?.gold:ctx.S.vault;
+  return (Number.isFinite(gold)?gold+' game gold':'Game gold: unavailable')+' · '+(snap?'current board':'saved replay');
+}
 // Recap is a visit snapshot, not a replay reward or an all-time completion ledger.
 let visitRecap=null, recapStorage=true;
 function invalidateIdleRecap() {
@@ -34,7 +39,7 @@ function initIdleRecap({events=ctx.D.events,meta=ctx.D.meta,progress=ctx.S.work?
     if(ctx.privacyPending)return;
     ctx.UI?.detail([visitRecap.text,visitRecap.weekly.text,
       'Counts cover retained events only, not every task ever completed.',
-      ...(recapStorage?[]:["Away summary isn't available in this view yet. Previous visits cannot be remembered here, so totals stay unknown."])],'Since last visit');
+      ...(recapStorage?[]:["Away summary isn't available in this view yet. Previous visits cannot be remembered here, so totals stay unknown."])],'Since last visit',{sceneSheet:true});
     // Explicit presentation is the only acknowledgement path; scrubbing/polling never writes seen IDs.
     if(ctx.UI)try {window.localStorage.setItem(R.STORAGE_KEY,R.encodeSeen(R.acknowledge(events,seen,history)));} catch (_) {recapStorage=false;}
   };
@@ -63,7 +68,7 @@ function renderIdle() {
   const summary=hall.label+' · '+(next?'next milestone at level '+next.level:hall.known?'milestones reached':'progress unknown');
   const label=ctx.$('#guild-summary');if(label)label.textContent=summary;
   for(const id of ['guild-details','working-guild']){const b=ctx.$('#'+id);if(b){
-    b.onclick=()=>{if(!ctx.privacyPending)ctx.UI?.detail(guildLines(),'Guildhall, trophies and stage tokens',{refresh:guildLines});};
+    b.onclick=()=>{if(!ctx.privacyPending)ctx.UI?.detail(guildLines(),'Guildhall, trophies and stage tokens',{refresh:guildLines,sceneSheet:true});};
     if(id==='working-guild')b.textContent=summary+' · Trophies & tokens';
   }}
 }
@@ -151,11 +156,12 @@ function renderWorking() {
     (ctx.D.meta.show_profile_names===true&&order.recipient_display_name?' · '+safeWorkText(order.recipient_display_name,'Guild Worker'):'')+' · '+(Number.isFinite(at)?new Date(at).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}):'Time unavailable'):'No recent instruction from the lead agent';
   const p=snap.progress;
   const value=key=>Number.isFinite(p?.[key])?p[key]:'unavailable';
-  ctx.$('#working-rewards').textContent=p?value('wins_today')+' quests completed today · '+value('xp')+' Guild XP · '+value('gold')+' game gold · Guild level '+value('level'):'Guild progress unavailable';
+  ctx.$('#working-rewards').textContent=p?value('wins_today')+' quests completed today · '+value('xp')+' Guild XP · '+gameGoldText()+' · Guild level '+value('level'):'Guild progress unavailable';
   const progress=ctx.$('#guild-progress');
   if(Number.isFinite(p?.level_progress))progress.value=p.level_progress;else progress.removeAttribute('value');
   progress.setAttribute('aria-label',Number.isFinite(p?.xp)?'XP to next guild level: '+(100-p.xp%100)+' XP ('+value('level_progress')+'%)':'Guild XP: unavailable');
   progress.title=progress.getAttribute('aria-label');
+  ctx.$('#guild-progress-text').textContent=Number.isFinite(p?.xp)&&Number.isFinite(p?.level)?p.xp%100+'/100 XP to Lv '+(p.level+1):'Guild level progress: unavailable';
   const helpers=item=>(ctx.D.sessions||[]).filter(s=>s.is_subagent&&s.task===item.task_ref&&s.ended_at==null&&s.started_at<=workClock());
   const list=ctx.$('#working-rows'),key=JSON.stringify([rows,workView.focus,ctx.pollStale,rows.map(workElapsed),rows.map(workActions),rows.map(helpers)]);
   // privacy/rebase may have cleared the DOM without changing the snapshot.
@@ -506,7 +512,8 @@ function ui(recap) {
   ctx.$('#live').hidden=!ctx.liveFeed;ctx.$('#live').onclick=ctx.goLive;
   ctx.$('#calm').onclick=()=>{ctx.calm=!ctx.calm;ctx.$('#calm').setAttribute('aria-pressed',String(ctx.calm));if(ctx.UI)ctx.UI.control('#calm','calm','Reduce effects',ctx.calm?'selected':'normal');};
   ctx.$('#world').onclick=()=>{clearInspection();Object.assign(ctx.cam,{tx:ctx.W.size[0]/2,ty:ctx.W.size[1]/2,zi:1});
-    if(ctx.UI)ctx.UI.detail(Object.entries(ctx.W.regions).map(([k,r])=>r.label.split(' · ')[0]+(k==='vault'?' : '+ctx.S.vault+' game gold':'')),'World locations');};
+    const lines=()=>Object.entries(ctx.W.regions).map(([k,r])=>r.label.split(' · ')[0]+(k==='vault'?' : '+gameGoldText():''));
+    if(ctx.UI)ctx.UI.detail(lines(),'World locations',{refresh:lines});};
   ctx.$('#tabs').onclick=e=>{const t=e.target.closest('[data-t]')?.dataset.t;if(t&&ctx.UI){ctx.UI.drawer(t);renderFeed();renderCamps();}};
   hudT=1;hud(0);
   ctx.cv.tabIndex=0;ctx.cv.setAttribute('aria-label','Hermes Quest world. Press Enter to choose a visible character.');
@@ -612,7 +619,7 @@ function heroDetails(h) {
 return {
   get CLOCK_FORMAT(){return CLOCK_FORMAT},
   get initIdleRecap(){return initIdleRecap}, get invalidateIdleRecap(){return invalidateIdleRecap}, get guildLines(){return guildLines},
-  get workingSnapshot(){return workingSnapshot}, get workItems(){return workItems}, get workView(){return workView},
+  get workingSnapshot(){return workingSnapshot}, get gameGoldText(){return gameGoldText}, get workItems(){return workItems}, get workView(){return workView},
   get workingPairs(){return workingPairs}, get fitWorking(){return fitWorking}, get renderWorking(){return renderWorking}, get focusWork(){return focusWork},
   get fmt(){return fmt},
   get inspect(){return inspect},

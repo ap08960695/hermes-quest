@@ -102,6 +102,8 @@ select:focus-visible{outline:2px solid var(--gold)}
 #scrub{accent-color:var(--gold)}
 .mana{display:flex}.mana i{display:block;background:#22304f;overflow:hidden}.mana b{display:block;height:100%}
 #quest{left:50%;top:50%;transform:translate(-50%,-50%)}
+/* Optional reading stays at the edge of the mobile battle, with Close pinned. */
+@media(max-width:760px){#quest.scene-sheet{left:8px;top:auto;bottom:8px;transform:none;width:calc(100vw - 16px);max-height:38dvh}}
 #tag{left:8px;top:8px}
 
 </style>
@@ -163,6 +165,7 @@ select:focus-visible{outline:2px solid var(--gold)}
   <div id="working-order" title="Explicit Captain instructions in retained history only"></div>
   <p id="working-rewards"></p>
   <progress id="guild-progress" max="100" value="0" aria-label="Guild level progress"></progress>
+  <p id="guild-progress-text"></p>
   <button id="working-guild" class="text-button">Guildhall, trophies and stage tokens</button>
   <div id="working-rows"></div>
 </section>

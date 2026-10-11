@@ -55,7 +55,7 @@ function entityLabel(entity) {
 // Keep complete names rather than replacing narrow labels with bare quest numbers.
 // UIPanels owns viewport/reserved-area/collision placement; pinned labels get its
 // extra lanes. Wrap before passing a width so its ellipsis cannot erase the role.
-function sceneLabel(text, x, y, maxWidth = 280) {
+function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b') {
   if (!ctx.UI || !text) return;
   const width = Math.max(48, Math.min(maxWidth, innerWidth - 32));
   const measure = value => window.UIText.measure(value.toUpperCase(), 2);
@@ -71,10 +71,11 @@ function sceneLabel(text, x, y, maxWidth = 280) {
   }
   if (line.trim()) lines.push(line.trim());
   // Upward wrapping leaves the last line nearest its character's anchor.
-  lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, true, width));
+  lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, pin, width, color));
 }
 function emptyScene(heroes) {
-  sceneLabel('No active quests', innerWidth / 2, innerHeight / 2);
+  const scope=ctx.workingSnapshot?.()?ctx.workView.all?'in replay scene':'on this board':'in this history range';
+  sceneLabel('No active quests '+scope, innerWidth / 2, innerHeight / 2);
   if (!heroes) sceneLabel('No heroes in this history range', innerWidth / 2, innerHeight / 2 + 44);
 }
 function villagerLabel(v, villagers) {
@@ -258,14 +259,17 @@ function prop(v, p) {
   blit(v, im, 0, 0, im.width, im.height, bx - Math.floor(im.width / 2), by - im.height + 1);
 }
 function banner(v, key, r) {
+  // Locations remain in Menu > World. Mobile prioritizes real quest labels;
+  // decorative banners must not be pinned into unrelated empty screen lanes.
+  if(innerWidth<=760)return;
   const [centerX,centerY] = ctx.plazaOf(key).center;
   if (!onScreen(v,centerX,centerY,240,200)) return;
   const pr = ctx.W.layered && ctx.W.props.find(p => p.region === key), im = pr && ctx.BLD[pr.img];
   const [px,py] = r.plaza?.label || [r.spot[0], im ? pr.y-im.height-10 : r.spot[1]-60];
   const x = v.ox + N(px) * v.Z, y = v.oy + N(py) * v.Z;
   const n = Object.values(ctx.S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
-  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR);
-    if(n||key==='vault')sceneLabel(key==='vault'?(Number.isFinite(ctx.S.vault)?compact(ctx.S.vault)+' game gold':'Game gold: unavailable'):compact(n)+' '+(n===1?'quest':'quests'),x/ctx.DPR,y/ctx.DPR-44);}
+  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,280,false,'#7fc8b8');
+    if(n||key==='vault')sceneLabel(key==='vault'?ctx.gameGoldText():compact(n)+' '+(n===1?'quest in replay scene':'quests in replay scene'),x/ctx.DPR,y/ctx.DPR-44,280,false,'#7fc8b8');}
 }
 function heroDraw(v, h) {
   if (ctx.overflowed(h)) return;
@@ -472,7 +476,8 @@ function monster(v, t) {
     timeBarLabel(v, t, bx, top);
   }
 }
-// The gold bar is a countdown, not health. Name it where it is drawn: canvas pixels from the bundled
+// The gold bar estimates a runtime budget against replay time (default 1800s), not health or an SLA.
+// Name it where it is drawn: canvas pixels from the bundled
 // 5x7 bitmap alphabet only (no URL font, which the Desktop guest bridge rejects), so it reads everywhere.
 // Shown for the selected quest, when zoomed in (Z >= 2), or when at most 4 bars are on screen, so a
 // crowded Show all scene is not covered in text. The values are m/s only; unknown stays unlabelled-unit-free.
@@ -485,10 +490,11 @@ function timeBarText(t) {
   const budget = Number(t.max_rt) > 0 ? Number(t.max_rt) : 1800;
   if (t.state === 'fight' && Number.isFinite(t.runStart)) {
     const left = timeBarDuration(Math.max(0, budget - (ctx.S.t - t.runStart)));
-    return left ? 'TIME LEFT ' + left : 'TIME LEFT';
+    return left ? 'EST. TIME LEFT ' + left : 'EST. TIME LEFT';
   }
   const limit = timeBarDuration(budget);
-  return limit ? 'TIME LIMIT ' + limit : 'TIME LIMIT';
+  const label=Number(t.max_rt)>0?'TIME LIMIT':'EST. TIME LIMIT';
+  return limit ? label+' '+limit : label;
 }
 let barLabelCrowded = false;
 function countTimeBars(v) {
@@ -519,6 +525,8 @@ function dragon(v) {
 }
 function nameplate(x, y, text, color) {
   if(!ctx.UI)return;
+  // Reuse the existing completion effect/lifetime; no new event or reward.
+  if(String(text).includes('CLEAR'))return sceneLabel('Quest complete',x/ctx.DPR,y/ctx.DPR);
   const digits=String(text).replace(/−/g,'-').match(/[+-]?\d+/)?.[0];
   if(digits){const n=Number(digits),label=(n<0?'-':digits.startsWith('+')?'+':'')+compact(Math.abs(n));
     ctx.UI.screenNumber(label,x/ctx.DPR,y/ctx.DPR,color);

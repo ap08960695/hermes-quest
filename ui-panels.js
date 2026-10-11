@@ -79,24 +79,24 @@
     for(let lane=0;lane<3;lane++){const top=y-lane*18;
       if(fits(x,top,im.width,im.height)){image(im,x,top);break;}}
   }
-  function screenLabel(text,x,y,pin=false,maxWidth=Infinity) {
-    let label=text.toUpperCase(),im=numericImage(label,'#ffd36b');
+  function screenLabel(text,x,y,pin=false,maxWidth=Infinity,color='#ffd36b') {
+    let label=text.toUpperCase(),im=numericImage(label,color);
     if(Number.isFinite(maxWidth)&&Array.from(label).some(ch=>!Object.hasOwn(T.glyphs,ch))){
-      const width=Math.max(48,Math.floor(maxWidth)),key=JSON.stringify([label,width]);
+      const width=Math.max(48,Math.floor(maxWidth)),key=JSON.stringify([label,width,color]);
       if(!sceneLabels.has(key)){
         const token=epoch;sceneLabels.set(key,null);
         (async()=>{
-          const parts=T.graphemes(label);let value=await T.bitmap(label,{maxWidth:1024,color:'#ffd36b'});
-          while(parts.length&&value.width>width){parts.pop();value=await T.bitmap(parts.join('')+'...',{maxWidth:1024,color:'#ffd36b'});}
+          const parts=T.graphemes(label);let value=await T.bitmap(label,{maxWidth:1024,color});
+          while(parts.length&&value.width>width){parts.pop();value=await T.bitmap(parts.join('')+'...',{maxWidth:1024,color});}
           if(token===epoch){const canvas=value.lines[0].canvas;canvas._unicode=true;sceneLabels.set(key,canvas);}
-        })().catch(()=>{if(token===epoch)sceneLabels.set(key,systemImage(label,'#ffd36b'));});
+        })().catch(()=>{if(token===epoch)sceneLabels.set(key,systemImage(label,color));});
         if(sceneLabels.size>64)sceneLabels.delete(sceneLabels.keys().next().value);
       }
-      im=sceneLabels.get(key)||numericImage('...','#ffd36b');
+      im=sceneLabels.get(key)||numericImage('...',color);
     }
     if(im.width>maxWidth){
       const parts=Array.from(new Intl.Segmenter(undefined,{granularity:'grapheme'}).segment(label),s=>s.segment);
-      while(parts.length&&im.width>maxWidth){parts.pop();im=numericImage(parts.join('')+'...','#ffd36b');}
+      while(parts.length&&im.width>maxWidth){parts.pop();im=numericImage(parts.join('')+'...',color);}
     }
     x=Math.round(x-im.width/2);y=Math.round(y-im.height);
     if(pin){x=Math.round(Math.max(8,Math.min(innerWidth-im.width-8,x)));
@@ -230,6 +230,8 @@
     if($('#quest').hidden){remember(document.activeElement);if(binding?.focus)returnSpec={focus:binding.focus};}
     label=({'Quest':'Quest details','Task details':'Quest details','Working quest':'Quest details','Hero':'Hero details','Helper':'Hero details','World':'World locations','Region':'Location details','All tasks':'All quests'})[label]||label;
     const el=$('#quest');el.hidden=false;el.replaceChildren();el.setAttribute('aria-label',label);el.setAttribute('aria-labelledby','dialog-heading');live=null;
+    el.classList.toggle('scene-sheet',binding?.sceneSheet===true);
+    if(binding?.sceneSheet)menu(false); // Do not leave Menu covering the battle behind an edge sheet.
     const button=document.createElement('button');button.className='close text-button';button.textContent='Close';button.setAttribute('aria-label','Close '+label);
     el.append(button);button.onclick=close;
     const heading=document.createElement('h2');heading.id='dialog-heading';heading.textContent=label;el.append(heading);

@@ -156,7 +156,7 @@ const server=http.createServer((req,res)=>{
  await page.locator('#quest .item-summary').nth(17).locator('button').click();await page.evaluate(()=>draw());assert.equal(await page.locator('#scene-selected').getAttribute('aria-label'),'Selected Build quest #18');await privacy();
  await page.waitForTimeout(200);await page.evaluate(()=>draw());await page.screenshot({path:path.join(out,engine+'-'+width+'-crowd.png')});
  const empty={meta:{from_:0,to:600,show_titles:false,source:'demo'},tasks:[],bots:[],events:[],working:{as_of:600,items:[],resting_count:0,latest_order:null,progress:{wins_today:0,xp:0,gold:0,level:1,level_progress:0}}};await load(empty);await page.evaluate(()=>{resize();draw();});
- const e=await measure();assert.equal(e.camera.x,await page.evaluate(()=>W.size[0]/2));assert.equal(e.camera.y,await page.evaluate(()=>W.size[1]/2));assert(e.labels.includes('No active quests'));
+ const e=await measure();assert.equal(e.camera.x,await page.evaluate(()=>W.size[0]/2));assert.equal(e.camera.y,await page.evaluate(()=>W.size[1]/2));assert(e.labels.join(' ').includes('No active quests on this board'));
   assert(await page.locator('#empty-note').isVisible());const emptyCopy=await page.locator('#empty-note').textContent();assert(emptyCopy.includes('No quests yet'));assert(emptyCopy.includes('Start a task in Hermes Kanban'));
   await load({...empty,working:undefined});await page.evaluate(()=>draw());assert(await page.locator('#empty-note').isVisible(),'legacy empty also has next action');
   await load(fixture());assert(await page.locator('#empty-note').isHidden(),'new tasks clear empty message');

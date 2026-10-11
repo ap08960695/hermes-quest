@@ -99,7 +99,7 @@ const server=http.createServer((req,res)=>{try{
         await frame.evaluate(d=>{loadReplay(d);cancelAnimationFrame(raf);S.play=false;document.querySelector('#working-panel').hidden=true;
           for(const x of D.tasks)task(x.id).alpha=0;const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-300,max_rt:1800,hp:.83,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});
           selectedScene=t.id;Object.assign(cam,{x:700,y:500,tx:700,ty:500,zi:2});barText=[];resize();draw();},d);
-        const labels=await frame.evaluate(()=>barText);assert(labels.includes('TIME LEFT 25 MIN'),JSON.stringify(labels));await capture('time-left');
+        const labels=await frame.evaluate(()=>barText);assert(labels.includes('EST. TIME LEFT 25 MIN'),JSON.stringify(labels));await capture('time-left');
       });
       await check('no uncaught errors',async()=>assert.deepEqual(errors,[]));await page.close();
     }}finally{await browser.close();}

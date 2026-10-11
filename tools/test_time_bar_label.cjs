@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The gold countdown bar above a monster must be named "TIME LEFT" with m/s units, drawn from the
+// The gold countdown bar above a monster must be named "EST. TIME LEFT" with m/s units, drawn from the
 // bundled bitmap alphabet (no URL font, so it also reads in the Desktop guest bridge).
 // node tools/test_time_bar_label.cjs [outDir]
 'use strict';
@@ -39,34 +39,34 @@ const server=http.createServer((req,res)=>{
           resize();draw();
           return {text:barText.slice(),w:cv.width,h:cv.height};
         },setup);
-        await rec('running quest says TIME LEFT with m unit',async()=>{
+        await rec('running quest says EST. TIME LEFT with m unit',async()=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-300,max_rt:1800,hp:.83,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          const labels=r.text.filter(x=>x.startsWith('TIME L'));
+          const labels=r.text.filter(x=>x.startsWith('EST. TIME L'));
           assert.equal(labels.length,1,'labels: '+JSON.stringify(r.text));
-          assert.match(labels[0],/^TIME LEFT (\d+ MIN|\d+ SEC)$/);assert.equal(labels[0],'TIME LEFT 25 MIN');
+          assert.match(labels[0],/^EST\. TIME LEFT (\d+ MIN|\d+ SEC)$/);assert.equal(labels[0],'EST. TIME LEFT 25 MIN');
           await page.screenshot({path:path.join(out,`${engine}-${width}-running.png`)});
         });
         await rec('seconds use SEC unit and never go negative',async()=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-1780,max_rt:1800,hp:.1,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(r.text.includes('TIME LEFT 20 SEC'),JSON.stringify(r.text));
+          assert(r.text.includes('EST. TIME LEFT 20 SEC'),JSON.stringify(r.text));
           const o=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-9999,max_rt:1800,hp:.08,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(o.text.includes('TIME LEFT 0 SEC'),JSON.stringify(o.text));
+          assert(o.text.includes('EST. TIME LEFT 0 SEC'),JSON.stringify(o.text));
         });
         await rec('no start time falls back to TIME LIMIT, not a made-up remainder',async()=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:null,max_rt:1200,hp:1,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(r.text.includes('TIME LIMIT 20 MIN'),JSON.stringify(r.text));assert(!r.text.some(x=>x.startsWith('TIME LEFT')));
+          assert(r.text.includes('TIME LIMIT 20 MIN'),JSON.stringify(r.text));assert(!r.text.some(x=>x.includes('TIME LEFT')));
         });
         await rec('crowded scene labels only the selected quest unless zoomed in',async()=>{
           const r=await run(`const ids=D.tasks.map(t=>t.id);ids.forEach((id,i)=>Object.assign(task(id),{state:'fight',runStart:S.t-60,max_rt:1800,hp:.9,alpha:1,region:'forge',emerge:0,dying:false,x:700+i*20,y:500,mx:700+i*20,my:500}));selectedScene=ids[0];cam.x=700;cam.y=500;cam.zi=1;`);
-          const n=r.text.filter(x=>x.startsWith('TIME L')).length;
+          const n=r.text.filter(x=>x.includes('TIME L')).length;
           assert(n<=1,'crowd labels '+n+' '+JSON.stringify(r.text));
           await page.screenshot({path:path.join(out,`${engine}-${width}-crowd.png`)});
         });
         await rec('label is drawn in canvas pixels without any URL font request',async()=>{
           
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-60,max_rt:1800,hp:.97,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(r.text.some(x=>x.startsWith('TIME LEFT')));
-          assert(await page.evaluate(()=>barText.filter(t=>t.startsWith('TIME')).every(t=>Array.from(t).every(ch=>Object.hasOwn(UIText.glyphs,ch)))),'label uses a glyph outside the bundled bitmap alphabet');
+          assert(r.text.some(x=>x.startsWith('EST. TIME LEFT')));
+          assert(await page.evaluate(()=>barText.filter(t=>t.includes('TIME')).every(t=>Array.from(t).every(ch=>Object.hasOwn(UIText.glyphs,ch)))),'label uses a glyph outside the bundled bitmap alphabet');
           const gold=await page.evaluate(()=>{const d=cx.getImageData(0,0,cv.width,cv.height).data;let n=0;for(let i=0;i<d.length;i+=4)if(d[i]===255&&d[i+1]===211&&d[i+2]===107)n++;return n;});
           assert(gold>30,'label ink '+gold);
         });

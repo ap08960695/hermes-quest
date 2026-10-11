@@ -113,6 +113,8 @@ jobs:
         run: node tools/test_idle_source_switch.cjs "$RUNNER_TEMP/ui-regressions/idle-source"
       - name: Time bar label and explicit units (both engines)
         run: node tools/test_time_bar_label.cjs "$RUNNER_TEMP/ui-regressions/time-bar"
+      - name: Board gold, scoped mobile scene, completion cue and reading sheets
+        run: node tools/test_idle_ui_fix.cjs "$RUNNER_TEMP/ui-regressions/idle-ui-fix"
       - name: Shared-worker quest context and partial session availability (both engines)
         run: node tools/test_clarity_web_followup.cjs "$RUNNER_TEMP/ui-regressions/clarity-web-followup"
       - name: Selected rendering and private presentation (both engines)
