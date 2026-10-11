@@ -7,11 +7,12 @@ let liveFeed = false, following = false, cursor = '', pollTimer = null;
 const TRANSPORT_MS = 35000;
 let pollBusy = false;
 // Live health: consecutive failed polls and the last time a fetch fully succeeded (ms). UI-only; never read by the scene.
-let pollFailures = 0, lastPollOk = null, pollStale = false;
-function connection(text, state, extra) { if (ctx.UI) ctx.UI.status(text, state, extra); }
+let pollFailures = 0, lastPollOk = null, pollStale = false, pollReason = null;
+function connection(text, state, extra = {}) { if (ctx.UI) ctx.UI.status(text, state, {...extra,source:ctx.D?.meta.source==='demo'?'Sample data':liveFeed?'Live data':'Saved history (not live)',following,stale:pollStale}); }
 function connectedStatus(payload) {
   if (ctx.D.session_data?.status === 'unavailable') return connection('Session activity unavailable', 'snapshot');
-  connection(payload.state === 'legacy-fallback' ? 'Snapshot fallback' : 'Connected · 10s', payload.state === 'legacy-fallback' ? 'snapshot' : 'online');
+  pollReason=null;
+  connection(payload.state === 'legacy-fallback' ? 'Saved history (not live)' : 'Connected', payload.state === 'legacy-fallback' ? 'snapshot' : 'online');
 }
 async function json(url) {
   // One deadline covers both headers and body, allowing backend extraction 30s.
@@ -43,12 +44,15 @@ function pollFailed(e) {
   pollFailures++;
   const status = Number.isInteger(e?.status) ? e.status : 0, client = status >= 400 && status < 500;
   // Once the warning is up it stays up (with the latest reason) until a poll really succeeds: a different failure kind must not downgrade it.
-  if (!pollStale && pollFailures < 3 && !client) { connection(e?.questConfig ? e.message : 'Offline · retrying in 10s', 'offline'); return; }
-  pollStale = true;
   const reason = status === 401 || status === 403 ? 'sign-in needed' : client ? 'server rejected' : status >= 500 ? 'server error'
     : e?.name === 'TypeError' || e?.message === 'Transport timeout' ? 'offline' : 'update failed';
+  pollReason=reason;
+  const failure=status>=500?'Server error ('+status+')':reason==='offline'?'Offline':reason;
+  if (!pollStale && pollFailures < 3 && !client) { connection(failure+' · retrying in 10 sec','offline',{reason,status,retrySeconds:10}); return; }
+  pollStale = true;
   const updated = lastPollOk === null ? null : new Date(lastPollOk).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});
-  connection('Live paused · not updating · ' + (updated ? 'last update ' + updated : 'no update yet') + ' · ' + reason + (e?.questConfig ? ' · ' + e.message : ''), 'stale', {updated, reason});
+  connection('Stale data · live updates paused · Last successful update: ' + (updated || 'unavailable') + ' · ' + failure + ' · Retrying in 10 sec', 'stale', {updated, reason,status,retrySeconds:10});
+  ctx.hudT=1;ctx.hud(0);
 }
 async function pollEvents() {
   if (pollBusy || document.hidden) return;
@@ -121,6 +125,7 @@ return {
   get pollFailures(){return pollFailures}, set pollFailures(v){pollFailures=v},
   get lastPollOk(){return lastPollOk}, set lastPollOk(v){lastPollOk=v},
   get pollStale(){return pollStale}, set pollStale(v){pollStale=v},
+  get pollReason(){return pollReason},
   get connection(){return connection}, set connection(v){connection=v},
   get connectedStatus(){return connectedStatus}, set connectedStatus(v){connectedStatus=v},
   get json(){return json}, set json(v){json=v},
