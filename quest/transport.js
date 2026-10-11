@@ -32,7 +32,7 @@ async function json(url) {
     // Bridges expose only HTTP status, never backend prose. Use fixed local guidance
     // for 503 on the data API; do not display a response body or arbitrary error text.
     if (url.startsWith(API) && (e?.status === 503 || e?.message === 'HTTP 503')) {
-      const err = new Error('Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)');
+      const err = new Error("Hermes Quest can't read your Hermes data. Retry, or open Help → Setup if you use a custom Hermes folder.");
       err.status = 503; err.questConfig = true; throw err;
     }
     throw e;

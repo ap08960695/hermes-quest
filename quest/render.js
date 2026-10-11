@@ -125,6 +125,9 @@ function blit(v, im, sx, sy, sw, sh, nx, ny, flip = false) {       // nx,ny: nat
   ctx.cx.save(); ctx.cx.translate(v.ox + (nx + sw) * Z, v.oy + ny * Z); ctx.cx.scale(-1, 1); ctx.cx.drawImage(im, sx, sy, sw, sh, 0, 0, sw * Z, sh * Z); ctx.cx.restore();
 }
 function draw() {
+  const empty=ctx.$('#empty-note');
+  if(empty){empty.hidden=ctx.privacyPending||ctx.D.tasks.length>0;
+    empty.textContent=empty.hidden?'':'No quests yet — when a bot starts a Kanban task it appears here. Start a task in Hermes Kanban, or load saved history with tasks.';}
   if(ctx.workingSnapshot?.()&&!ctx.workView.all)return drawWorking();
   const v = view();
   if (!ctx.privacyPending) sceneOverflow(v);
@@ -139,7 +142,10 @@ function draw() {
   // Identification takes priority over location banners and cosmetic effects.
   for (const entity of [...heroes, ...quests]) {
     const x = entity.mx ?? entity.x, y = entity.my ?? entity.y;
-    if (entity !== ctx.selectedEntity() && !ctx.overflowed(entity) && onScreen(v,x,y,180,180))
+    // In Show all, identify one selected character rather than scattering full
+    // names into distant collision lanes. Every character stays tappable and
+    // the explicit chooser keeps names reachable on touch and keyboard.
+    if (!ctx.workView.all && entity !== ctx.selectedEntity() && !ctx.overflowed(entity) && onScreen(v,x,y,180,180))
       sceneLabel(entityLabel(entity),(v.ox+x*v.Z)/ctx.DPR,(v.oy+(y-110)*v.Z)/ctx.DPR);
   }
   for (const [k,r] of Object.entries(ctx.W.regions)) banner(v,k,r);
@@ -189,7 +195,7 @@ function drawWorking() {
       ctx.cx.beginPath();ctx.cx.arc(sx,sy,10*v.Z,-1.2,1.2);ctx.cx.stroke();
     }
     if(a?.hit>0){
-      ctx.UI?.screenLabel('Observed action · '+Math.floor(Math.max(0,ctx.S.t-a.current.at))+'s ago',
+      ctx.UI?.screenLabel('Bot acted '+Math.floor(Math.max(0,ctx.S.t-a.current.at))+'s ago',
         (v.ox+pair.x*v.Z)/ctx.DPR,(v.oy+(pair.y+20)*v.Z)/ctx.DPR,false,240);
       const x=v.ox+pair.monster.x*v.Z,y=v.oy+(pair.y-50-(1.1-a.hit)*22)*v.Z;
       ctx.UI?.screenLabel(a.damage+' DMG',x/ctx.DPR,y/ctx.DPR);

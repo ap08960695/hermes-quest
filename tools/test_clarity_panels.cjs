@@ -64,7 +64,9 @@ async function capture(page,frame,tag,action){
         const request=window.requestAnimationFrame.bind(window);window.requestAnimationFrame=fn=>request(t=>{if(!window.__freezeAnimation)fn(t);});});
       await page.goto(base+(mode==='sdk'?'/sdk':'/'));const frame=mode==='sdk'?page.frames().find(f=>f.parentFrame()):page.mainFrame();
       await frame.waitForFunction(()=>window.__questTest?.D?.tasks?.length&&typeof window.__questTest.loop.last==='number'&&window.UIPanels);
-      await frame.evaluate(()=>{window.__freezeAnimation=true;const g=window.__questTest;g.S.play=false;cancelAnimationFrame(g.raf);});
+      // Freeze transport as well as animation: an automatic successful poll must
+      // not overwrite a deliberately injected stale fixture mid-assertion.
+      await frame.evaluate(()=>{window.__freezeAnimation=true;const g=window.__questTest;g.S.play=false;cancelAnimationFrame(g.raf);clearTimeout(g.pollTimer);});
       const tag=engine+'-'+mode+'-'+width+'x'+height;
       if(!before){
         await frame.locator('#menu-toggle').evaluate(e=>{if(e.getAttribute('aria-expanded')==='true')e.click();});
@@ -147,6 +149,34 @@ async function capture(page,frame,tag,action){
           UIPanels.overview({tasks:[],heroes:[],blocked:0,errors:[],empty:'No active quests',summary:'No active quests',stale:false});});
         assert((await frame.locator('#feed').textContent()).includes('No activity for this filter in saved history'));
         for(const selector of ['#overview-summary','#feed','#camps'])assert(!(await frame.locator(selector).textContent()).includes('Stale data'));
+        await frame.evaluate(()=>{UIPanels.menu(false);UIPanels.setup();});
+        assert(!(await frame.locator('#quest').textContent()).includes('HERMES_QUEST_CONFIG'));
+        await capture(page,frame,tag,'setup');await frame.getByRole('button',{name:'Technical details',exact:true}).click();
+        assert((await frame.locator('#quest').textContent()).includes('hermes_home'));await frame.locator('#quest .close').click();
+        await frame.evaluate(()=>{const g=window.__questTest,d=structuredClone(g.D);d.events=[];
+          d.working={as_of:d.meta.to,items:d.tasks.slice(0,2).map((t,i)=>({ref:'synthetic-work-'+i,task_ref:t.id,bot_ref:d.bots[i].id,status:'running',started_at:d.meta.to-30,display_name:'Nova '+(i+1),class_label:'Research Mage',quest_kind:'build',worker_observed:true,action_count:3,last_action_at:d.meta.to-8})),resting_count:0,latest_order:null,progress:{wins_today:0,xp:0,gold:0,level:1,level_progress:0}};
+          g.loadReplay(d,null,d.meta.to);g.S.play=false;g.hudT=1;g.hud(0);g.resize();g.draw();});
+        assert((await frame.locator('#working-panel').textContent()).includes('no damage, progress or rewards'));
+        await capture(page,frame,tag,'working-copy');
+        await frame.locator('#working-toggle').click();await frame.evaluate(()=>window.__questTest.draw());
+        assert(await frame.locator('#working-guide').isVisible());await capture(page,frame,tag,'show-all');
+        await frame.locator('#working-choose').click();assert((await frame.locator('#character-content button').count())>=2);
+        await frame.locator('#character-content button').first().click();await frame.evaluate(()=>{const g=window.__questTest;g.renderInspection();g.draw();});
+        assert((await frame.locator('#scene-selected').getAttribute('aria-label')).includes('Hero'));await capture(page,frame,tag,'show-all-selected');
+        await frame.evaluate(()=>{const g=window.__questTest;g.clearInspection();g.workView.all=false;
+          const d=structuredClone(g.D);d.tasks=[];d.bots=[];d.events=[];d.working={as_of:d.meta.to,items:[],resting_count:0,latest_order:null,progress:{wins_today:0,xp:0,gold:0,level:1,level_progress:0}};
+          g.loadReplay(d,null,d.meta.to);g.S.play=false;g.resize();g.hudT=1;g.hud(0);g.draw();});
+        assert(await frame.locator('#empty-note').isVisible());assert((await frame.locator('#empty-note').textContent()).includes('Start a task in Hermes Kanban'));
+        await capture(page,frame,tag,'empty-next-action');
+        await frame.evaluate(async()=>{const g=window.__questTest;window.savedFetch=fetch;window.fetch=async()=>({ok:false,status:503});
+          g.liveFeed=true;g.lastPollOk=Date.now();g.pollFailures=0;g.pollStale=false;
+          for(let i=0;i<3;i++){await g.pollEvents();clearTimeout(g.pollTimer);}g.hudT=1;g.hud(0);});
+        assert((await frame.locator('#issues').textContent()).includes('custom Hermes folder'));
+        assert(!(await frame.locator('#issues').textContent()).includes('HERMES_QUEST_CONFIG'));
+        await capture(page,frame,tag,'stale-error-guidance');
+        await frame.evaluate(async()=>{await window.__questTest.boot();window.fetch=savedFetch;});
+        assert(await frame.getByRole('button',{name:'Retry',exact:true}).isVisible());
+        await capture(page,frame,tag,'initial-error-guidance');
         assert.deepEqual(errors,[]);if(mode==='web'){await page.reload();await frame.waitForFunction(()=>window.UIPanels&&window.__questTest?.D);assert(await frame.locator('#first-run').isHidden());assert(await frame.locator('#quick-help').isVisible());}
       }
       await ctx.close();console.log('OK '+tag);

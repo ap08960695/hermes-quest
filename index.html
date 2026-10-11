@@ -36,6 +36,7 @@ select{min-height:44px;max-width:100%;background:#1b2742;color:var(--ink);border
 select:focus-visible{outline:2px solid var(--gold)}
 #focus-bar{position:fixed;z-index:5;left:8px;top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:4px;max-width:calc(100vw - 16px)}
 #live-note{flex:0 0 100%;font-size:11px;padding:2px 6px;background:var(--panel);border:1px solid var(--red);border-radius:4px;color:#ffbba7}
+#empty-note{flex:0 0 100%;max-width:420px;padding:8px;background:var(--panel);border:1px solid var(--gold);border-radius:4px;overflow-wrap:anywhere}
 #focus-bar.inspection-side #mode{display:none}
 #focus-bar.inspection-side #quick-help{display:none}
 #focus-bar.inspection-side #issues{width:100%;height:auto;overflow-wrap:anywhere}
@@ -108,6 +109,7 @@ select:focus-visible{outline:2px solid var(--gold)}
   <div id="tag" class="panel"><span id="mode">Loading</span><button id="connection" aria-label="Loading connection details"></button></div>
   <button id="issues" hidden aria-label="Issues"></button>
   <div id="live-note" hidden></div>
+  <div id="empty-note" role="status" hidden></div>
   <div id="live-announce" class="sr-only" role="status" aria-live="polite"></div>
 </div>
 <nav id="menu" class="panel" aria-label="Quest menu" hidden>
@@ -148,7 +150,9 @@ select:focus-visible{outline:2px solid var(--gold)}
   <h2 id="working-count">Working</h2>
   <button id="working-toggle" class="text-button" aria-pressed="false">Show all</button>
   <p id="working-resting"></p>
-  <p>Sparring is cosmetic. Only observed actions cause damage; queued hits show source age.</p>
+  <p id="working-guide" hidden>Tap a character to see its name and quest. Crowded characters open a list to choose from.</p>
+  <button id="working-choose" class="text-button" hidden>Choose a hero or quest</button>
+  <p>Practice: no damage, progress or rewards. Hits come from real bot actions and may play later. “Ago” means when the bot acted.</p>
   <div id="working-order" title="Explicit Captain instructions in retained history only"></div>
   <p id="working-rewards"></p>
   <progress id="guild-progress" max="100" value="0" aria-label="Guild level progress"></progress>

@@ -62,9 +62,11 @@ async function boot() {
     ctx.connection(text,'offline',{status});
     // Initial errors must be actionable even before game controls were wired.
     const panel=document.createElement('section');panel.id='quest-load-error';panel.setAttribute('role','alert');
-    panel.style.cssText='position:fixed;left:16px;right:16px;top:40%;max-width:420px;margin:auto;padding:20px;background:#172235;color:#fff;z-index:20;font:16px system-ui;text-align:center';
+    panel.style.cssText='position:fixed;left:16px;right:16px;top:25%;max-width:420px;max-height:70dvh;overflow:auto;margin:auto;padding:20px;background:#172235;color:#fff;z-index:4;font:16px system-ui;text-align:center';
     const message=document.createElement('p');message.textContent=text;panel.append(message);
     if(e?.questConfig){const help=document.createElement('p');help.textContent=e.message;panel.append(help);}
+    else {const help=document.createElement('p');help.textContent=status===401||status===403?'Sign in to Hermes, then retry.':'Check your connection and retry. If the problem continues, open Setup help.';panel.append(help);}
+    const setup=document.createElement('button');setup.className='text-button';setup.textContent='Setup help';setup.onclick=()=>ctx.UI?.setup();panel.append(setup);
     const retry=document.createElement('button');retry.textContent='Retry';retry.onclick=()=>{retry.disabled=true;ctx.boot();};panel.append(retry);document.body.append(panel);retry.focus();
   }
 }

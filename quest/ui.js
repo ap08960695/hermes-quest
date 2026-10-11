@@ -58,7 +58,7 @@ function workDetails(ref) {
     'Time limit: '+duration(row.max_runtime_seconds??row.max_rt??ctx.D.tasks.find(t=>t.id===row.task_ref)?.max_rt),
     'Parent agent: '+(row.parent_ref?parent?.display_name||'not observed':'not observed'),'Campaign: '+row.group_label,
     ...(ctx.pollStale?['Stale data · live updates paused']:[]),
-    workActions(row),'Sparring is cosmetic. Damage comes only from observed actions; queued hits may arrive late.'];
+    workActions(row),'Practice swings are just animation: no damage, progress or rewards. Real bot activity (a tool call or message) causes hits. Hits play one at a time and may appear later; “ago” is when the bot acted.'];
 }
 function focusWork(ref,details=false) {
   if(!workItems().some(i=>i.ref===ref))return;
@@ -83,6 +83,10 @@ function renderWorking() {
   ctx.$('#working-toggle').onclick=toggleWorking;
   ctx.$('#working-toggle').textContent=workView.all?'Show active quests only':'Show all heroes and quests';
   ctx.$('#working-toggle').setAttribute('aria-pressed',String(workView.all));
+  ctx.$('#working-guide').hidden=ctx.$('#working-choose').hidden=!workView.all;
+  ctx.$('#working-choose').onclick=()=>chooseCharacters([
+    ...Object.values(ctx.S.heroes).map(h=>({type:'hero',id:h.bot})),
+    ...Object.values(ctx.S.tasks).filter(t=>t.alpha>0).map(t=>({type:'monster',id:t.id}))]);
   ctx.$('#working-count').textContent=running.length+' active quests'+(ctx.pollStale?' · Stale data':'');
   ctx.$('#working-resting').textContent=Number.isFinite(snap.resting)?Math.max(0,snap.resting)+' idle heroes':'Idle heroes: unavailable';
   const order=snap.latestOrder,at=typeof order?.at==='number'?order.at*1000:Date.parse(order?.at);

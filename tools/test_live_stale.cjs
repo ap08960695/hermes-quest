@@ -125,7 +125,7 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
 
   // Data 503 carries fixed guidance through direct HTTP and sanitized SDK bridges.
   // Never display raw backend/error prose, even when it includes paths.
-  const hint = 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)';
+  const hint = "Hermes Quest can't read your Hermes data. Retry, or open Help → Setup if you use a custom Hermes folder.";
   for (const bridge of [false, true]) {
     box.fetch = async () => {
       if (bridge) throw new Error('HTTP 503');

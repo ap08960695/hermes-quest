@@ -182,7 +182,7 @@ class DataRootTests(unittest.TestCase):
             (seam / 'hermes_constants.py').write_text('')
             failed = client.get('/replay', headers=headers)
             self.assertEqual(failed.status_code, 503)
-            self.assertEqual(failed.json(), {'detail': 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)'})
+            self.assertEqual(failed.json(), {'detail': "Hermes Quest can't read your Hermes data. Retry, or open Help → Setup if you use a custom Hermes folder."})
 
 
 if __name__ == '__main__':

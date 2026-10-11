@@ -261,7 +261,7 @@ async function runLiveStale(browser,base) {
   // Synthetic fake server: failing polls must raise the compact warning (also with the Menu closed),
   // leak nothing internal, leave playback/camera/cursor alone, and one success must restore Live.
   const check=(v,m)=>{if(!v)throw Error(m);},demo=JSON.parse(fs.readFileSync(path.join(root,'data/demo.json')));
-  const configHint='Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)';
+  const configHint="Hermes Quest can't read your Hermes data. Retry, or open Help → Setup if you use a custom Hermes folder.";
   const reasonFor=failure=>failure===401?'sign-in needed':typeof failure==='number'&&failure<500?'server rejected':failure==='network'?'offline':'server error';
   const checkStale=(v,failure,message)=>{
     const reason=reasonFor(failure),hint=failure===503?' · '+configHint:'';

@@ -458,8 +458,11 @@
     control('#connection',({online:'connected',file:'snapshot',stale:'offline'})[state]||state,text,state==='offline'||state==='stale'?'alert':'normal');
     $('#connection .control-name').textContent=state==='offline'&&extra?.status?'Server error ('+extra.status+')':({loading:'Loading',online:'Connected',file:'Data source',snapshot:'Live paused',offline:'Offline',stale:'Live paused'})[state]||'Connection details';
     $('#connection').title=text;
-    $('#connection').onclick=()=>detail([sourceMode+' data source',connectionText,...staleLines(),
-      'Playback and live-follow are separate from connection status.','Live updates poll about every 10 seconds while this browser page is visible.'],'Connection details');
+    $('#connection').onclick=()=>{
+      detail([sourceMode+' data source',connectionText,...staleLines(),
+        'Playback and live-follow are separate from connection status.','Live updates poll about every 10 seconds while this browser page is visible.'],'Connection details');
+      const help=document.createElement('button');help.className='text-button';help.textContent='Setup help';help.onclick=setup;$('#quest .detail-content').append(help);
+    };
     const note=$('#live-note'),info=$('#live-detail');
     if(note){note.hidden=state!=='stale';note.textContent=staleInfo?(staleInfo.updated?'Last update '+staleInfo.updated:'No update yet')+' · '+staleInfo.reason:'';}
     if(info){info.hidden=state!=='stale';info.textContent=staleInfo?staleLines().slice(0,3).join(' '):'';}
@@ -475,10 +478,18 @@
       $('#issues').setAttribute('aria-label',text);$('#issues').onclick=$('#connection').onclick;
     }
   }
+  function setup() {
+    detail(['If Quest cannot load your data, check that Hermes is running and you are signed in, then retry.',
+      'Using a custom Hermes folder? Point Quest to that folder using the Custom Hermes home instructions in the README, then restart Hermes.',
+      'Live updates retry automatically every 10 seconds. Saved history does not update itself.'],'Setup');
+    const content=$('#quest .detail-content'),button=document.createElement('button');button.className='text-button';button.textContent='Technical details';
+    button.onclick=()=>{button.disabled=true;line(content,'Set HERMES_QUEST_CONFIG to your Quest JSON config file. Set hermes_home in that file to your Hermes folder. See README → Custom Hermes home for the config example.');};content.append(button);
+  }
   function legend() {
     const labels={'play':'Play — Resume replay','pause':'Pause — Pause replay','live-follow':'Follow live — Follow the newest live update','speed':'Replay speed: 30× / 120× / 600× — Playback speed relative to real time','clock':'Replay time — Current time in the selected replay','scrub-start':'Oldest saved event — Start of retained history','scrub-end':'Latest saved event — End of retained history; not necessarily live','world':'World locations — Select a location to focus the camera','calm':'Reduce effects — Reduce motion and flashes','quests':'Campaigns — Open grouped quests','log':'Activity log — Open recent retained events','close':'Close — Close the current panel or dialog','info':'Help — Open this icon guide','demo':'Sample data — Fictional example data','connected':'Connected — Live data source is reachable','offline':'Offline — Live source is not reachable','snapshot':'Saved history — Saved replay data; not live','loading':'Loading — Waiting for data','mana-claude':'Claude simulated mana — Game-only meter; not a Claude quota','mana-codex':'Codex simulated mana — Game-only meter; not a Codex quota','mana-gemini':'Gemini simulated mana — Game-only meter; not a Gemini quota','heart':'Hero health: not available — Heroes do not have a health meter','mana':'Simulated mana — not a real quota','level':'Effect level from effort, not XP — Glow reflects reasoning effort','coin':'Completed quests — Coin animation marks observed quest completion','plan':'Plan stage — Quest planning stage','build':'Build stage — Quest implementation stage','test':'Test stage — Quest testing stage','review':'Review stage — Quest review stage','deploy':'Deploy stage — Quest release/deployment stage','verify':'Verify stage — Quest verification stage','chain':'Waiting on a dependency — Another required Quest must finish first','sleep':'Resting — Idle animation; no work progress is implied','sword':'Attack from observed work — Combat represents observed activity; not a separate action','crit':'Critical attack effect — Visual only; does not change actual Quest state','read':'Read — Reading activity','search':'Search — Search activity','vision':'View image — Image inspection activity','write':'Write — Writing activity','memory':'Memory — Memory activity','message':'Message — Details may be privacy-filtered','delegate':'Delegate — Work handed to another agent','commit':'Commit work — Save a change in version control','push':'Push work — Send a change to a remote repository','merge':'Merge work — Combine a change into another branch','compress':'Compress context — Context compression activity'};
     detail([], 'Help');const content=$('#quest .detail-content');
     line(content,'Heroes are workers. Quests are tasks. Select either for details. Saved history is not live. Quest titles may be hidden by privacy settings. Villagers are decorative scenery, not workers or quests.');
+    const help=document.createElement('button');help.className='text-button';help.textContent='Setup';help.onclick=setup;content.append(help);
     for(const id of I.ids){const row=document.createElement('div');row.className='legend-row';content.append(row);
       const im=iconImage(id),c=document.createElement('canvas');c.width=im.width;c.height=im.height;c.setAttribute('aria-hidden','true');c.getContext('2d').drawImage(im,0,0);row.append(c);
       line(row,labels[id]||id);}
@@ -521,6 +532,6 @@
     });
     addEventListener('resize',resize);resize();
   }
-  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,selected,sceneOverflow,placeOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,privacy,drawer,feed,camps,plain,
+  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,selected,sceneOverflow,placeOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,setup,privacy,drawer,feed,camps,plain,
     diagnostics:()=>({grid,epoch,reserved,drawn})};
 })(window);

@@ -164,7 +164,7 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  const labels=[],old=UIPanels.screenLabel;UIPanels.screenLabel=(s,...args)=>{labels.push(s);old(s,...args);};draw();UIPanels.screenLabel=old;
  // Trigger one source-aged hit for the visible disclosure oracle.
  apply({...e,id:'action-four'},true);update(.01);update(.3);UIPanels.screenLabel=(s,...args)=>{labels.push(s);old(s,...args);};draw();UIPanels.screenLabel=old;
- return {total:last,contacts,labels};});assert.equal(r.total,3);assert.equal(r.contacts.length,3);for(let i=1;i<r.contacts.length;i++)assert(r.contacts[i]-r.contacts[i-1]>=.8);assert(r.labels.some(s=>/^Observed action · \d+s ago$/.test(s)));
+ return {total:last,contacts,labels};});assert.equal(r.total,3);assert.equal(r.contacts.length,3);for(let i=1;i<r.contacts.length;i++)assert(r.contacts[i]-r.contacts[i-1]>=.8);assert(r.labels.some(s=>/^Bot acted \d+s ago$/.test(s)));
  });
  for(const contacted of [false,true])await check('R3 late batch sorts uncontacted work; completed contact immutable '+contacted,async()=>{
  const r=await page.evaluate(contacted=>{const row=S.work.active()[0];liveFeed=true;following=true;S.play=true;S.speed=1;

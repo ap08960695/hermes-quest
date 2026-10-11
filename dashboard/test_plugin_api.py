@@ -169,7 +169,7 @@ class QuestAPItests(unittest.TestCase):
         response = self.client.get(PREFIX + "/replay")
         self.assertEqual(response.status_code, 503)
         detail = response.json()['detail']
-        self.assertEqual(detail, 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)')
+        self.assertEqual(detail, "Hermes Quest can't read your Hermes data. Retry, or open Help → Setup if you use a custom Hermes folder.")
         for path in ('/private/path/secret', str(self.root), '/', '\\'):
             self.assertNotIn(path, detail)
 

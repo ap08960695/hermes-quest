@@ -144,12 +144,23 @@ const server=http.createServer((req,res)=>{
  for(let i=0;i<wrapped.drawn.length;i++){const a=wrapped.drawn[i];assert(a.left>=0&&a.right<=width&&a.top>=0&&a.bottom<=height);for(let j=i+1;j<wrapped.drawn.length;j++){const b=wrapped.drawn[j];assert(!(a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top),'long labels overlap');}}
  await privacy();await page.screenshot({path:path.join(out,engine+'-'+width+'-long.png')});
  await page.evaluate(()=>document.querySelector('#working-toggle').click());await page.evaluate(()=>draw());await privacy();
+ assert(await page.locator('#working-guide').isVisible());
+ await page.locator('#working-choose').click();
+ assert.equal(await page.locator('#character-heading').textContent(),'Choose a Hero or Quest');
+ const choices=await page.locator('#character-content button').count();assert(choices>=2,'all names remain reachable');
+ await page.locator('#character-content button').first().click();await page.evaluate(()=>draw());
+ assert((await page.locator('#scene-selected').getAttribute('aria-label')).includes('Hero'),'chooser points to selected hero');
+ await privacy();await page.screenshot({path:path.join(out,engine+'-'+width+'-show-all-selected.png')});
  const crowd={meta:{from_:0,to:600,show_titles:false,source:'demo'},bots:[],events:[],tasks:Array.from({length:18},(_,i)=>({id:'synthetic-private-quest-'+i,title:secret[0],stage:'BUILD',campaign:secret[3]}))};await load(crowd);
  await page.evaluate(()=>{reset(0);for(const row of D.tasks)spawnMonster(task(row.id),'forge');const [x,y]=plazaOf('forge').center;Object.assign(cam,{x,tx:x,y:y-40,ty:y-40,zi:1});S.play=true;S.speed=1;for(let i=0;i<9000;i++)update(1/60);S.play=false;resize();draw();});assert((await page.locator('#scene-overflow').textContent()).includes('+6'));await page.locator('#scene-overflow button').click();assert.equal(await page.locator('#quest .item-summary').count(),18);
  await page.locator('#quest .item-summary').nth(17).locator('button').click();await page.evaluate(()=>draw());assert.equal(await page.locator('#scene-selected').getAttribute('aria-label'),'Selected Build quest #18');await privacy();
  await page.waitForTimeout(200);await page.evaluate(()=>draw());await page.screenshot({path:path.join(out,engine+'-'+width+'-crowd.png')});
  const empty={meta:{from_:0,to:600,show_titles:false,source:'demo'},tasks:[],bots:[],events:[],working:{as_of:600,items:[],resting_count:0,latest_order:null,progress:{wins_today:0,xp:0,gold:0,level:1,level_progress:0}}};await load(empty);await page.evaluate(()=>{resize();draw();});
  const e=await measure();assert.equal(e.camera.x,await page.evaluate(()=>W.size[0]/2));assert.equal(e.camera.y,await page.evaluate(()=>W.size[1]/2));assert(e.labels.includes('No active quests'));
+  assert(await page.locator('#empty-note').isVisible());const emptyCopy=await page.locator('#empty-note').textContent();assert(emptyCopy.includes('No quests yet'));assert(emptyCopy.includes('Start a task in Hermes Kanban'));
+  await load({...empty,working:undefined});await page.evaluate(()=>draw());assert(await page.locator('#empty-note').isVisible(),'legacy empty also has next action');
+  await load(fixture());assert(await page.locator('#empty-note').isHidden(),'new tasks clear empty message');
+  await load(empty);
  await page.waitForTimeout(200);await page.evaluate(()=>draw());await page.screenshot({path:path.join(out,engine+'-'+width+'-empty.png')});
  });
  await check('first-load 503 has functional Retry',async()=>{
@@ -157,7 +168,13 @@ const server=http.createServer((req,res)=>{
  await errorPage.route('**/api/plugins/hermes-quest/replay?**',r=>fails?r.fulfill({status:503,json:{detail:'secret-token-never-display'}}):r.fulfill({json:{...fixture(),cursor:'synthetic'}}));
  await errorPage.route('**/api/plugins/hermes-quest/events?**',r=>r.fulfill({json:{state:'online',events:[],tasks:[],bots:[],cursor:'synthetic'}}));
  await errorPage.goto('http://127.0.0.1:'+server.address().port+'/?live=1');await errorPage.waitForSelector('#quest-load-error button');assert((await errorPage.locator('#quest-load-error').textContent()).includes("Couldn't load Quest data (503)"));
- assert(!(await errorPage.locator('body').textContent()).includes('secret-token-never-display'));fails=false;await errorPage.locator('#quest-load-error button').click();await errorPage.waitForFunction(()=>typeof loop.last==='number');assert.equal(await errorPage.locator('#quest-load-error').count(),0);await errorPage.close();
+ assert(!(await errorPage.locator('body').textContent()).includes('secret-token-never-display'));
+ assert(!(await errorPage.locator('body').textContent()).includes('HERMES_QUEST_CONFIG'));
+ await errorPage.screenshot({path:path.join(out,engine+'-initial-error.png')});
+ await errorPage.getByRole('button',{name:'Setup help',exact:true}).click();assert.equal(await errorPage.locator('#dialog-heading').textContent(),'Setup');
+ assert(!(await errorPage.locator('#quest').textContent()).includes('HERMES_QUEST_CONFIG'));
+ await errorPage.getByRole('button',{name:'Technical details',exact:true}).click();assert((await errorPage.locator('#quest').textContent()).includes('hermes_home'));
+ await errorPage.locator('#quest .close').click();fails=false;await errorPage.getByRole('button',{name:'Retry',exact:true}).click();await errorPage.waitForFunction(()=>typeof loop.last==='number');assert.equal(await errorPage.locator('#quest-load-error').count(),0);await errorPage.close();
  });
  records.push({engine,name:'no page errors',pass:errors.length===0,errors});
  }finally{await browser.close();}

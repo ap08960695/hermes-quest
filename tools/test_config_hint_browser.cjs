@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),assert=require('node:asser
 const engine=process.argv[2]||'chromium';
 const browserType=require('playwright')[engine];
 const html=fs.readFileSync(path.join(__dirname,'../index.html'),'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi,'');
-const hint='Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME)';
+const hint="Hermes Quest can't read your Hermes data. Retry, or open Help → Setup if you use a custom Hermes folder.";
 (async()=>{
   const browser=await browserType.launch({headless:true});
   try {
