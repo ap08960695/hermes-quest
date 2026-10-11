@@ -86,9 +86,9 @@ async function runViewport(browser, base, vp) {
   try {
     // data/demo.json is the default feed; the boot code reports a load failure only via this banner.
     await page.goto(`${base}/index.html`, {waitUntil: 'load'});
-    await page.waitForFunction(() => /^(Replay file|Unable to load data)/.test(document.querySelector('#connection')?.getAttribute('aria-label')||''), null, {timeout: 30000});
+    await page.waitForFunction(() => /^(Sample data|Couldn't load Quest data)/.test(document.querySelector('#connection')?.getAttribute('aria-label')||''), null, {timeout: 30000});
     const state = await page.locator('#connection').getAttribute('aria-label');
-    if (state !== 'Replay file normal') problems.push(`boot did not reach file/demo mode (connection label "${state}")`);
+    if (state !== 'Sample data normal') problems.push(`boot did not reach sample mode (connection label "${state}")`);
     await page.waitForFunction(() => /^Replay time: \d/.test(document.querySelector('#clock')?.getAttribute('aria-label') || ''), null, {timeout: 30000});
     // Let the scene draw: clock must advance (loop is running) and a few frames must pass.
     const first = await clock();
@@ -175,13 +175,17 @@ async function runLoadStates(browser,base) {
         check((await page.locator('#connection').getAttribute('aria-label')).includes('Loading'),'Loading confused with empty');
         await page.click('#menu-toggle');check(await page.locator('#menu').isVisible(),'Loading Menu unavailable');release();
       } else if(state==='error'){
-        await page.waitForFunction(()=>document.querySelector('#issues').textContent==='Unable to load data · reload to retry');
-        check((await page.locator('#connection').getAttribute('aria-label')).includes('Unable to load data'),'Error confused with empty');
-        await page.click('#issues');check((await page.locator('#quest').textContent()).includes('Unable to load data'),'Boot error details unavailable');
+        await page.waitForFunction(()=>document.querySelector('#issues').textContent==="Couldn't load Quest data (503)");
+        check((await page.locator('#connection').getAttribute('aria-label')).includes("Couldn't load Quest data (503)"),'Error confused with empty');
+        check((await page.locator('#quest-load-error').textContent()).includes("Couldn't load Quest data (503)"),'Boot error details unavailable');
+        await page.unroute('**/data/demo.json');await page.route('**/data/demo.json',route=>route.fulfill({json:demo}));
+        await page.locator('#quest-load-error').getByRole('button',{name:'Retry',exact:true}).click();
+        await page.waitForFunction(()=>typeof loop.last==='number');
+        check(await page.locator('#quest-load-error').count()===0,'Retry did not remove initial error');
       } else {
         await page.waitForFunction(()=>typeof loop.last==='number');
         await page.click('#menu-toggle');await page.click('#group-overview > summary');
-        check((await page.locator('#overview-summary').textContent()).includes(state==='empty'?'No tasks in this replay range':'No active work'),'Empty/idle labels confused');
+        check((await page.locator('#overview-summary').textContent()).includes(state==='empty'?'No active quests':'0 active quests'),'Empty/idle labels confused');
       }
       check(errors.length===0,errors.join('; '));
     } finally {release();await ctx.close();}
@@ -261,8 +265,9 @@ async function runLiveStale(browser,base) {
   const reasonFor=failure=>failure===401?'sign-in needed':typeof failure==='number'&&failure<500?'server rejected':failure==='network'?'offline':'server error';
   const checkStale=(v,failure,message)=>{
     const reason=reasonFor(failure),hint=failure===503?' · '+configHint:'';
+    const failureText=typeof failure==='number'&&failure>=500?'Server error ('+failure+')':failure==='network'?'Offline':reason;
     check(v.stale&&/ · Live paused$/.test(v.mode||'')&&new RegExp('^Last update \\d\\d:\\d\\d · '+reason+'$').test(v.note||'')&&
-      v.issues==='Live paused · not updating · '+v.note.replace(/^Last update/,'last update')+hint,message+': '+JSON.stringify(v));
+      v.issues==='Stale data · live updates paused · Last successful update: '+v.note.slice('Last update '.length).split(' · ')[0]+' · '+failureText+hint+' · Retrying in 10 sec',message+': '+JSON.stringify(v));
   };
   for(const [width,height] of [[1280,800],[375,667],[320,568]]){
     const ctx=await browser.newContext({viewport:{width,height}}),page=await ctx.newPage(),errors=[];let mode='ok',seq=0;
@@ -291,7 +296,7 @@ async function runLiveStale(browser,base) {
       const cursorBefore=online.boundary;let v;
       for(let n=1;n<=2;n++){
         await poll(503);v=await view();
-        check(v.issues===configHint&&!v.note&&!v.stale&&v.failures===n&&/ · Offline$/.test(v.mode||''),'failure '+n+' guidance/stale threshold: '+JSON.stringify(v));
+        check(v.issues==='Server error (503) · '+configHint+' · retrying in 10 sec'&&!v.note&&!v.stale&&v.failures===n&&/ · Server error \(503\)$/.test(v.mode||''),'failure '+n+' guidance/stale threshold: '+JSON.stringify(v));
         check(v.boundary===cursorBefore&&v.state===online.state&&!/resumed/i.test(v.announce),'transient failure reset playback/cursor or announced recovery');
       }
       await poll(503);v=await view();
@@ -340,9 +345,9 @@ async function runLiveStale(browser,base) {
       checkStale(v,503,'4xx->503 lost warning');
       check(!/resumed/i.test(v.announce),'4xx->503 announced recovery');
       await poll('ok');await poll(503);v=await view();
-      check(v.issues===configHint&&!v.note&&!v.stale&&v.failures===1,'fresh transient 1 guidance/threshold: '+JSON.stringify(v));
-      await poll(500);v=await view();check(v.issues==='Offline · retrying in 10s'&&!v.note&&!v.stale&&v.failures===2,'fresh transient 2 not quiet');
-      await poll('network');v=await view();check(/^Live paused/.test(v.issues||'')&&!!v.note,'fresh transient 3 not stale');
+      check(v.issues==='Server error (503) · '+configHint+' · retrying in 10 sec'&&!v.note&&!v.stale&&v.failures===1,'fresh transient 1 guidance/threshold: '+JSON.stringify(v));
+      await poll(500);v=await view();check(v.issues==='Server error (500) · retrying in 10 sec'&&!v.note&&!v.stale&&v.failures===2,'fresh transient 2 not quiet');
+      await poll('network');v=await view();check(/^Stale data/.test(v.issues||'')&&!!v.note,'fresh transient 3 not stale');
       await poll('ok');
       // Hidden-tab behaviour is unchanged: no poll and no scheduling while hidden.
       const hidden=await page.evaluate(async()=>{Object.defineProperty(document,'hidden',{configurable:true,get:()=>true});
@@ -502,7 +507,7 @@ async function runSceneTruth(browser,base) {
   const check=(ok,msg)=>{if(!ok)throw new Error(msg);};
   try {
     await page.goto(base+'/',{waitUntil:'load'});
-    await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Replay file normal',null,{polling:100});
+    await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Sample data normal',null,{polling:100});
     await page.evaluate(()=>{reset(0);
       // Hold idle social timers for this standing fixture, not product behavior:
       // all 25 entities must settle in their assigned yards, not wander out of
@@ -568,7 +573,7 @@ async function runSceneTruth(browser,base) {
         await members.nth(i).locator('button').click();
         const id=await page.evaluate(()=>selectedScene);check(id===`synthetic-crowd-${i}`,'wrong or missing selected identity');
         check(await page.locator('#quest .item-summary').count()===0,'Details did not leave the pick-list');
-        check((await page.locator('#quest').textContent()).includes('Task '+(i+1)),'wrong selected task label');
+        check((await page.locator('#quest').textContent()).includes('Build quest #'+(i+1)),'wrong selected quest label');
         check(!(await page.locator('#quest').evaluate(el=>el.outerHTML)).includes(id),'raw task ID in private Details');opened.add(id);
         await page.evaluate(()=>draw());const hidden=await page.evaluate(()=>Object.values(S.tasks).filter(t=>overflowed(t)&&t.id!==selectedScene).length);
         check((await badge.textContent()).includes('+'+hidden),'badge counts a selected visible representative as hidden');
@@ -608,7 +613,7 @@ async function runHeroInspect(browser,base,vp) {
     const p=picks.find(p=>p.id==='child'),x=(p.body.left+p.body.right)/2,y=(p.body.top+p.body.bottom)/2;
     await page.touchscreen.tap(x,y);
     check(await page.locator('#character-content button').count()===2,'overlap exposes both characters');
-    await page.getByRole('button',{name:'Child',exact:true}).click();
+    await page.getByRole('button',{name:'Hero · Child',exact:true}).click();
     await page.evaluate(()=>{followCharacter(1);draw();});
     check((await page.locator('#character-content').innerText()).includes('Parent: Root'),'child resolves explicit session parent');
     const geometry=await page.evaluate(()=>{
@@ -818,7 +823,7 @@ async function runInspectionRegressions(browser,base,vp) {
         draw();const p=inspect.picks.find(p=>p.type==='hero'&&p.id==='child'),c=$('#character-card').getBoundingClientRect(),bar=$('#focus-bar').getBoundingClientRect();
         rows.push({stale,zoom,actualZoom:cam.zi,pose,body:p?.body,card:c.toJSON(),bar:bar.toJSON(),
           clear:!!p&&clear(p.body,c)&&clear(p.body,bar)&&p.body.left>=8&&p.body.top>=8&&p.body.right<=innerWidth-8&&p.body.bottom<=innerHeight-8,
-          warning:!stale||(!$('#issues').hidden&&!$('#live-note').hidden&&$('#issues').textContent.includes('Live paused')),
+          warning:!stale||(!$('#issues').hidden&&!$('#live-note').hidden&&$('#issues').textContent.includes('Stale data')),
           zoomDisclosed:cam.zi===zoom||$('#character-content').textContent.includes('Zoom adjusted to fit this screen.')});
       }
       return rows;

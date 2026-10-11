@@ -101,8 +101,11 @@
     x=Math.round(x-im.width/2);y=Math.round(y-im.height);
     if(pin){x=Math.round(Math.max(8,Math.min(innerWidth-im.width-8,x)));
       y=Math.round(Math.max(($('#focus-bar')?.getBoundingClientRect().bottom||0)+12,Math.min(innerHeight-im.height-8,y)));}
-    for(let lane=0;lane<(pin?4:1);lane++){
-      const top=y+lane*18;if(fits(x-2,top-2,im.width+4,im.height+4)){image(im,x,top);break;}}
+    // System/Unicode fallback labels can be taller than the bitmap's 18px lane.
+    // Try above as well as below the anchor; adjacent full names must not disappear.
+    const lanes=pin?[0,1,-1,2,-2,3,-3]:[0],step=Math.max(18,im.height+4);
+    for(const lane of lanes){
+      const top=y+lane*step;if(fits(x-2,top-2,im.width+4,im.height+4)){image(im,x,top);break;}}
   }
   let overflowKey='',overflowGroups=[];
   function selected(label,id='quests') {
@@ -258,7 +261,7 @@
     for(const text of lines)line(content,text);bounds();
   }
   const groups=['playback','overview','world','settings'], preferenceKey='quest-menu-v1';
-  let overviewKey='', overviewData=null, lastFeed=[], lastCamps=[], allFeed=false, allCamps=false;
+  let overviewKey='', overviewData=null, lastFeed=[], lastCamps=[], feedOptions={}, campOptions={}, allFeed=false, allCamps=false;
   let connectionState='loading', connectionText='Loading…', sourceMode='Loading', staleInfo=null;
   function savePreference() {
     const value={menu:!$('#menu').hidden,groups:Object.fromEntries(groups.map(id=>[id,!!$('#group-'+id).open]))};
@@ -327,7 +330,7 @@
     badge.onclick=()=>detail([data.blocked+' blocked quests',...data.errors,
       ...(down?[connectionText,...staleLines()]:[]),
       ...data.tasks.filter(t=>t.blocked).map(t=>t.summary),'Open Overview for permitted quest details.'],'Issues');
-    $('#overview-summary').textContent=data.summary;
+    $('#overview-summary').textContent=[data.summary,...panelStaleLines(data)].join(' · ');
     if($('#menu').hidden||!$('#group-overview').open)return;
     const key=JSON.stringify([data.summary,data.tasks.map(t=>[t.key,t.summary,t.completed]),data.heroes.map(h=>[h.key,h.summary])]);
     if(key===overviewKey)return;overviewKey=key;
@@ -348,7 +351,7 @@
     const work=$('#working-panel');if(work){work.hidden=true;$('#working-rows').replaceChildren();$('#working-order').textContent='';$('#working-rewards').textContent='';}
     selected(null);presentationKeys.clear();
     sceneOverflow([]);
-    epoch++;T.clearCache();numbers.clear();sceneLabels.clear();feedKey='';campKey='';overviewKey='';overviewData=null;lastFeed=[];lastCamps=[];
+    epoch++;T.clearCache();numbers.clear();sceneLabels.clear();feedKey='';campKey='';overviewKey='';overviewData=null;lastFeed=[];lastCamps=[];feedOptions={};campOptions={};
     close();$('#quest').replaceChildren();$('#tasks-list').replaceChildren();$('#heroes-list').replaceChildren();
     $('#overview-summary').textContent='Loading activity…';$('#issues').hidden=true;$('#issues').onclick=null;
     $('#tasks-all').onclick=$('#heroes-all').onclick=null;
@@ -361,15 +364,22 @@
     return open;
   }
   let feedKey='',campKey='';
-  function feed(entries) {
-    lastFeed=entries;if($('#chron').hidden)return;
+  function panelStaleLines(options) {
+    if(!options?.stale)return [];
+    const info=options.staleInfo||{};
+    return ['Stale data · live updates paused',info.updated?'Last successful update: '+info.updated:'No successful update yet',
+      'Reason: '+(info.reason||'update failed'),'Retrying in '+(info.retrySeconds||10)+' sec'];
+  }
+  function feed(entries,options={}) {
+    lastFeed=entries;feedOptions=options;if($('#chron').hidden)return;
     const filter=$('#feed-filter').value||'all',issue=f=>f.issue===true||/⛓|💀|💥|Blocked|Failed|Unavailable/i.test(f.text);
     const selected=entries.filter(f=>filter==='all'||(filter==='issues'?issue(f):!issue(f)));
-    const key=JSON.stringify([selected,allFeed,filter]);if(key===feedKey)return;feedKey=key;const el=$('#feed');el.replaceChildren();
+    const key=JSON.stringify([selected,allFeed,filter,options]);if(key===feedKey)return;feedKey=key;const el=$('#feed');el.replaceChildren();
+    for(const text of panelStaleLines(options))line(el,text);
     const shown=selected.slice(0,allFeed?selected.length:5);
-    if(!shown.length)line(el,'No activity for this filter in saved history');
+    if(!shown.length)line(el,options.loading?'Loading activity…':options.empty||'No activity for this filter in saved history');
     for(const f of shown){const row=document.createElement('section');el.append(row);line(row,f.text);
-      button(row,'Details',()=>detail([f.detailText||f.text,'Activity from the current retained replay history'],'Activity details'));}
+      button(row,'Details',()=>detail([f.detailText||f.text,...panelStaleLines(feedOptions),'Activity from the current retained replay history'],'Activity details'));}
     $('#feed-all').textContent=allFeed?'Show recent activity':'View all activity';
   }
   function campaignCount(parent,value) {
@@ -378,9 +388,10 @@
     row.textContent=match?match[1]+' of '+match[2]+' quests complete'+(match[3]===undefined?'':' · '+match[3]+' observed attacks'):text||'Quest count: unavailable';
     row.setAttribute('aria-label',row.textContent);parent.append(row);
   }
-  function camps(rows) {
-    lastCamps=rows;if($('#camp').hidden)return;
-    const key=JSON.stringify([rows,allCamps]);if(key===campKey)return;campKey=key;const el=$('#camps');el.replaceChildren();
+  function camps(rows,options={}) {
+    lastCamps=rows;campOptions=options;if($('#camp').hidden)return;
+    const key=JSON.stringify([rows,allCamps,options]);if(key===campKey)return;campKey=key;const el=$('#camps');el.replaceChildren();
+    for(const text of panelStaleLines(options))line(el,text);
     if(!rows.length)line(el,'No campaigns in this replay range');
     for(const r of rows.slice(0,allCamps?rows.length:3)) {
       const section=document.createElement('section');section.className='campaign';el.append(section);
@@ -388,7 +399,7 @@
       const pips=document.createElement('div');pips.className='pips';section.append(pips);
       for(const p of r.stages){const name=document.createElement('span');name.textContent=p.id+' stage: '+p.state;pips.append(name);}
       if(r.blocked)line(section,r.blocked);
-      button(section,'Details',()=>detail([r.title,section.querySelector('.campaign-count').textContent,...r.stages.map(p=>p.id+' stage: '+p.state),r.blocked||'No blocked quests observed'],'Campaign details'));
+      button(section,'Details',()=>detail([r.title,section.querySelector('.campaign-count').textContent,...r.stages.map(p=>p.id+' stage: '+p.state),r.blocked||'No blocked quests observed',...panelStaleLines(campOptions)],'Campaign details'));
     }
     $('#camps-all').textContent=allCamps?'Show recent campaigns':'View all campaigns';
   }
@@ -416,13 +427,13 @@
   function staleLines() {
     return staleInfo?['Live updates are paused: the latest data could not be loaded.',
       staleInfo.updated?'Last successful update: '+staleInfo.updated+'.':'No successful update yet.','Reason: '+staleInfo.reason+'.',
-      'The game keeps running on the data it already has and returns to Live by itself after one successful update.']:[];
+      'Retrying in '+(staleInfo.retrySeconds||10)+' sec.','The game keeps running on the data it already has and returns to Live by itself after one successful update.']:[];
   }
   function status(text,state,extra) {
     const was=connectionState;
-    connectionState=state;connectionText=text;staleInfo=state==='stale'?(extra||{updated:null,reason:'update failed'}):null;mode(sourceMode);
+    connectionState=state;connectionText=text;staleInfo=state==='stale'?(extra||{updated:null,reason:'update failed'}):null;mode(extra?.source||sourceMode);
     control('#connection',({online:'connected',file:'snapshot',stale:'offline'})[state]||state,text,state==='offline'||state==='stale'?'alert':'normal');
-    $('#connection .control-name').textContent=({loading:'Loading',online:'Connected',file:'Data source',snapshot:'Live paused',offline:'Offline',stale:'Live paused'})[state]||'Connection details';
+    $('#connection .control-name').textContent=state==='offline'&&extra?.status?'Server error ('+extra.status+')':({loading:'Loading',online:'Connected',file:'Data source',snapshot:'Live paused',offline:'Offline',stale:'Live paused'})[state]||'Connection details';
     $('#connection').title=text;
     $('#connection').onclick=()=>detail([sourceMode+' data source',connectionText,...staleLines(),
       'Playback and live-follow are separate from connection status.','Live updates poll about every 10 seconds while this browser page is visible.'],'Connection details');
@@ -467,9 +478,9 @@
     const filter=document.createElement('select');filter.id='feed-filter';filter.setAttribute('aria-label','Activity');
     for(const [value,text] of [['all','All'],['work','Work'],['issues','Issues']]){const o=document.createElement('option');o.value=value;o.textContent=text;filter.append(o);}
     filter.value='all';$('#feed-filter-slot').append(filter);
-    filter.onchange=()=>feed(lastFeed);
-    $('#feed-all').onclick=()=>{allFeed=!allFeed;feed(lastFeed);};
-    $('#camps-all').onclick=()=>{allCamps=!allCamps;camps(lastCamps);};
+    filter.onchange=()=>feed(lastFeed,feedOptions);
+    $('#feed-all').onclick=()=>{allFeed=!allFeed;feed(lastFeed,feedOptions);};
+    $('#camps-all').onclick=()=>{allCamps=!allCamps;camps(lastCamps,campOptions);};
     let saved={};try {saved=JSON.parse(root.localStorage.getItem(preferenceKey))||{};} catch (_) { /* Default canvas-first. */ }
     for(const id of groups){const group=$('#group-'+id);group.open=saved.groups?.[id]===true;
       group.ontoggle=()=>{savePreference();bounds();if(overviewData)overview(overviewData);};}

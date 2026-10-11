@@ -7,11 +7,11 @@ module.exports = function loadUI(box, el) {
     const attrs = new Map(), children = [];
     const value = {tagName: tag.toUpperCase(), dataset: {}, style: {setProperty: noop}, children,
       hidden: false, isConnected: true, clientWidth: 320, className: '',
-      classList: {toggle: noop, contains: name => value.className.split(' ').includes(name)},
+      classList: {toggle: noop, add: name => {value.className += ' '+name;}, contains: name => value.className.split(' ').includes(name)},
       setAttribute: (key, text) => attrs.set(key, String(text)),
       getAttribute: key => attrs.get(key) ?? null,
       removeAttribute: key => attrs.delete(key),
-      getContext: () => ({save: noop, restore: noop, fillRect: noop, drawImage: noop}),
+      getContext: () => ({save: noop, restore: noop, fillRect: noop, drawImage: noop, fillText: noop, measureText: text => ({width: String(text).length*8})}),
       append: (...items) => children.push(...items),
       replaceChildren: (...items) => {children.splice(0, children.length, ...items);},
       querySelector: selector => {
@@ -20,7 +20,7 @@ module.exports = function loadUI(box, el) {
         return null;
       },
       getBoundingClientRect: () => ({left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0}),
-      focus: noop, setPointerCapture: noop, cloneNode: () => node(tag)};
+      focus: noop, remove: noop, scrollIntoView: noop, setPointerCapture: noop, cloneNode: () => node(tag)};
     Object.defineProperty(value, 'firstChild', {get: () => children[0] ?? null});
     return value;
   }
@@ -31,6 +31,7 @@ module.exports = function loadUI(box, el) {
     return value;
   };
   box.document.createElement = node;
+  if(!box.document.body.append)Object.assign(box.document.body,node('body'));
   box.document.addEventListener = noop;
   box.document.documentElement = node();
   box.document.baseURI = 'https://example.org/';
@@ -45,9 +46,9 @@ module.exports = function loadUI(box, el) {
   return state => {
     const label = el('#connection').getAttribute('aria-label');
     if (state === 'offline' && label === 'Quest data is unavailable: set HERMES_QUEST_CONFIG with hermes_home (see README › Custom HERMES_HOME) alert') return true;
-    return label === ({
-    file: 'Replay file normal', online: 'Connected · 10s normal',
-    offline: 'Offline · retrying in 10s alert'
-    })[state];
+    if(state==='file')return ['Sample data normal','Saved history (not live) normal'].includes(label);
+    if(state==='online')return label==='Connected normal';
+    if(state==='offline')return /^(?:Offline|update failed|Server error \(\d+\)(?: · Quest data is unavailable: .+)?) · retrying in 10 sec alert$/.test(label);
+    return false;
   };
 };

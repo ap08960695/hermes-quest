@@ -28,7 +28,8 @@ const server=http.createServer((req,res)=>{
           });
           await page.route('**/data/demo.json',route=>route.fulfill({json:{meta:{from_:0,to:600,show_titles:false},bots:[],tasks:[],events:[]}}));
           await page.goto('http://127.0.0.1:'+server.address().port+'/',{waitUntil:'load'});
-          await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Replay file normal',null,{polling:50});
+          await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Saved history (not live) normal',null,{polling:50});
+          await page.locator('#hint-dismiss').click();
           await page.evaluate(()=>{
             window.__drawnText=[];for(const method of ['bitmap','draw']){const original=UIText[method];UIText[method]=function(...args){window.__drawnText.push(String(args[method==='draw'?1:0]));return original.apply(this,args);};}
             window.__labels=[];const label=UI.screenLabel;UI.screenLabel=(...args)=>{const n=UI.diagnostics().drawn.length;label(...args);window.__labels.push({text:args[0],drawn:UI.diagnostics().drawn.length>n});};
@@ -47,7 +48,7 @@ const server=http.createServer((req,res)=>{
               return {label:el.getAttribute('aria-label'),visible:!el.hidden&&r.width>0&&r.height>0,left:r.left,right:r.right,top:r.top,bottom:r.bottom,
                 width:innerWidth,height:innerHeight,ink:pixels?Array.from(pixels).filter((_,i)=>i%4===3&&pixels[i]>0).length:0};
             });
-            assert.equal(value.label,'Selected '+label);assert(value.visible&&value.ink>0,'selected representative is blank/hidden');
+            assert.equal(value.label,label.startsWith('Hero ')?'Selected Hero · '+label:'Selected '+label);assert(value.visible&&value.ink>0,'selected representative is blank/hidden');
             assert(value.left>=0&&value.right<=value.width&&value.top>=0&&value.bottom<=value.height,'selected representative clipped');
             return value;
           };
@@ -58,10 +59,10 @@ const server=http.createServer((req,res)=>{
             await page.locator('#quest .item-summary').nth(i).locator('button').click();
             const state=await page.evaluate(()=>({selected:selectedScene,slot:S.tasks[selectedScene].placement.k,world:JSON.stringify(S.tasks)}));
             assert.equal(state.selected,'t_'+i.toString(16).padStart(32,'0'));
-            selections.push(await representative('Task '+(i+1)));
+            selections.push(await representative('Build quest #'+(i+1)));
             assert.equal(await page.evaluate(()=>JSON.stringify(S.tasks)),state.world,'render changed simulation state');
             assert.match(await page.locator('#scene-overflow').textContent(),state.slot>=12?/\+5/:/\+6/);
-            await page.waitForFunction(()=>Array.from(document.querySelectorAll('#quest .bitmap-row')).every(row=>row.querySelector('canvas')),null,{polling:50});await privateSafe();
+            await page.waitForFunction(()=>Array.from(document.querySelectorAll('#quest .bitmap-row')).every(row=>row.querySelector('canvas')||row.querySelector('.detail-text')?.getBoundingClientRect().height>0),null,{polling:50});await privateSafe();
             if(out&&i===17)await page.screenshot({path:path.join(out,`${engine}-${width}-selected-overflow.png`)});
             await page.locator('#quest .close').click();
           }
@@ -74,9 +75,9 @@ const server=http.createServer((req,res)=>{
             },heroes);
             assert((await page.evaluate(()=>S.heroes[selectedScene].path.length))>1);
             await representative('Hero '+heroes);
-            if(heroes===1){const labels=await page.evaluate(()=>window.__labels);assert.equal(labels[0].text,'Hero 1','region allocated before selected label');}
+            if(heroes===1){const labels=await page.evaluate(()=>window.__labels);assert.equal(labels[0].text,'Hero · Hero 1','region allocated before selected label');}
             await page.evaluate(()=>{const h=S.heroes[selectedScene];h.path=[];heroDialog(h);window.__labels=[];draw();});
-            await page.waitForFunction(()=>Array.from(document.querySelectorAll('#quest .bitmap-row')).every(row=>row.querySelector('canvas')),null,{polling:50});
+            await page.waitForFunction(()=>Array.from(document.querySelectorAll('#quest .bitmap-row')).every(row=>row.querySelector('canvas')||row.querySelector('.detail-text')?.getBoundingClientRect().height>0),null,{polling:50});
             await representative('Hero '+heroes);await privateSafe();
             if(out&&heroes===1)await page.screenshot({path:path.join(out,`${engine}-${width}-selected-details.png`)});
             await page.evaluate(()=>{UI.close();cam.x=cam.tx=0;cam.y=cam.ty=0;draw();});await representative('Hero '+heroes);

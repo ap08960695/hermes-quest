@@ -43,7 +43,7 @@ const server=http.createServer((req,res)=>{
   if(name.includes('..')){res.writeHead(404);res.end();return;}
   try{const data=baseline?cp.execFileSync('git',['show',base+':'+name.slice(1)],{cwd:root,maxBuffer:32*1024*1024,stdio:['ignore','pipe','ignore']}):fs.readFileSync(path.join(root,name));res.setHeader('Content-Type',mime[path.extname(name)]||'application/octet-stream');res.end(data);}catch{res.writeHead(404);res.end();}
 });
-async function ready(page,url){await page.addInitScript(require('./parity/browser_loader.cjs').init);await page.goto(url);await page.waitForFunction(()=>typeof S==='object'&&typeof W==='object'&&W&&typeof loop.last==='number',{},{timeout:30000});}
+async function ready(page,url){await page.addInitScript(require('./parity/browser_loader.cjs').init);await page.goto(url);await page.waitForFunction(()=>typeof S==='object'&&typeof W==='object'&&W&&typeof loop.last==='number',{},{timeout:30000});if(await page.locator('#hint-dismiss').isVisible())await page.locator('#hint-dismiss').click();}
 // Navigation only: relocated controls retain their original behavioral gates.
 async function openGroup(page,id){
   if(await page.locator('#menu').isHidden())await page.click('#menu-toggle');
@@ -180,14 +180,14 @@ function monitor(){
           const occlusion=outer.concat(bitmaps).reduce((a,r)=>a+r.width*r.height,0)/(innerWidth*innerHeight);
           return {occlusion,hud:rect('#focus-bar'),toolbarRects:document.querySelector('#hud').getClientRects().length,buttons:[...document.querySelectorAll('button')].filter(b=>b.getClientRects().length&&!b.hidden&&!b.closest('[hidden]')).map(b=>({id:b.id,...rect('#'+b.id)})),scroll:document.documentElement.scrollWidth,grid:UIPanels.diagnostics().grid,worldDPR:DPR,visibleText:document.body.innerText.trim()};
         });
-        assert.equal(geometry.visibleText,'Menu\nDEMO');assert.equal(geometry.toolbarRects,0);assert(geometry.hud.h<=(width>760&&height>500?64:176));assert(geometry.scroll<=width+1);assert(geometry.occlusion<=(width>760&&height>500?.2:.25),'closed UI occlusion budget '+JSON.stringify({width,height,zoom,geometry}));
+        for(const label of ['Menu','Sample data','Data source','Help'])assert(geometry.visibleText.includes(label),'missing visible control '+label);assert.equal(geometry.toolbarRects,0);assert(geometry.hud.h<=(width>760&&height>500?64:176));assert(geometry.scroll<=width+1);assert(geometry.occlusion<=(width>760&&height>500?.2:.25),'closed UI occlusion budget '+JSON.stringify({width,height,zoom,geometry}));
         for(const b of geometry.buttons){assert(b.w>=44&&b.h>=44,b.id+' hitbox');assert(b.x>=-1&&b.x+b.w<=width+1&&b.y>=-1&&b.bottom<=height+1,b.id+' bounds');}
         await openGroup(page,'overview');await page.click('#log');const log=await page.evaluate(()=>{const c=document.querySelector('#chron').getBoundingClientRect(),m=document.querySelector('#menu'),r=m.getBoundingClientRect();return {x:c.x,w:c.width,menuX:r.x,menuW:r.width,menuBottom:r.bottom,overflow:m.scrollWidth>m.clientWidth+1};});assert(log.x>=log.menuX&&log.x+log.w<=log.menuX+log.menuW&&log.menuBottom<=height-8&&!log.overflow,'feed stays in scrollable Menu');
         await page.click('#chron-close');assert(await page.locator('#chron').isHidden());
         await page.click('#quests');assert(await page.locator('#chron').isHidden());assert(await page.locator('#camp').isVisible());
         await page.click('#quests');await page.evaluate(()=>UIPanels.detail(['กี่ กุ้ง น้ำ ฤทธิ์ ปี่ '+'A'.repeat(1024)],'synthetic detail'));await page.waitForTimeout(1000);
-        const detail=await page.evaluate(()=>{const el=document.querySelector('#quest'),r=el.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,scroll:el.scrollWidth,client:el.clientWidth,canvases:el.querySelectorAll('canvas').length};});
-        assert(detail.x>=8&&detail.y>=8&&detail.x+detail.w<=width-8&&detail.y+detail.h<=height-8);assert(detail.scroll<=detail.client+1);assert(detail.canvases>5);
+        const detail=await page.evaluate(()=>{const el=document.querySelector('#quest'),r=el.getBoundingClientRect();return {x:r.x,y:r.y,w:r.width,h:r.height,scroll:el.scrollWidth,client:el.clientWidth,canvases:el.querySelectorAll('canvas').length,readable:[...el.querySelectorAll('.bitmap-row')].every(row=>row.querySelector('canvas')||row.querySelector('.detail-text')?.getBoundingClientRect().height>0)};});
+        assert(detail.x>=8&&detail.y>=8&&detail.x+detail.w<=width-8&&detail.y+detail.h<=height-8);assert(detail.scroll<=detail.client+1);assert(detail.readable);
         if(zoom!==2)await page.screenshot({path:path.join(out,'after-'+width+'x'+height+'-z'+zoom+'.png')});
         await page.keyboard.press('Escape');
         const privacy=await page.evaluate(async()=>{

@@ -39,7 +39,8 @@ const records=[];
           page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
           await page.addInitScript(()=>{window.requestAnimationFrame=()=>0;window.__clock=0;Object.defineProperty(performance,'now',{value:()=>window.__clock});});
           await page.goto(url);
-          await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Replay file normal',null,{polling:50});
+          await page.waitForFunction(()=>document.querySelector('#connection')?.getAttribute('aria-label')==='Sample data normal',null,{polling:50});
+          await page.locator('#hint-dismiss').click();
           const tag=engine+' '+width+'x'+height,rec={tag,checks:[]};
           const check=(label,ok,detail)=>{rec.checks.push({label,ok:!!ok,detail});assert(ok,tag+': '+label+(detail===undefined?'':' '+JSON.stringify(detail)));};
 
@@ -59,7 +60,7 @@ const records=[];
           await basePage.evaluate(()=>{UI.close();UI.menu(false);loadReplay({meta:{from_:0,to:600,show_titles:false},bots:[],tasks:[],events:[]});reset(0);resize();Object.assign(cam,{x:1000,tx:1000,y:700,ty:700,zi:1});draw();});
           const base=await regionClick(basePage);await basePage.close();
           check('empty tap with no inspection: camera equals main (zoom 2, nearest region)',JSON.stringify(cand.cam)===JSON.stringify(base.cam)&&cand.cam.zi===2,{cand:cand.cam,base:base.cam});
-          check('empty tap with no inspection: Region details open like main',cand.quest&&base.quest&&/Quests: \d+/.test(cand.text)&&cand.text===base.text,{cand:cand.text,base:base.text});
+          check('empty tap with no inspection: same location and quest count as main',cand.quest&&base.quest&&cand.text.includes(base.text.split(' · ')[0])&&cand.text.includes(/Quests: (\d+)/.exec(base.text)?.[1]+' quests'),{cand:cand.text,base:base.text});
           // Open inspection: an empty tap closes the inspection and does not navigate.
           const closed=await page.evaluate(()=>{UI.close();loadReplay({meta:{from_:0,to:600,show_titles:false},bots:[{id:'solo',cls:'commander',model:'Sol',region:'forge'}],tasks:[],sessions:[],events:[]});reset(0);const h=S.heroes.solo;Object.assign(h,{x:1000,y:700,path:[]});Object.assign(cam,{x:1000,tx:1000,y:700,ty:700,zi:1});draw();showInspection('solo');draw();return {open:!$('#character-card').hidden};});
           check('inspection opened for empty-tap dismissal case',closed.open);
@@ -102,10 +103,10 @@ const records=[];
             return {selected:selectedScene,inspected:inspect.bot,card:!$('#character-card').hidden,heading,label:$('#scene-selected')?.getAttribute('aria-label')};});
           check('native hero tap'+(chooser?' via chooser':'')+' opens inspection',synced.card&&!!synced.inspected,synced);
           check('shared selected identity equals inspected hero (overflow -> native -> chooser)',synced.selected===synced.inspected&&synced.selected!==pickedOverflow.id,{synced,pickedOverflow});
-          check('selected marker names the same character as the card',synced.label==='Selected '+synced.heading,synced);
+          check('selected marker names the same character as the card',synced.label==='Selected '+synced.heading.replace(/^Hero details · /,'Hero · '),synced);
           // Re-select through the chooser path explicitly when the tap resolved to a single hero.
           const viaChooser=await page.evaluate(()=>{const picks=inspect.picks.filter(p=>p.type==='hero').slice(0,2);if(picks.length<2)return null;chooseCharacters(picks);const buttons=[...document.querySelectorAll('#character-content button')];buttons[buttons.length-1].click();renderInspection();draw();return {selected:selectedScene,inspected:inspect.bot,label:$('#scene-selected')?.getAttribute('aria-label'),heading:$('#character-heading').textContent};});
-          if(viaChooser)check('chooser selection synchronises shared identity and marker',viaChooser.selected===viaChooser.inspected&&viaChooser.label==='Selected '+viaChooser.heading,viaChooser);
+          if(viaChooser)check('chooser selection synchronises shared identity and marker',viaChooser.selected===viaChooser.inspected&&viaChooser.label==='Selected '+viaChooser.heading.replace(/^Hero details · /,'Hero · '),viaChooser);
           // Selection survives walking/overflow fallback with nothing leaking.
           const fallback=await page.evaluate(()=>{const id=inspect.bot;const h=S.heroes[id];for(let i=0;i<60;i++){window.__clock+=1000/60;S.play=true;update(1/60);}S.play=false;draw();return {selected:selectedScene,id,marker:!!$('#scene-selected')&&!$('#scene-selected').hidden};});
           check('selected identity retained across simulation steps',fallback.selected===fallback.id&&fallback.marker,fallback);

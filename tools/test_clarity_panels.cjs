@@ -117,6 +117,36 @@ async function capture(page,frame,tag,action){
         await capture(page,frame,tag,'all-quests');assert.equal(await frame.locator('#dialog-heading').textContent(),'All quests');await frame.locator('#quest .close').click();
         await frame.locator('#heroes-all').click();await capture(page,frame,tag,'all-heroes');
         assert.equal(await frame.locator('#dialog-heading').textContent(),'All heroes');await frame.locator('#quest .close').click();
+        // Integration contract: unchanged retained rows must update their stale/loading metadata,
+        // including filter/expand controls and recovery (not just the connection badge).
+        for(const source of ['Sample data','Saved history (not live)','Live data']){
+          await frame.evaluate(source=>UIPanels.status('Connected','online',{source,following:false}),source);
+          assert.equal(await frame.locator('#mode').textContent(),source);
+        }
+        await frame.evaluate(()=>{
+          const opts={stale:true,staleInfo:{updated:'12:34',reason:'server error',retrySeconds:10}};
+          UIPanels.status('Server error (503) · retrying in 10 sec','offline',{source:'Live data',status:503});
+          UIPanels.overview({tasks:[],heroes:[],blocked:0,errors:[],empty:'No active quests',summary:'No active quests',...opts});
+          document.querySelector('#chron').hidden=false;document.querySelector('#camp').hidden=false;
+          UIPanels.feed([{text:'Synthetic retained activity',detailText:'Synthetic retained details'}],opts);
+          UIPanels.camps([{title:'Synthetic campaign',count:'1 of 2 quests complete',stages:[]}],opts);
+        });
+        assert.equal(await frame.locator('#connection .control-name').textContent(),'Server error (503)');
+        for(const selector of ['#overview-summary','#feed','#camps']){
+          const text=await frame.locator(selector).textContent();
+          for(const word of ['Stale data','12:34','server error','Retrying in 10 sec'])assert(text.includes(word),selector+' '+word);
+        }
+        await capture(page,frame,tag,'stale-panels');
+        await frame.locator('#feed-filter').selectOption('issues');
+        assert((await frame.locator('#feed').textContent()).includes('Stale data'));
+        await frame.locator('#feed-all').click();assert((await frame.locator('#feed').textContent()).includes('Stale data'));
+        await frame.locator('#camps-all').click();assert((await frame.locator('#camps').textContent()).includes('Stale data'));
+        await frame.evaluate(()=>{UIPanels.feed([],{loading:true});});
+        assert((await frame.locator('#feed').textContent()).includes('Loading activity'));
+        await frame.evaluate(()=>{UIPanels.feed([],{loading:false});UIPanels.camps([],{stale:false});
+          UIPanels.overview({tasks:[],heroes:[],blocked:0,errors:[],empty:'No active quests',summary:'No active quests',stale:false});});
+        assert((await frame.locator('#feed').textContent()).includes('No activity for this filter in saved history'));
+        for(const selector of ['#overview-summary','#feed','#camps'])assert(!(await frame.locator(selector).textContent()).includes('Stale data'));
         assert.deepEqual(errors,[]);if(mode==='web'){await page.reload();await frame.waitForFunction(()=>window.UIPanels&&window.__questTest?.D);assert(await frame.locator('#first-run').isHidden());assert(await frame.locator('#quick-help').isVisible());}
       }
       await ctx.close();console.log('OK '+tag);

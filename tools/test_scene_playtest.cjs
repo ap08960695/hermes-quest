@@ -37,6 +37,7 @@ async function metrics(page){return page.evaluate(()=>{
     page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
     page.on('requestfailed',r=>errors.push(r.failure()?.errorText));page.on('response',r=>{if(r.status()>=400)errors.push('HTTP '+r.status());});
     await page.goto(url);await page.waitForFunction(()=>typeof loop.last==='number'&&S.work.has);
+    await page.locator('#hint-dismiss').click();
     // Pause replay, not render/update; there must be life without fabricated work.
     await page.evaluate(()=>{S.play=false;S.t=S.work.asOf;hudT=1;hud(0);draw();});
     await page.evaluate(()=>UIText.ready());await page.waitForTimeout(100);

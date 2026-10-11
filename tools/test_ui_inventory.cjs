@@ -79,7 +79,7 @@ const server=http.createServer((req,res)=>{
             return {summary,detail,canary:JSON.stringify(D).includes('MENU_INVENTORY_PRIVATE')||JSON.stringify(S).includes('MENU_INVENTORY_PRIVATE')||document.body.textContent.includes('MENU_INVENTORY_PRIVATE'),
               preference:JSON.parse(localStorage.getItem('quest-menu-v1'))};
           });
-          assert.equal(menuProof.canary,false);assert(menuProof.summary.includes('Task details hidden'));assert(menuProof.detail.includes('Task details hidden'));
+          assert.equal(menuProof.canary,false);assert(/Build quest #\d+/.test(menuProof.summary));assert(menuProof.detail.includes('Quest details hidden'));
           assert(!/Next step|HP:|EXP:/.test(menuProof.detail));assert.deepEqual(Object.keys(menuProof.preference).sort(),['groups','menu']);
           assert(Object.values(menuProof.preference.groups).every(v=>typeof v==='boolean'));
           await page.reload();await page.waitForFunction(()=>typeof loop.last==='number');

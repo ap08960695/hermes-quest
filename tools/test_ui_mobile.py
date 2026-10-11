@@ -59,7 +59,9 @@ const draws=[],bitmaps=[];
 class Element {
   constructor(tag){this.tag=tag;this.children=[];this.dataset={};this.style={};this.attrs={};
     this.clientWidth=320;this.hidden=false;this.isConnected=true;
-    this.classList={contains:name=>this.className===name};}
+    this.classList={contains:name=>this.className===name,add(){},remove(){}};}
+  addEventListener(){}
+  remove(){}
   append(...items){this.children.push(...items);}
   replaceChildren(...items){this.children=items;}
   setAttribute(key,value){this.attrs[key]=value;}
@@ -98,14 +100,14 @@ assert.doesNotMatch(wallets[1].attrs['aria-label'],/character-based/);
 assert.match(wallets[2].attrs['aria-label'],/120,000 used tokens/);
 assert.deepEqual(wallets.map(box=>box.querySelector('b').style.width),['10%','100%','0%']);
 UIPanels.resources({claude:10,codex:100,agy:0},{claude:{net:89999}});
-assert.match(wallets[0].querySelector('.percentage').attrs['aria-label'],/89,999 used tokens/);
+assert.match(wallets[0].attrs['aria-label'],/89,999 used tokens/);
 assert.doesNotMatch(wallets[0].attrs['aria-label'],/character-based|signed usage corrections/);
 assert.equal(JSON.stringify(ledger),before);
 UIPanels.resources({claude:101,codex:-1,agy:99.6});
 assert.deepEqual(wallets.map(box=>box.querySelector('b').style.width),['100%','0%','100%']);
 for(const count of ['1/2 quests · ⚔ 3','1/2 เควส · ⚔ 3','1/2 · ⚔ 3']){
   draws.length=0;UIPanels.camps([{title:'Synthetic campaign',count,stages:[]}]);
-  assert.deepEqual(draws,['1','/','2','3']);
+  assert.equal(el('#camps').querySelector('.campaign-count').textContent,'1 of 2 quests complete · 3 observed attacks');
   assert.doesNotMatch(el('#camps').querySelector('.campaign-count').attrs['aria-label'],/[\u0e00-\u0e7f]/);
 }
 el('#help').onclick();

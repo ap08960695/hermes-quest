@@ -36,6 +36,7 @@ const server=http.createServer((req,res)=>{
  });
  await page.route('**/data/demo.json',r=>r.fulfill({json:fixture()}));
  await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>typeof loop.last==='number');
+ await page.locator('#hint-dismiss').click();
  await page.evaluate(()=>{cancelAnimationFrame(raf);const bitmap=UIText.bitmap;UIText.bitmap=(text,...args)=>{clarityText.push(String(text));return bitmap.call(UIText,text,...args);};
  const label=UIPanels.screenLabel;UIPanels.screenLabel=(text,...args)=>{clarityText.push(String(text));return label.call(UIPanels,text,...args);};
  window.clarityPayload={};for(const name of ['overview','feed','camps','status']){const original=UIPanels[name];UIPanels[name]=(...args)=>{clarityPayload[name]=args;return original.apply(UIPanels,args);};}

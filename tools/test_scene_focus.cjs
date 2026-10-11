@@ -30,7 +30,8 @@ const server=http.createServer((req,res)=>{
       if(process.env.SCENE_STATE_ROOT)for(const file of ['state.js','history.js'])await page.route('**/quest/'+file,r=>r.fulfill({path:path.join(process.env.SCENE_STATE_ROOT,'quest',file),contentType:'text/javascript'}));
       await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForFunction(()=>typeof loop.last==='number');
       await page.evaluate(()=>{cancelAnimationFrame(raf);S.play=false;S.t=S.work.asOf;hudT=1;hud(0);draw();});
-      await page.waitForFunction(()=>document.querySelector('#working-count').textContent==='3 working');
+      await page.locator('#hint-dismiss').click();
+      await page.waitForFunction(()=>document.querySelector('#working-count').textContent==='3 active quests');
       const baseline=await page.evaluate(()=>{
         draw();const d=UIPanels.diagnostics(),canvas=cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
         return {count:inspect.picks.length,hero:inspect.picks.filter(p=>p.type==='hero').length,monster:inspect.picks.filter(p=>p.type==='monster').length,pressed:document.querySelectorAll('#working-rows button[aria-pressed=true]').length,
@@ -44,14 +45,14 @@ const server=http.createServer((req,res)=>{
       assert((await page.locator('#working-rows').textContent()).includes('30 min'),'replay elapsed follows playhead');
       await page.evaluate(()=>{S.t=S.work.asOf;hudT=1;hud(0);});
       assert(!(await page.locator('#working-order').textContent()).includes('Time unknown'));
-      assert.equal(await page.locator('#working-resting').textContent(),'7 resting at the Inn');
-      assert((await page.locator('#working-rewards').textContent()).includes('Guild XP 120'));
+      assert.equal(await page.locator('#working-resting').textContent(),'7 idle heroes');
+      assert((await page.locator('#working-rewards').textContent()).includes('120 Guild XP'));
       assert.equal(await page.evaluate(()=>characterName('opaque-work-0')), 'Nova 1');
       if(process.env.SCENE_STATE_ROOT)assert.equal(await page.evaluate(()=>S.work.has),true);
-      assert.deepEqual(baseline.groups,['Running · 3','Blocked · 1','Failed / Needs attention · 1','Completed · 1']);
+      assert.deepEqual(baseline.groups,['Running · 3 quests','Blocked · 1 quests','Failed · 1 quests','Completed quests · 1 quests']);
       if(engine==='chromium')await page.screenshot({path:path.join(out,width+'x'+height+'.png')});
       const before=await page.evaluate(()=>({t:S.t,speed:S.speed,play:S.play,following}));
-      await page.click('#working-toggle');assert.equal(await page.locator('#working-toggle').textContent(),'Working');
+      await page.click('#working-toggle');assert.equal(await page.locator('#working-toggle').textContent(),'Show active quests only');
       await page.click('#working-toggle');assert.deepEqual(await page.evaluate(()=>({t:S.t,speed:S.speed,play:S.play,following})),before);
       await page.locator('#working-rows button').nth(2).click();
       assert.equal(await page.locator('#working-rows button[aria-pressed=true]').count(),1);
@@ -73,7 +74,7 @@ const server=http.createServer((req,res)=>{
         await page.evaluate(()=>UIPanels.menu(false));
       }
       await page.evaluate(data=>{loadReplay(data,null,Date.parse(data.working.as_of)/1000);S.play=false;hudT=1;hud(0);draw();},fixture(true,false,24));
-      assert.equal(await page.locator('#working-count').textContent(),'24 working');
+      assert.equal(await page.locator('#working-count').textContent(),'24 active quests');
       assert.equal(await page.locator('#working-rows > section:first-child button').count(),24);
       assert((await page.evaluate(()=>{draw();return inspect.picks.length;}))<=cap);
       await page.locator('#working-rows > section:first-child button').last().click();assert.equal(await page.evaluate(()=>{draw();return inspect.picks.length;}),2);
@@ -100,15 +101,15 @@ const server=http.createServer((req,res)=>{
       await page.waitForFunction(()=>{draw();return UIPanels.diagnostics().drawn.some(r=>r.unicode);});
       const empty=fixture();empty.working.items=[];empty.working.latest_order=null;
       await page.evaluate(data=>{loadReplay(data);S.play=false;hudT=1;hud(0);draw();},empty);
-      assert.equal(await page.locator('#working-count').textContent(),'0 working');assert.equal(await page.locator('#working-order').textContent(),'No recent Captain instruction');
+      assert.equal(await page.locator('#working-count').textContent(),'0 active quests');assert.equal(await page.locator('#working-order').textContent(),'No recent instruction from the lead agent');
       const unknown=fixture();unknown.working.items[0].worker_observed=false;
       await page.evaluate(data=>{loadReplay(data);S.play=false;hudT=1;hud(0);draw();},unknown);
       assert((await page.locator('#working-rows').textContent()).includes('Worker not observed'));
       assert.equal(await page.evaluate(()=>{draw();return inspect.picks.filter(p=>p.type==='hero').length;}),width<=760?0:2);
       const attention=fixture();attention.working.items.push({...attention.working.items[0],ref:'opaque-unknown',status:'unknown'});
       await page.evaluate(data=>{loadReplay(data);S.play=false;hudT=1;hud(0);draw();},attention);
-      assert((await page.locator('#working-rows').textContent()).includes('Failed / Needs attention · 2'));
-      assert((await page.locator('#working-rows').textContent()).includes('Status unknown'));
+      assert((await page.locator('#working-rows').textContent()).includes('Failed · 2 quests'));
+      assert((await page.locator('#working-rows').textContent()).includes('Unknown · Next: check the source'));
       if(process.env.SCENE_STATE_ROOT){
         await page.evaluate(()=>{S.work.clear();hudT=1;hud(0);});
         assert.equal(await page.locator('#working-panel').isVisible(),false);

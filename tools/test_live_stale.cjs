@@ -47,7 +47,7 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
     assert.equal((await poll(failure)).state, 'offline', 'failure 2');
     last = await poll(failure);
     assert.equal(last.state, 'stale', 'failure 3 must warn: ' + failure);
-    assert(last.text.startsWith('Live paused · not updating · last update '), last.text);
+    assert(last.text.startsWith('Stale data · live updates paused · Last successful update: '), last.text);
     assert.equal(last.extra.reason, failure === 'network' ? 'offline' : 'server error');
     assert.equal((await poll(failure)).state, 'stale', 'stays stale');
     assert.equal((await poll('ok')).state, 'online', 'one success returns to Live');
@@ -59,7 +59,7 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
     last = await poll(status);
     assert.equal(last.state, 'stale', status + ' warns immediately');
     assert.equal(last.extra.reason, reason);
-    assert.match(last.text, /last update \d\d:\d\d/);
+    assert.match(last.text, /Last successful update: \d\d:\d\d/);
     assert.equal((await poll('ok')).state, 'online');
   }
 
@@ -78,7 +78,7 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
       assert.equal(last.state, stale ? 'stale' : 'offline', `after ${failure} in ${sequence}`);
       if (stale) {
         assert.equal(run('lastPollOk'), lastOk, 'last good time must not move on failure');
-        assert(/^Live paused · not updating · last update \d\d:\d\d · /.test(last.text), last.text);
+        assert(/^Stale data · live updates paused · Last successful update: \d\d:\d\d · /.test(last.text), last.text);
         assert(!/resumed/.test(announce()), 'resumed announced on a failed poll: ' + announce());
       }
     }
@@ -111,7 +111,7 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
   // A live view that never succeeded says so instead of inventing a time.
   run('lastPollOk = null; pollFailures = 0; pollStale = false');
   last = await poll(422);
-  assert.match(last.text, /no update yet/);
+  assert.match(last.text, /Last successful update: unavailable/);
   assert.equal(last.extra.updated, null);
   await poll('ok');
 
@@ -134,12 +134,13 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
     box.window.location = {search: '?live=1'};
     calls.length = 0;
     await run('boot()');
-    assert.equal(calls.at(-1).text, hint, 'initial load explains configuration');
-    assert.equal(el('#issues').textContent, hint, 'guidance is visible, not just a tooltip');
+    assert.equal(calls.at(-1).text, "Couldn't load Quest data (503)");
+    assert(el('body').children.at(-1).children.some(n=>n.textContent===hint), 'initial error panel explains configuration');
+    assert.equal(el('#issues').textContent, "Couldn't load Quest data (503)", 'error is visible, not just a tooltip');
     assert.equal(el('#issues').hidden, false);
     run('pollFailures = 0; pollStale = false');
     await run('pollEvents()');
-    assert.equal(calls.at(-1).text, hint, 'first failed poll explains configuration');
+    assert(calls.at(-1).text.includes(hint), 'first failed poll explains configuration');
     await run('pollEvents()'); await run('pollEvents()');
     assert.equal(calls.at(-1).state, 'stale', 'existing three-failure gate retained');
     assert(el('#issues').textContent.includes(hint), 'guidance survives overview refresh');
@@ -149,7 +150,7 @@ const playbackProbe = () => run('JSON.stringify([S.speed, S.play, following, cam
   // Untrusted error strings and non-data 503s retain the generic load message.
   box.fetch = async () => { throw new Error('/private/error/CANARY'); };
   await run('boot()');
-  assert.equal(calls.at(-1).text, 'Unable to load data · reload to retry');
+  assert.equal(calls.at(-1).text, "Couldn't load Quest data (unavailable)");
   box.fetch = async () => ({ok: false, status: 503});
   await assert.rejects(run("json('data/world.json')"), e => e.message === 'HTTP 503' && !e.questConfig);
   console.log('PASS test_live_stale');

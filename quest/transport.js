@@ -47,7 +47,7 @@ function pollFailed(e) {
   const reason = status === 401 || status === 403 ? 'sign-in needed' : client ? 'server rejected' : status >= 500 ? 'server error'
     : e?.name === 'TypeError' || e?.message === 'Transport timeout' ? 'offline' : 'update failed';
   pollReason=reason;
-  const failure=status>=500?'Server error ('+status+')':reason==='offline'?'Offline':reason;
+  const failure=(status>=500?'Server error ('+status+')':reason==='offline'?'Offline':reason)+(e?.questConfig?' · '+e.message:'');
   if (!pollStale && pollFailures < 3 && !client) { connection(failure+' · retrying in 10 sec','offline',{reason,status,retrySeconds:10}); return; }
   pollStale = true;
   const updated = lastPollOk === null ? null : new Date(lastPollOk).toLocaleTimeString('en-GB', {hour: '2-digit', minute: '2-digit'});

@@ -29,7 +29,7 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  });
  await check('F2 Show all resolves task binding and details',async()=>{
  const result=await page.evaluate(()=>{document.querySelector('#working-toggle').click();const item=S.work.items()[0],t=task(item.task_ref);Object.assign(t,{state:'fight',alpha:1});quest(t);return {label:reviewUI.sceneName(t),dialog:document.querySelector('#quest').textContent};});
- assert.equal(result.label,'Build quest #1');for(const text of ['Nova 1','Build quest #1','60 min','Status: running'])assert(result.dialog.includes(text),text);
+ assert.equal(result.label,'Build quest #1');for(const text of ['Nova 1','Build quest #1','60 min','Status: Running'])assert(result.dialog.includes(text),text);
  });
  await check('F3 explicit offscreen order cannot borrow a shared worker pair',async()=>{
  const d=fixture();d.working.items[1].bot_ref=d.working.items[0].bot_ref;d.working.items[1].display_name=d.working.items[0].display_name;await load(d);
@@ -85,7 +85,7 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  advance(base+60);const initial=workView.buttons.get('opaque-work-0').textContent;
  advance(base+70);return {initial,row:workView.buttons.get('opaque-work-0').textContent,detail:reviewUI.questLines({id:S.work.items()[0].task_ref})};
  },mode);
- assert(r.initial.includes('0 min'));assert(r.row.includes('1 min'));assert(r.detail.includes('1 min'));
+ assert(r.initial.includes('<1 min'));assert(r.row.includes('1 min'));assert(r.detail.includes('Running for 1 min'));
  });
  await check('R-F5a names-off Captain retains canonical safe label',async()=>{
  const d=fixture();d.meta.show_profile_names=false;d.bots.forEach((b,i)=>b.display_name='Research Mage '+(i+1));d.bots[3].display_name='Captain';d.bots[4].display_name='PRIVATE_ALIAS_SENTINEL';d.working.items=[{...d.working.items[1],display_name:'Research Mage 2'}];await load(d);
@@ -100,7 +100,7 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  });
  await check('R-F2 chooser distinguishes same-stage tasks and selection',async()=>{
  const r=await page.evaluate(()=>{UIPanels.menu(false);document.querySelector('#working-toggle').click();const items=S.work.items().slice(0,2);for(const i of items)Object.assign(task(i.task_ref),{stage:'BUILD',state:'fight',alpha:1});reviewUI.chooseCharacters(items.map(i=>({type:'monster',id:i.task_ref})));return [...document.querySelectorAll('#character-content button')].map(b=>b.textContent);});
- assert.deepEqual(r,['Monster · Build quest #1','Monster · Build quest #2']);await page.locator('#character-content button').nth(1).click();assert((await page.locator('#quest').textContent()).includes('Build quest #2'));
+ assert.deepEqual(r,['Quest · Build quest #1','Quest · Build quest #2']);await page.locator('#character-content button').nth(1).click();assert((await page.locator('#quest').textContent()).includes('Build quest #2'));
  });
  await check('R-K1 Completed disclosure preserves focus and expanded state on poll',async()=>{
  const d=fixture();d.working.items[0].status='done';await load(d);await page.evaluate(()=>{UIPanels.menu(true);document.querySelector('#group-overview').open=true;hudT=1;hud(0);});await page.locator('#tasks-list summary').click();
@@ -222,7 +222,7 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  await page.setViewportSize({width:1440,height:900});
  });
  await check('Working feel playback controls update summary immediately',async()=>{
- await load();const r=await page.evaluate(()=>{const summary=()=>document.querySelector('#playback-summary').textContent;document.querySelector('#speeds').click();const speed=S.speed,speedText=summary();document.querySelector('#play').click();const playing=S.play,playText=summary();const scrub=document.querySelector('#scrub');scrub.value='250';scrub.dispatchEvent(new Event('input'));return {speed,speedText,playing,playText,seekText:summary(),following};});assert(r.speedText.includes(r.speed+'×'));assert(r.playText.startsWith(r.playing?'Playing':'Paused'));assert(r.seekText.includes('Range'));assert(r.seekText.includes('Live-follow off'));assert.equal(r.following,false);
+ await load();const r=await page.evaluate(()=>{const summary=()=>document.querySelector('#playback-summary').textContent;document.querySelector('#speeds').click();const speed=S.speed,speedText=summary();document.querySelector('#play').click();const playing=S.play,playText=summary();const scrub=document.querySelector('#scrub');scrub.value='250';scrub.dispatchEvent(new Event('input'));return {speed,speedText,playing,playText,seekText:summary(),following};});assert(r.speedText.includes(r.speed+'×'));assert(r.playText.startsWith(r.playing?'Playing':'Paused'));assert(r.seekText.includes('Saved range:'));assert(r.seekText.includes('Live-follow off'));assert.equal(r.following,false);
  });
  records.push({engine,name:'no page errors',pass:errors.length===0,errors});
  }finally{await browser.close();}
