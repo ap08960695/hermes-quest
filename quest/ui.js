@@ -41,7 +41,8 @@ function workDetails(ref) {
   const row=workItems().find(i=>i.ref===ref||i.task_ref===ref);if(!row)return null;
   const parent=row.parent_ref&&workItems().find(i=>i.ref===row.parent_ref);
   return [row.display_name+' · '+row.class_label,row.quest_label,'Status: '+row.status,workElapsed(row),
-    row.parent_ref?'With: '+(parent?.display_name||'Parent not observed'):'Parent not observed',row.group_label];
+    row.parent_ref?'With: '+(parent?.display_name||'Parent not observed'):'Parent not observed',row.group_label,
+    'Game damage: 1 per observed tool call or message. No event: preparing.'];
 }
 function focusWork(ref,details=false) {
   if(!workItems().some(i=>i.ref===ref))return;
@@ -75,7 +76,8 @@ function renderWorking() {
   const p=snap.progress;
   ctx.$('#working-rewards').textContent=p?'Wins today '+p.wins_today+' · Guild XP '+p.xp+' · Game gold '+p.gold+' · Level '+p.level:'Guild progress unavailable';
   ctx.$('#guild-progress').value=p?.level_progress||0;
-  const list=ctx.$('#working-rows'),key=JSON.stringify([rows,workView.focus,rows.map(workElapsed)]);
+  const helpers=item=>(ctx.D.sessions||[]).filter(s=>s.is_subagent&&s.task===item.task_ref&&s.ended_at==null&&s.started_at<=workClock());
+  const list=ctx.$('#working-rows'),key=JSON.stringify([rows,workView.focus,rows.map(workElapsed),rows.map(helpers)]);
   // privacy/rebase may have cleared the DOM without changing the snapshot.
   if(key===workView.key&&list.childElementCount)return;workView.key=key;
   const active=document.activeElement,owned=list.contains(active),focusedRef=[...workView.buttons].find(([,button])=>button===active)?.[0];
@@ -91,7 +93,15 @@ function renderWorking() {
     if(status==='done')section.open=completedOpen;
     for(const item of group){const b=document.createElement('button');b.className='work-row';
       b.textContent=item.display_name+' · '+item.quest_label+' · '+workElapsed(item)+' · '+item.group_label+(item.status==='unknown'?' · Status unknown':'');
-      b.setAttribute('aria-pressed',String(workView.focus===item.ref));b.onclick=()=>focusWork(item.ref,status!=='running');section.append(b);workView.buttons.set(item.ref,b);}
+      b.setAttribute('aria-pressed',String(workView.focus===item.ref));b.onclick=()=>focusWork(item.ref,status!=='running');section.append(b);workView.buttons.set(item.ref,b);
+      if(status==='running')for(const [i,child] of helpers(item).entries()){
+        const parent=(ctx.D.sessions||[]).find(s=>s.session_ref===child.parent_session_ref);
+        const link=document.createElement('button');link.className='work-helper';
+        const parentItem=parent&&rows.find(r=>r.status==='running'&&r.task_ref===parent.task&&r.bot_ref===parent.bot);
+        link.textContent='Helper '+(i+1)+' · '+(parentItem?'with '+parentItem.display_name+' · Open parent':'Parent not observed');
+        link.onclick=()=>{if(parentItem)focusWork(parentItem.ref,true);else ctx.UI?.detail(['Helper '+(i+1),'Parent not observed'],'Helper');};section.append(link);
+      }
+    }
   }
   if(!running.length){const p=document.createElement('p');p.textContent='No running quests. The guild is resting.';list.prepend(p);}
   if(owned){const target=focusedCompleted?list.querySelector('summary'):workView.buttons.get(focusedRef);
@@ -105,13 +115,13 @@ function workingPairs() {
     // Resolve real animation when unambiguous; never move simulation actors.
     const raw=workingSnapshot().items.find(r=>r.ref===item.ref),bound=workBinding(raw);
     // A bot can own multiple cards. Never lend one card another card's attack.
-    const source=bound?.task===raw.task_ref?bound:null;
+    const source=bound?.task===raw.task_ref?bound:null,activity=ctx.workCombat?.get(item.ref);
     const x=center[0]+(i%cols-(Math.min(cols,visible.length)-1)/2)*260,y=center[1]+Math.floor(i/cols)*140;
     const hero=item.worker_observed===false?null:{...(bound||{}),bot:item.ref,name:item.display_name,cls:bound?.cls||'warrior',x:x-60,y,face:1,
-      path:[],placement:null,homeK:i,atk:source?.atk??-1,hurt:source?.hurt||0,charge:source?.charge||0,cheer:source?.cheer||0,fam:[],bubble:null,gest:null,sleep:false,down:0,rest:source?.rest||{},task:null};
+      path:[],placement:null,homeK:i,atk:activity?.atk??source?.atk??-1,hurt:source?.hurt||0,charge:source?.charge||0,cheer:source?.cheer||0,fam:[],bubble:null,gest:null,sleep:false,down:0,rest:source?.rest||{},task:null,preparing:(!activity||activity.atk<0)&&(source?.atk??-1)<0};
     const sourceTask=raw.task_ref&&ctx.S.tasks[raw.task_ref];
     const monster={...(sourceTask||{}),id:item.ref,bot:null,title:item.quest_label,x:x+60,y,mx:x+60,my:y,alpha:1,emerge:0,slot:0,
-      placement:null,mpath:null,region:ctx.defaultRegion(),stage:sourceTask?.stage||'BUILD',state:'fight',hp:sourceTask?.hp??1,flash:sourceTask?.flash||0};
+      placement:null,mpath:null,region:ctx.defaultRegion(),stage:sourceTask?.stage||'BUILD',state:'fight',hp:null,flash:activity?.flash||0,kick:activity?.flash?1:0,activity};
     return {item,hero,monster,x,y};
   });
 }
@@ -387,14 +397,14 @@ function hud(dt) {
   ctx.$('#scrub').value=Math.max(0,Math.min(1000,Math.round((ctx.S.t-ctx.D.meta.from_)/Math.max(1,ctx.D.meta.to-ctx.D.meta.from_)*1000)));
   ctx.$('#scrub').setAttribute('aria-valuetext',fmt(ctx.S.t));
   renderFeed();renderCamps();ctx.UI.resources(ctx.S.mana,ctx.S.tokenNetByWallet);renderOverview();
-  ctx.UI.playback((ctx.S.play?'Playing':'Paused')+' · Live-follow '+(ctx.following?'on':'off')+' · '+fmt(ctx.S.t)+' · Range '+fmt(ctx.D.meta.from_)+' - '+fmt(ctx.D.meta.to));
+  ctx.UI.playback((ctx.S.play?'Playing':'Paused')+' · '+ctx.S.speed+'× · Live-follow '+(ctx.following?'on':'off')+' · '+fmt(ctx.S.t)+' · Range '+fmt(ctx.D.meta.from_)+' - '+fmt(ctx.D.meta.to));
 }
 function ui() {
   ctx.resize();addEventListener('resize',ctx.resize);
   document.addEventListener('visibilitychange',ctx.visibility);
   ctx.$('#speeds').onclick=()=>{ctx.following=false;const speeds=[30,120,600];ctx.S.speed=speeds[(speeds.indexOf(ctx.S.speed)+1)%speeds.length];hudT=1;hud(0);};
   ctx.$('#play').onclick=()=>{ctx.following=false;ctx.S.play=!ctx.S.play;hudT=1;hud(0);};
-  ctx.$('#scrub').oninput=e=>{ctx.following=false;ctx.reset(ctx.D.meta.from_+(ctx.D.meta.to-ctx.D.meta.from_)*e.target.value/1000);};
+  ctx.$('#scrub').oninput=e=>{ctx.following=false;ctx.reset(ctx.D.meta.from_+(ctx.D.meta.to-ctx.D.meta.from_)*e.target.value/1000);hudT=1;hud(0);};
   ctx.$('#live').hidden=!ctx.liveFeed;ctx.$('#live').onclick=ctx.goLive;
   ctx.$('#calm').onclick=()=>{ctx.calm=!ctx.calm;ctx.$('#calm').setAttribute('aria-pressed',String(ctx.calm));if(ctx.UI)ctx.UI.control('#calm','calm','Reduce effects',ctx.calm?'selected':'normal');};
   ctx.$('#world').onclick=()=>{clearInspection();Object.assign(ctx.cam,{tx:ctx.W.size[0]/2,ty:ctx.W.size[1]/2,zi:1});

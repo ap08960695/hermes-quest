@@ -313,7 +313,7 @@ TEXT_ENUMS = {
              'blocked', 'unblocked', 'reassigned', 'promoted', 'scheduled', 'linked', 'unlinked',
              'comment', 'run_start', 'run_end', 'summon', 'tool', 'hurt', 'tests', 'mana', 'compress',
              'captain', 'review_requested', 'changes_requested', 'dependency_wait', 'wake', 'moa',
-             'pause', 'resume', 'failover', 'archived'},
+             'pause', 'resume', 'failover', 'archived', 'activity'},
     'entity_type': {'profile', 'actor'},
     'actor_type': {'profile', 'commenter', 'unknown'},
     'status': {'triage', 'todo', 'scheduled', 'ready', 'running', 'blocked', 'review', 'done', 'archived',
@@ -801,21 +801,21 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
     candidates = []
     if captain:
         candidates += [(t['created_at'], 'create', t['id'], t['assignee'],
-                        _order_ref(key, ['create', t['id']])) for t in ordered
+                        _order_ref(key, ['create', t['id']]), (-1, -1)) for t in ordered
                        if t['created_by'] == captain and t['created_at']]
     def action_ref(e):
         if e['act'] == 'create':
             return _order_ref(key, ['create', e['task']])
         return e.get('source_action_ref') or (_order_ref(key, ['event', e['id']]) if e.get('id') else None)
 
-    candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'], action_ref(e))
+    candidates += [(e['t'], e['act'], e['task'], e.get('bot') or tasks[e['task']]['assignee'], action_ref(e), e.get('_source_order', (-1, -1)))
                    for e in captain_events if e.get('act') in ORDER_LABEL
                    and e['task'] in tasks]
     candidates = [c for c in candidates if cutoff <= c[0] <= as_of]
     latest_order = None
     if candidates:
         # Calls are projected in row/call order; the last source action wins ties.
-        _, (at, act, tid, recipient, source_ref) = max(enumerate(candidates), key=lambda c: (c[1][0], c[1][1], c[0]))
+        _, (at, act, tid, recipient, source_ref, _) = max(enumerate(candidates), key=lambda c: (c[1][0], c[1][5], c[0]))
         latest_order = dict(
             source_action_ref=source_ref,
             at=_iso(at), action_label=ORDER_LABEL[act if recipient or act != 'create' else 'create_unassigned'],
@@ -1140,6 +1140,8 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                         elif name in ('patch', 'write_file'):
                             e.update(plus=len(re.findall(r'\\n\+', args)) or args.count('\\n'), minus=len(re.findall(r'\\n-', args)))
                         emit(source, f'{m["seq"]}:tool:{i}', e)
+                    if m['role'] == 'assistant' and not _json(m['tool_calls'], []) and m['chars']:
+                        emit(source, f'{m["seq"]}:activity', dict(base, kind='activity'))
                     if m['role'] == 'tool' and m['tool_name'] == 'terminal':
                         content = m['content'] or ''
                         fail = re.search(r'"exit_code"\s*:\s*(-?\d+)', content)
@@ -1201,7 +1203,7 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                     act = CAP_ACT.get(m['name'])
                     tid = m['task_id'] or m['child_id']
                     if act and tid in tasks:
-                        working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act,
+                        working_captain_events.append(dict(t=m['timestamp'], task=tid, act=act, _source_order=(m['seq'], m['call_index']),
                                                            bot=m['assignee'], source_action_ref=_order_ref(
                                                                session_key, ['call', prof, m['session_id'], m['seq'], m['call_index']])))
                 deferred = previous.get('captain_pending', {})

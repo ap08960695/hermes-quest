@@ -2,6 +2,39 @@
 // Owns combat; peer bindings stay live on the per-game context. Registration never boots.
 (globalThis.HQModules ||= {}).createCombat = function createCombat(ctx) {
 
+// Working fights are a presentation of observed activity, not a second simulation.
+// One game damage point = one real tool call or assistant message (never tokens/rewards).
+// The task/run binding prevents a shared bot's other quest from borrowing its hits.
+const workCombat = new Map();
+let workEvents=[];
+function clearWorkCombat(){workCombat.clear();workEvents=[];}
+function observeWork(e, animate) {
+  if (!animate || !ctx.S.work?.has || !['tool','activity'].includes(e.kind)) return;
+  // Bind on the next frame, after mergeDelta commits its authoritative work snapshot.
+  workEvents.push(e);
+}
+function stepWorkCombat(dt) {
+  for(const e of workEvents){
+    const item=ctx.S.work.active().find(i=>i.worker_observed&&i.task_ref===e.task&&i.bot_ref===e.bot);
+    if(!item||(item.started_at!=null&&e.t<item.started_at))continue;
+    let a=workCombat.get(item.ref);
+    if(!a||a.run!==item.run_ref){a={run:item.run_ref,pending:[],atk:-1,flash:0,hit:0,combo:0,last:-Infinity,total:0};workCombat.set(item.ref,a);}
+    a.combo=e.t-a.last<=5&&e.t>=a.last?a.combo+1:1;a.last=e.t;a.pending.push(a.combo);
+  }
+  workEvents=[];
+  for(const [ref,a] of workCombat){
+    const item=ctx.S.work.item(ref);
+    if(!item||item.status!=='running'||item.run_ref!==a.run){workCombat.delete(ref);continue;}
+    if(!ctx.S.play)continue;
+    a.flash=Math.max(0,a.flash-dt);a.hit=Math.max(0,a.hit-dt);
+    if(a.atk<0){if(a.pending.length){a.currentCombo=a.pending.shift();a.atk=0;}}
+    else {const before=a.atk;a.atk+=dt;
+      if(before<.22&&a.atk>=.22){a.flash=.18;a.hit=1.1;a.total++;a.hitCombo=a.currentCombo;}
+      if(a.atk>=.65)a.atk=-1;
+    }
+  }
+}
+
 // ---------- FX ----------
 function num(x, y, text, color, life = 1.1) { ctx.S.fx.push({k: 'num', x, y, text, color, life, max: life}); }
 function burst(x, y, color, n) { if (ctx.calm) n = Math.ceil(n / 3); for (let i = 0; i < n; i++) ctx.S.fx.push({k: 'p', x, y, vx: (Math.random() - .5) * 90, vy: -Math.random() * 90, color, life: .5 + Math.random() * .4}); }
@@ -95,6 +128,10 @@ function monsterHit(t, h) {
   ctx.laterHero(h, .26 + dur, hit);
 }
 return {
+  get workCombat(){return workCombat},
+  get clearWorkCombat(){return clearWorkCombat},
+  get observeWork(){return observeWork},
+  get stepWorkCombat(){return stepWorkCombat},
   get num(){return num}, set num(v){num=v},
   get burst(){return burst}, set burst(v){burst=v},
   get coins(){return coins}, set coins(v){coins=v},

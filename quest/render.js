@@ -133,7 +133,18 @@ function drawWorking() {
     monster(v,pair.monster);
     const labelWidth=Math.max(48,110*v.Z/ctx.DPR),labelY=(v.oy+(pair.y-110)*v.Z)/ctx.DPR;
     if(pair.hero)ctx.UI?.screenLabel(pair.item.display_name,(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
-    ctx.UI?.screenLabel(pair.item.quest_label,(v.ox+pair.monster.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
+    const compactLabel=pair.item.quest_label.replace(/^(Planning|Testing|Verification) quest/,(_,kind)=>({Planning:'Plan',Testing:'Test',Verification:'Verify'})[kind]).replace(/ quest(?= #)/,'');
+    const number=compactLabel.match(/#\d+$/)?.[0];
+    // Keep the stable quest number even when the scene lane is too narrow for its name.
+    const sceneLabel=number&&UIText.measure(compactLabel,2)>labelWidth?number:compactLabel;
+    ctx.UI?.screenLabel(sceneLabel,(v.ox+pair.monster.x*v.Z)/ctx.DPR,labelY,false,labelWidth);
+    const a=pair.monster.activity;
+    if(a?.hit>0){
+      const x=v.ox+pair.monster.x*v.Z,y=v.oy+(pair.y-50-(1.1-a.hit)*22)*v.Z;
+      ctx.UI?.screenLabel('1 DMG',x/ctx.DPR,y/ctx.DPR);
+      if(a.hitCombo>1)ctx.UI?.screenLabel('COMBO X'+a.hitCombo,x/ctx.DPR,y/ctx.DPR-22);
+      if(a.flash>0)fxDraw(v,{k:'slash',x:pair.monster.x-6,y:pair.y-22,dir:1,color:'#fff',glow:'#ffd36b',life:a.flash,max:.18,big:1});
+    }
   }
   // Ambient villagers are reserved for the no-work scene; no hidden idle heroes.
   const cap=innerWidth<=760?8:innerWidth<=1100?14:20;
@@ -202,6 +213,7 @@ function heroDraw(v, h) {
   else if (ctx.HMETA.idle.length && h.atk < 0 && !h.sleep) fr = ctx.HMETA.idle[Math.floor(now * 5 + h.homeK) % ctx.HMETA.idle.length];   // breathing loop
   else if (h.atk < 0 && !h.sleep) bob = Math.floor((now + h.homeK * .37) % 1.6 / .8);                                    // 1px idle bob
   if (h.atk >= 0) fr = ctx.atkFrame(h.atk);
+  if(h.preparing&&ctx.S.play&&!ctx.calm){fr=ctx.atkFrame(.19*(.5+.5*Math.sin(ctx.S.rt*2.5+h.homeK)));bob=-Math.round(Math.sin(ctx.S.rt*2.5+h.homeK)*2);}
   const knockX = -Math.round(ctx.ease(h.knock || 0) * 10) * (h.face || 1);
   const jump = h.cheer > 0 ? -Math.round(Math.sin((1 - h.cheer / .9) * Math.PI * 2) ** 2 * 8) : 0;
   const sink = h.meditate > 0 ? 3 : 0;
@@ -387,7 +399,7 @@ function monster(v, t) {
 
   if (t.state === 'caged' && !walking) emoji('⛓', v.ox + (bx + 14) * v.Z, v.oy + (top + 10) * v.Z, 10 * v.Z);
 
-  if (t.alpha > .5 && !t.dying && t.region !== 'camp') {                  // HP bar = time left; camp monsters just wait
+  if (Number.isFinite(t.hp) && t.alpha > .5 && !t.dying && t.region !== 'camp') {                  // Legacy time bar; Working never fabricates HP.
     const w = 36, x0 = bx - w / 2;
     ctx.cx.fillStyle = '#141824'; ctx.cx.fillRect(v.ox + (x0 - 2) * v.Z, v.oy + (top - 2) * v.Z, (w + 4) * v.Z, 6 * v.Z);
     ctx.cx.fillStyle = t.chained ? '#e0503c' : t.hp > .4 ? '#e8c04a' : '#e0503c'; ctx.cx.fillRect(v.ox + x0 * v.Z, v.oy + top * v.Z, Math.max(1, Math.round(w * t.hp)) * v.Z, 2 * v.Z);

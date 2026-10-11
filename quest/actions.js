@@ -23,6 +23,7 @@ function engage(h, t) {
 }
 
 function reset(t, liveKeys = null) {
+  ctx.clearWorkCombat?.();
   const feed = ctx.S.feed, lastFeed = ctx.S.lastFeed, fx = ctx.S.fx;
   const activeBots = new Set(), activeTasks = new Set();
   ctx.restoreCheckpoint();
@@ -174,6 +175,8 @@ const ACTIONS = {
   archived(e, fx, t) { cancelTaskActions(t); t.state = 'archived'; t.alpha = 0; t.chained = false; t.placement = null; t.mpath = null; t.dying = 0; },
 };
 function apply(e, fx) {
+  ctx.observeWork?.(e, fx);
+  if(e.kind==='activity')return; // message activity is Working presentation only
   const actor = e.bot && ctx.D.bots.some(b => b.id === e.bot && b.entity_type === 'actor');
   if (actor && ['mana','pause','resume','failover','tool','tests','hurt','compress','summon','moa','wake'].includes(e.kind)) return;
   if (applyBotEvent(e, fx)) return;

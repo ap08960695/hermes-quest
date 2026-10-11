@@ -18,6 +18,7 @@ function update(dt) {
 
   }
   ctx.S.rt += dt;
+  ctx.stepWorkCombat?.(dt);
   for (const l of ctx.S.later.filter(l => l.at <= ctx.S.rt)) l.f();
   ctx.S.later = ctx.S.later.filter(l => l.at > ctx.S.rt);
   if (window.NPCS && ctx.S.play) NPCS.update(dt);                       // M4 villagers: own seeded RNG, fixed step

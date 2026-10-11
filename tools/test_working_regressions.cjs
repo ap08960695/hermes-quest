@@ -115,6 +115,34 @@ const server=http.createServer((req,res)=>{try{const n=new URL(req.url,'http://l
  if(await page.locator('#quest .close').isVisible())await page.locator('#quest .close').click();
  assert.equal(await page.evaluate(()=>document.activeElement.id),'working-toggle');
  });
+ await check('Working feel activity binding, contact, combo, pause and silent seek',async()=>{
+ const d=fixture();await load(d);const r=await page.evaluate(()=>{
+ const row=S.work.active().find(i=>i.worker_observed),pair=()=>workingPairs().find(p=>p.item.ref===row.ref),state=()=>structuredClone(pair().monster.activity||null);
+ S.play=true;D.meta.to=S.t+3600;const e={t:S.t,kind:'tool',bot:row.bot_ref,task:row.task_ref,tool:'terminal'};
+ apply({...e,task:'another-task'},true);const foreign=state();
+ apply(e,false);const silent=state();
+ apply(e,true);apply({...e,kind:'activity'},true);
+ update(.01);const windup=state();update(.23);const contact=state();
+ S.play=false;update(.2);const paused=state();S.play=true;
+ update(.5);update(.01);update(.23);const second=state();
+ const hp=pair().monster.hp;reset(S.t);return {foreign,silent,windup,contact,paused,second,hp,seek:state()};
+ });
+ assert.equal(r.foreign,null);assert.equal(r.silent,null);assert.equal(r.windup.total,0);assert.equal(r.contact.total,1);assert(r.contact.flash>0);assert.equal(r.contact.hitCombo,1);assert.deepEqual(r.paused,r.contact);assert.equal(r.second.total,2);assert.equal(r.second.hitCombo,2);assert.equal(r.hp,null);assert.equal(r.seek,null);
+ });
+ await check('Working feel sticky order, stable quest number and helper parent link',async()=>{
+ const d=fixture();const i=d.working.items[0];d.sessions=[{session_ref:'aaaaaaaaaaaaaaaaaaaa',bot:i.bot_ref,task:i.task_ref,is_subagent:false,started_at:d.meta.from_,ended_at:null},{session_ref:'bbbbbbbbbbbbbbbbbbbb',parent_session_ref:'aaaaaaaaaaaaaaaaaaaa',bot:i.bot_ref,task:i.task_ref,is_subagent:true,started_at:d.meta.from_,ended_at:null}];await load(d);
+ assert.equal(await page.locator('.work-helper').count(),1);assert((await page.locator('.work-helper').textContent()).includes('Open parent'));await page.locator('.work-helper').click();assert((await page.locator('#quest').textContent()).includes(i.quest_label));await page.locator('#quest .close').click();
+ assert.equal(await page.locator('#working-order').evaluate(el=>getComputedStyle(el).position),'sticky');
+ const labels=await page.evaluate(()=>{const labels=[],old=UIPanels.screenLabel;UIPanels.screenLabel=(s,...a)=>{labels.push(s);old(s,...a);};draw();UIPanels.screenLabel=old;return labels;});assert(labels.some(s=>/#\d+$/.test(s)));assert(!labels.some(s=>/Planning quest|Testing quest/.test(s)));
+ });
+ await check('Working feel mobile scroll keeps Captain instruction pinned',async()=>{
+ const d=fixture(),i=d.working.items[0];d.working.latest_order={at:d.working.as_of,source_action_ref:'synthetic-command',action_label:'Assigned quest',quest_label:i.quest_label,recipient_display_name:i.display_name,recipient_bot_ref:i.bot_ref,task_ref:i.task_ref};await load(d);
+ for(const width of [320,375]){await page.setViewportSize({width,height:568});await page.waitForTimeout(100);const r=await page.evaluate(()=>{const panel=document.querySelector('#working-panel');panel.scrollTop=panel.scrollHeight;const p=panel.getBoundingClientRect(),o=document.querySelector('#working-order').getBoundingClientRect();return {scrolled:panel.scrollTop,top:o.top,bottom:o.bottom,pTop:p.top,pBottom:p.bottom,text:document.querySelector('#working-order').textContent};});assert(r.scrolled>0);assert(r.top>=r.pTop-1);assert(r.bottom<=r.pBottom);assert(r.text.includes('Build quest #1'));}
+ await page.setViewportSize({width:1440,height:900});
+ });
+ await check('Working feel playback controls update summary immediately',async()=>{
+ await load();const r=await page.evaluate(()=>{const summary=()=>document.querySelector('#playback-summary').textContent;document.querySelector('#speeds').click();const speed=S.speed,speedText=summary();document.querySelector('#play').click();const playing=S.play,playText=summary();const scrub=document.querySelector('#scrub');scrub.value='250';scrub.dispatchEvent(new Event('input'));return {speed,speedText,playing,playText,seekText:summary(),following};});assert(r.speedText.includes(r.speed+'×'));assert(r.playText.startsWith(r.playing?'Playing':'Paused'));assert(r.seekText.includes('Range'));assert(r.seekText.includes('Live-follow off'));assert.equal(r.following,false);
+ });
  records.push({engine,name:'no page errors',pass:errors.length===0,errors});
  }finally{await browser.close();}
  }}finally{await new Promise(r=>server.close(r));}

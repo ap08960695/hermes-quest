@@ -431,6 +431,27 @@ class WorkingContractTests(unittest.TestCase):
         self.assertEqual(w['latest_order']['action_label'], 'Created quest')
         self.assertIsNone(w['latest_order']['recipient_display_name'])
 
+    def test_same_timestamp_order_uses_row_then_call_slot_not_action_name(self):
+        s = self.scene()
+        db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'profiles/planner-demo/state.db')
+        db.executescript('''
+CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,parent_session_id TEXT,started_at REAL,title TEXT);
+CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,
+ tool_calls TEXT,tool_name TEXT,tool_call_id TEXT,timestamp REAL,token_count INTEGER);
+''')
+        db.execute("INSERT INTO sessions VALUES('captain','cli',NULL,?,'Captain')", (s.now - 100,))
+        def call(name, tid):
+            return {'function': {'name': name, 'arguments': json.dumps({'task_id': tid})}}
+        for row, calls in [(1, [call('kanban_comment', 't_a0000001')]),
+                           (2, [call('kanban_comment', 't_a0000001'), call('kanban_block', 't_a0000002')])]:
+            db.execute("INSERT INTO messages VALUES(?,'captain','assistant',NULL,?,NULL,NULL,?,NULL)",
+                       (row, json.dumps(calls), s.now - 5))
+        db.commit(); db.close()
+        first = s.replay()
+        self.assertEqual(first['working']['latest_order']['action_label'], 'Blocked quest')
+        for _ in range(3):
+            self.assertEqual(s.delta(first['cursor'])['working']['latest_order'], first['working']['latest_order'])
+
     def test_explicit_reassignment_stays_pinned_across_unchanged_polls(self):
         s = self.scene()
         db = sqlite3.connect(Path(s.cfg['hermes_home']) / 'profiles/planner-demo/state.db')
@@ -536,6 +557,27 @@ CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content T
                 raise AssertionError('JSON1 must not run in the fail-closed query')
             db.create_function('json_valid', 1, unavailable)
             self.assertEqual(list(db.execute(extract._latest_order_sql(False), (0, 20))), [])
+
+    def test_activity_is_one_per_observed_message_or_call_without_prose_or_poll_duplicates(self):
+        s = self.scene()
+        with sqlite3.connect(Path(s.cfg['hermes_home']) / 'profiles/developer-demo/state.db') as db:
+            db.executescript('''
+CREATE TABLE sessions(id TEXT PRIMARY KEY,source TEXT,parent_session_id TEXT,started_at REAL,title TEXT);
+CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,content TEXT,
+ tool_calls TEXT,tool_name TEXT,tool_call_id TEXT,timestamp REAL,token_count INTEGER);
+''')
+            db.execute("INSERT INTO sessions VALUES('root','kanban',NULL,?,'Worker')", (s.now - 40,))
+            db.execute("INSERT INTO messages VALUES(1,'root','user','task t_a0000001',NULL,NULL,NULL,?,NULL)", (s.now - 40,))
+            db.execute("INSERT INTO messages VALUES(2,'root','assistant','PRIVATE_ACTIVITY_SENTINEL',NULL,NULL,NULL,?,NULL)", (s.now - 30,))
+            calls = [{'function': {'name': 'read_file'}}, {'function': {'name': 'terminal'}}]
+            db.execute("INSERT INTO messages VALUES(3,'root','assistant','PRIVATE_ACTIVITY_SENTINEL',?,NULL,NULL,?,NULL)", (json.dumps(calls), s.now - 20))
+            db.execute("INSERT INTO messages VALUES(4,'root','assistant','',NULL,NULL,NULL,?,NULL)", (s.now - 10,))
+        first = s.replay()
+        self.assertEqual(len([e for e in first['events'] if e['kind'] == 'activity']), 1)
+        self.assertEqual(len([e for e in first['events'] if e['kind'] == 'tool']), 2)
+        self.assertNotIn('PRIVATE_ACTIVITY_SENTINEL', json.dumps(first))
+        self.assertFalse(any(e['kind'] in ('activity', 'tool') for e in s.delta(first['cursor'])['events']))
+        self.assertEqual(s.delta(first['cursor'])['working']['progress'], first['working']['progress'])
 
     def test_session_parent_lineage_is_keyed_and_never_task_dependencies(self):
         s = self.scene()
