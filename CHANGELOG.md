@@ -6,6 +6,37 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## v0.1.5 - 2026-10-12
+
+### Added
+
+- Add Help and first-run hints, explicit dialog headings, number units, and
+  status explanations with a clear next step.
+- Show Guild milestones reached on this board, Guildhall tiers, and stage
+  tokens earned from observed work; these are board-scoped, not permanent rewards.
+- Add an away recap and weekly completed-work days when source coverage is
+  proven; missing coverage is unknown, never an invented zero.
+- Keep the next Guildhall tier or next-level goal visible, including after all
+  tiers are complete, using the board's actual XP.
+
+### Fixed
+
+- Keep detail text readable when the bitmap font cannot load, including Desktop.
+- Explain 503 errors, Retry, stale data, and empty states without hiding problems.
+- Label estimated quest durations as EST. TIME LEFT with explicit time units.
+- Show QUEST COMPLETE and +N game gold from the actual completion reward.
+- Use consistent board-scoped gold totals and keep mobile menus, reading sheets,
+  quest counts, and status badges from obscuring the relevant content.
+- Isolate recap acknowledgement by source and fail closed after source changes
+  or unproven history coverage.
+
+### Known limitations
+
+- Desktop away recap is unknown because the sandbox has no persistent local
+  storage for previously seen work. Seen-state is not sent to the backend.
+- Restoring or copying kanban.db changes source identity; recap is unknown for
+  one cycle and replay safely rebases rather than inventing progress.
+
 ## v0.1.4 - 2026-10-11
 
 ### Security
