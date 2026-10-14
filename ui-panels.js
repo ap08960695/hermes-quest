@@ -81,7 +81,7 @@
     for(let lane=0;lane<3;lane++){const top=y-lane*18;
       if(fits(x,top,im.width,im.height)){image(im,x,top);break;}}
   }
-  function screenLabel(text,x,y,pin=false,maxWidth=Infinity,color='#ffd36b',decorative=false) {
+  function screenLabel(text,x,y,pin=false,maxWidth=Infinity,color='#ffd36b',decorative=false,avoidScene=false) {
     let label=text.toUpperCase(),im=numericImage(label,color);
     if(Number.isFinite(maxWidth)&&Array.from(label).some(ch=>!Object.hasOwn(T.glyphs,ch))){
       const width=Math.max(48,Math.floor(maxWidth)),key=JSON.stringify([label,width,color]);
@@ -108,10 +108,10 @@
     const lanes=pin?[0,1,-1,2,-2,3,-3]:[0],step=Math.max(18,im.height+4);
     const candidates=lanes.map(lane=>y+lane*step);
     // Mixed bitmap/system-font heights leave gaps that a fixed lane grid misses.
-    if(pin)candidates.push(...[...reserved,...drawn].flatMap(r=>
+    if(pin)candidates.push(...[...reserved,...drawn,...(avoidScene?protectedScene:[])].flatMap(r=>
       [Math.ceil(r.bottom+4),Math.floor(r.top-im.height-4)]).sort((a,b)=>Math.abs(a-y)-Math.abs(b-y)));
     for(const top of candidates){
-      if(decorative&&protectedScene.some(r=>x-4<r.right&&x+im.width+4>r.left&&top-4<r.bottom&&top+im.height+4>r.top))continue;
+      if((decorative||avoidScene)&&protectedScene.some(r=>x-4<r.right&&x+im.width+4>r.left&&top-4<r.bottom&&top+im.height+4>r.top))continue;
       if(fits(x-2,top-2,im.width+4,im.height+4)){
         if(decorative){
           let c=backplates.get(im);

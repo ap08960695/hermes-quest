@@ -61,7 +61,7 @@ function entityLabel(entity) {
 // Keep complete names rather than replacing narrow labels with bare quest numbers.
 // UIPanels owns viewport/reserved-area/collision placement; pinned labels get its
 // extra lanes. Wrap before passing a width so its ellipsis cannot erase the role.
-function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b', decorative = false) {
+function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b', decorative = false, avoidScene = false) {
   if (!ctx.UI || !text) return;
   const width = Math.max(48, Math.min(maxWidth, innerWidth - 32));
   const measure = value => window.UIText.measure(value.toUpperCase(), 2);
@@ -77,7 +77,7 @@ function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b', d
   }
   if (line.trim()) lines.push(line.trim());
   // Upward wrapping leaves the last line nearest its character's anchor.
-  lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, pin, width, color, decorative));
+  lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, pin, width, color, decorative, avoidScene));
 }
 function emptyScene(heroes) {
   // The last real completion can leave an empty scene while its payoff is still flying.
@@ -167,7 +167,7 @@ function draw() {
     ...(Object.values(ctx.S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: ctx.W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
     ...Object.values(ctx.S.tasks).filter(t => t.alpha > 0).map(t => ({y: t.mx !== undefined ? t.my : t.y, f: () => monster(v, t)})),
     ...Object.values(ctx.S.heroes).map(h => ({y: h.y, f: () => heroDraw(v, h)})),
-    ...villagers];
+    ...villagers.map(e=>({...e,f:()=>drawVillager(e)}))];
   ents.sort((a, b) => a.y - b.y).forEach(e => e.f());
   const groups = new Map();
   for (const f of ctx.S.fx) {
@@ -186,6 +186,9 @@ function draw() {
   vignette();
 }
 const SHADOWS = new Map(), FLASH = new Map();
+function drawVillager(e) {
+  ctx.cx.save();ctx.cx.globalAlpha=.55;e.f();ctx.cx.restore();
+}
 function guildDecorations() {
   const model=globalThis.QuestIdleCity?.guildhallModel(ctx.workingSnapshot?.()?.progress?.level,ctx.W?.props);
   return !model?.anchor?[]:model.decorations.map(p=>({...p,x:model.anchor.x+p.dx,y:model.anchor.y+p.dy}));
@@ -203,11 +206,7 @@ function drawWorking() {
     if(pair.hero)heroDraw(v,pair.hero);
     else {const [x,y]=P(v,pair.x-60,pair.y-20);ctx.cx.strokeStyle='#ffd36b';ctx.cx.strokeRect(x-12*v.Z,y-24*v.Z,24*v.Z,24*v.Z);}
     monster(v,pair.monster);
-    const labelY=(v.oy+(pair.y-110)*v.Z)/ctx.DPR;
-    if(pair.hero)sceneLabel(entityLabel(pair.hero),(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY);
-    const questLabel=entityLabel(pair.monster).replace(/^(Planning|Testing|Verification) quest/,(_,kind)=>({Planning:'Plan',Testing:'Test',Verification:'Verify'})[kind]+' quest');
-    // Stagger the paired anchors so their full role labels have separate lanes.
-    sceneLabel(questLabel,(v.ox+pair.monster.x*v.Z)/ctx.DPR,labelY+44);
+
     const a=pair.monster.activity;
     if(pair.hero?.spar>0) {
       // Muted block cue: no impact flash, damage or reward.
@@ -226,7 +225,7 @@ function drawWorking() {
   // Ambient villagers are reserved for the no-work scene; no hidden idle heroes.
   const cap=innerWidth<=760?8:innerWidth<=1100?14:20;
   const villagers=!ctx.workView.pairs.length&&window.NPCS?NPCS.ents(v,blit,shadowPx).slice(0,cap-1):[];
-  villagers.forEach(e=>e.f());
+  villagers.forEach(drawVillager);
   villagerLabel(v, villagers);
   let couriers=0;
   for(const f of ctx.S.fx)if(f.working || (!ctx.workView.pairs.length && f.src==='inn')){
@@ -241,6 +240,16 @@ function drawWorking() {
     for(const key of ['y','y0','y1'])if(Number.isFinite(mapped[key]))mapped[key]+=dy;
     if(f.bot_ref&&pair.hero){mapped.x0=pair.hero.x+22;mapped.y0=pair.hero.y-34;}
     fxDraw(v,mapped);
+  }
+  // Paint identification after every pair registered its current sprite bounds.
+  // Narrow guests need one quest label per pair, not two competing full names;
+  // worker names remain in the panel, chooser and selected-character details.
+  for(const pair of ctx.workView.pairs){
+    const bodies=ctx.inspect.picks.filter(p=>p.id===pair.item.ref||p.id===pair.hero?.bot).map(p=>p.body);
+    const labelY=bodies.length?Math.min(...bodies.map(b=>b.top))-8:(v.oy+(pair.y-110)*v.Z)/ctx.DPR;
+    if(innerWidth>1100&&pair.hero)sceneLabel(entityLabel(pair.hero),(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY,280,true,'#ffd36b',false,true);
+    const questLabel=entityLabel(pair.monster).replace(/^(Planning|Testing|Verification) quest/,(_,kind)=>({Planning:'Plan',Testing:'Test',Verification:'Verify'})[kind]+' quest');
+    sceneLabel(questLabel,(v.ox+(innerWidth<=1100?pair.x:pair.monster.x)*v.Z)/ctx.DPR,labelY,280,true,'#ffd36b',false,true);
   }
   ctx.workView.foreground={heroes:ctx.workView.pairs.filter(p=>p.hero).length,encounters:ctx.workView.pairs.length,npcs:villagers.length,couriers:Math.min(1,couriers)};
   ctx.UI?.flush();vignette();

@@ -183,10 +183,23 @@
     else { fr = M.frames.idle[0]; bob = Math.floor((n.clock + n.k * .37) % 1.6 / .8); }          // 1 px breathing bob
     const bx = Math.round(n.x), by = Math.round(n.y) + bob;
     const flip = (M.native_facing || 'right') === 'right' ? n.face < 0 && M.mirror_left !== false : n.face > 0;   // sheet faces right; left = mirror
-    shadowPx(v, bx, Math.round(n.y) + 1, Math.round(M.fw * .13));
+    // Scenery has no character shadow; interactive workers keep theirs.
     blit(v, im, fr * M.fw, 0, M.fw, M.fh, flip ? bx - (M.fw - M.ax) : bx - M.ax, by - M.base, flip);
   }
-  function ents(v, blit, shadowPx) { return S.ready ? S.list.map(n => ({x: n.x, y: n.y, f: () => drawOne(v, n, blit, shadowPx)})) : []; }
+  function ents(v, blit, shadowPx) {
+    if (!S.ready) return [];
+    // Thin only the painted scenery, in stable ID order. Keep all eight walkers
+    // and their paths untouched. Full frame envelopes also cover tools/bobbing.
+    const visible = [], gap = 12 / v.Z;
+    for (const n of S.list) {
+      const m = S.meta[n.kind]; if (!m) continue;
+      const half = Math.max(m.ax,m.fw-m.ax)+1;
+      const box = {left:n.x-half, right:n.x+half, top:n.y-m.base-2, bottom:n.y+m.fh-m.base+2};
+      if (visible.some(e => box.left-gap<e.box.right && box.right+gap>e.box.left && box.top-gap<e.box.bottom && box.bottom+gap>e.box.top)) continue;
+      visible.push({x:n.x,y:n.y,box,f:()=>drawOne(v,n,blit,shadowPx)});
+    }
+    return visible;
+  }
 
   const NPCS = {init, load, update, ents, walkable, state: S, STEP, CFG, KINDS, PLAZA, TOWN, ROAD_HALF, COUNT};
   if (typeof module !== 'undefined' && module.exports) module.exports = NPCS; else root.NPCS = NPCS;

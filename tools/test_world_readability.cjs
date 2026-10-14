@@ -23,7 +23,7 @@ const server=http.createServer((req,res)=>{try{
     const connected=new Set();addEventListener('message',e=>{if(e.source!==f.contentWindow||e.data?.kind!=='quest-ready'||connected.has(e.data.nonce))return;
       connected.add(e.data.nonce);const c=new MessageChannel();c.port1.onmessage=async e=>{const m=e.data;try{const r=await fetch('/api/plugins/hermes-quest'+m.path);if(!r.ok)throw Error('request failed');c.port1.postMessage({id:m.id,value:await r.json()});}catch{c.port1.postMessage({id:m.id,error:'request failed'});}};
       f.contentWindow.postMessage({kind:'quest-connect',nonce:e.data.nonce},'*',[c.port2]);});
-    f.src='data:text/html;base64,${Buffer.from(html).toString('base64')}';document.body.append(f);
+    f.src=${JSON.stringify('data:text/html;charset=utf-8,'+encodeURIComponent(html)+'?live=1')};document.body.append(f);
   </script></body></html>`);return;}
   if(u.pathname.endsWith('/replay')||u.pathname.endsWith('/data/demo.json')){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(fixture()));return;}
   if(u.pathname.endsWith('/events')){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({events:[],tasks:[],bots:[],working:fixture().working,meta:fixture().meta}));return;}
@@ -47,8 +47,8 @@ const overlap=(a,b)=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.
       assert(await frame.evaluate(()=>workView.all),'fresh mount must be World');
       await frame.evaluate(d=>{cancelAnimationFrame(raf);clearTimeout(pollTimer);loadReplay(d,null,d.working.as_of);liveFeed=false;S.play=false;hudT=1;hud(0);resize();draw();},fixture());
       const sourceState=()=>frame.evaluate(()=>JSON.stringify({progress:S.work.progress(),items:S.work.items(),heroes:Object.values(S.heroes).map(h=>[h.bot,h.x,h.y,h.path]),tasks:Object.values(S.tasks).map(t=>[t.id,t.x,t.y,t.hp]),vault:S.vault,t:S.t}));
-      const before=await sourceState();
-      const capture=async name=>{await frame.evaluate(()=>{resize();draw();});await page.screenshot({path:path.join(out,`${engine}-${surface}-${width}-${name}.png`)});};
+      const before=await sourceState(),npcSpawn=await frame.evaluate(()=>NPCS.state.list.map(n=>[n.x,n.y]));
+      const capture=async name=>{await frame.evaluate(()=>{resize();draw();});await page.waitForTimeout(50);await frame.evaluate(()=>{draw();const c=document.querySelector('canvas'),d=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let varied=0;for(let i=0;i<d.length;i+=400)if(d[i]>30||d[i+1]>40||d[i+2]>50)varied++;if(varied<100)throw Error('blank scene capture');});await page.screenshot({path:path.join(out,`${engine}-${surface}-${width}-${name}.png`)});};
       const check=async(name,fn)=>{try{const detail=await fn();records.push({engine,surface,width,name,pass:true,...detail});}catch(e){records.push({engine,surface,width,name,pass:false,error:e.message});}};
       await check('World decorative labels avoid real bodies, time bars and panels',async()=>{
         const r=await frame.evaluate(()=>{const labels=[],old=UI.screenLabel;UI.screenLabel=(...a)=>{const n=UI.diagnostics().drawn.length;old(...a);if(a[6]&&UI.diagnostics().drawn.length>n)labels.push({text:a[0],box:UI.diagnostics().drawn.at(-1)});};draw();UI.screenLabel=old;return {labels,...UI.diagnostics(),picks:inspect.picks.length};});
@@ -73,8 +73,28 @@ const overlap=(a,b)=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.
         await frame.locator('#working-toggle').click();assert.equal(await frame.evaluate(()=>workView.all),false);await capture('working');
         await frame.locator('#working-toggle').click();assert.equal(await sourceState(),before);return {};
       });
+      await check('Working quest labels are complete and avoid every sprite and label',async()=>{
+        await frame.locator('#working-toggle').click();
+        const r=await frame.evaluate(()=>{const labels=[],old=UI.screenLabel;UI.screenLabel=(...a)=>{const n=UI.diagnostics().drawn.length;old(...a);if(UI.diagnostics().drawn.length>n)labels.push({text:a[0],anchor:[a[1],a[2]],box:UI.diagnostics().drawn.at(-1)});};draw();UI.screenLabel=old;return {labels,...UI.diagnostics(),pairs:workView.pairs.length,picks:inspect.picks.length};});
+        // The existing phone contract focuses one pair; desktop/SDK show three.
+        const expected=width<=760?1:3;assert.equal(r.pairs,expected);assert.equal(r.picks,expected*2,'every visible worker/quest pair still painted');
+        for(let i=1;i<=expected;i++)assert(r.labels.some(l=>l.text.toUpperCase()==='BUILD QUEST #'+i),'complete quest '+i);
+        for(const l of r.labels){assert(!r.protectedScene.some(b=>overlap(l.box,b)),l.text+' overlaps sprite');assert(Math.abs(l.box.bottom-l.anchor[1])<=80,l.text+' moved far from its pair');}
+        for(let i=0;i<r.drawn.length;i++)assert(!r.drawn.slice(i+1).some(b=>overlap(r.drawn[i],b)),'Working label collision');
+        if(width<=1100)assert(!r.labels.some(l=>l.text.startsWith('Hero · ')),'one identification label per pair in narrow scene');
+        await capture('working-labels');await frame.locator('#working-toggle').click();assert.equal(await sourceState(),before);return r;
+      });
+      await check('painted villagers stay separated over 60 seconds without changing walkers',async()=>{
+        const r=await frame.evaluate(()=>{let paintedMin=8,paintedMax=0,collisions=0,shadows=0;const snapshots=[];
+          for(let i=0;i<=3600;i++){const before=JSON.stringify(NPCS.state.list),es=NPCS.ents({Z:cam.zi*DPR},()=>{},()=>shadows++);if(i%60===0)snapshots.push(es.map(e=>[e.x,e.y,e.box]));
+            if(JSON.stringify(NPCS.state.list)!==before)throw Error('painting mutates walkers');paintedMin=Math.min(paintedMin,es.length);paintedMax=Math.max(paintedMax,es.length);
+            for(let a=0;a<es.length;a++)for(const b of es.slice(a+1)){const x=es[a].box,y=b.box;if(x.left<y.right&&x.right>y.left&&x.top<y.bottom&&x.bottom>y.top)collisions++;}es.forEach(e=>e.f());if(i<3600)NPCS.update(1/60);}
+          return {paintedMin,paintedMax,collisions,shadows,count:NPCS.state.list.length,snapshots,guide:document.querySelector('#working-guide').textContent};});
+        assert.equal(r.count,8,'all decorative walkers retained');assert(r.paintedMin>=1);assert.equal(r.collisions,0);assert.equal(r.shadows,0);assert(r.guide.includes('Faded villagers are scenery and cannot be selected'));
+        assert.equal(await sourceState(),before);await capture('separated-npc-60s');return r;
+      });
       await check('decorative villagers stay outside standing yard through 60 simulated seconds',async()=>{
-        const r=await frame.evaluate(()=>{const p=W.regions[NPCS.state.town].plaza,spawn=NPCS.state.list.map(n=>[n.x,n.y]);let intrusion=0;for(let i=0;i<3600;i++){NPCS.update(1/60);for(const n of NPCS.state.list)if(((n.x-p.center[0])/p.standing[0])**2+((n.y-p.center[1])/p.standing[1])**2<1)intrusion++;}return {spawn,intrusion,count:NPCS.state.list.length};});
+        const r=await frame.evaluate(spawn=>{const p=W.regions[NPCS.state.town].plaza;let intrusion=0;for(let i=0;i<3600;i++){NPCS.update(1/60);for(const n of NPCS.state.list)if(((n.x-p.center[0])/p.standing[0])**2+((n.y-p.center[1])/p.standing[1])**2<1)intrusion++;}return {spawn,intrusion,count:NPCS.state.list.length};},npcSpawn);
         assert.equal(r.count,8);assert.equal(r.intrusion,0);for(let i=0;i<r.spawn.length;i++)for(const b of r.spawn.slice(i+1))assert(Math.hypot(r.spawn[i][0]-b[0],r.spawn[i][1]-b[1])>=20);assert.equal(await sourceState(),before);await capture('npc-60s');return r;
       });
       await check('Follow, Reduce effects and real data survive presentation actions',async()=>{
