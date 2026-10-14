@@ -280,8 +280,12 @@ function banner(v, key, r) {
   const [px,py] = r.plaza?.label || [r.spot[0], im ? pr.y-im.height-10 : r.spot[1]-60];
   const x = v.ox + N(px) * v.Z, y = v.oy + N(py) * v.Z;
   const n = Object.values(ctx.S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
-  // A visible desktop plaza keeps its name at high zoom; collision lanes still yield to quest labels.
-  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,280,v.Z/ctx.DPR>=2,'#7fc8b8',true);
+  // Pin only a plaza whose own center is clearly visible. Distant locations
+  // under a panel or beyond the viewport must not migrate to the same edge.
+  const ax=(v.ox+centerX*v.Z)/ctx.DPR,ay=(v.oy+centerY*v.Z)/ctx.DPR;
+  const pin=ax>=32&&ax<=innerWidth-32&&ay>=32&&ay<=innerHeight-32&&
+    !ctx.UI?.diagnostics?.().reserved.some(r=>ax>=r.left&&ax<=r.right&&ay>=r.top&&ay<=r.bottom);
+  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,280,pin,'#7fc8b8',true);
     if(n||key==='vault')sceneLabel(key==='vault'?ctx.gameGoldText():compact(n)+' '+(n===1?'quest in replay scene':'quests in replay scene'),x/ctx.DPR,y/ctx.DPR-44,280,false,'#7fc8b8',true);}
 }
 function heroDraw(v, h) {
