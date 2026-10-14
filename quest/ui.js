@@ -7,7 +7,7 @@ const fmt = t => { const d = new Date(t * 1000); return Number.isNaN(d.getTime()
 // Page-local presentation only. Never part of a replay checkpoint or live cursor.
 const inspect = {bot: null, session: null, follow: false, picks: [], choices: null, key: '', revision: null, fit: false, zoom: null, fittedZoom: null};
 // One reducer is authoritative; no raw snapshot/fixture adapter.
-const workView = {all:false, focus:null, key:'', pairs:[], savedCamera:null, buttons:new Map()};
+const workView = {all:true, focus:null, key:'', pairs:[], savedCamera:null, buttons:new Map()};
 function workingSnapshot() {
   return ctx.S.work?.has?{asOf:ctx.S.work.asOf,items:ctx.S.work.items(),resting:ctx.S.work.resting,latestOrder:ctx.S.work.latestOrder,progress:ctx.S.work.progress()}:null;
 }

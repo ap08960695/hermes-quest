@@ -32,6 +32,9 @@ const server=http.createServer((req,res)=>{
       await page.evaluate(()=>{cancelAnimationFrame(raf);S.play=false;S.t=S.work.asOf;hudT=1;hud(0);draw();});
       await page.locator('#hint-dismiss').click();
       await page.waitForFunction(()=>document.querySelector('#working-count').textContent==='3 active quests');
+      assert.equal(await page.locator('#working-toggle').getAttribute('aria-pressed'),'true','fresh mount starts in World');
+      await page.locator('#working-toggle').click();
+      assert.equal(await page.locator('#working-toggle').getAttribute('aria-pressed'),'false','Working remains available');
       const baseline=await page.evaluate(()=>{
         draw();const d=UIPanels.diagnostics(),canvas=cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
         return {count:inspect.picks.length,hero:inspect.picks.filter(p=>p.type==='hero').length,monster:inspect.picks.filter(p=>p.type==='monster').length,pressed:document.querySelectorAll('#working-rows button[aria-pressed=true]').length,

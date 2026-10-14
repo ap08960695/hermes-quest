@@ -60,6 +60,22 @@ const server=http.createServer((req,res)=>{try{
         await page.screenshot({path:path.join(out,`${engine}-${surface}-${width}-${name}.png`)});return geometry;
       };
       const check=async(name,fn)=>{try{const detail=await fn();records.push({engine,surface,width,height,name,pass:true,...detail});}catch(e){records.push({engine,surface,width,height,name,pass:false,error:e.message});}};
+      await check('fresh mount is World; Working toggle preserves replay and board progress',async()=>{
+        assert.equal(await frame.evaluate(()=>workView.all),true);
+        assert.equal(await frame.locator('#working-toggle').getAttribute('aria-pressed'),'true');
+        assert(await frame.locator('#working-panel').isVisible());
+        assert(await frame.locator('#working-guild').isVisible());
+        assert(await frame.locator('#idle-recap').isVisible());
+        const state=()=>frame.evaluate(()=>({t:S.t,speed:S.speed,play:S.play,following,progress:S.work.progress()}));
+        const before=await state();
+        await frame.locator('#working-toggle').click();
+        assert.equal(await frame.evaluate(()=>workView.all),false);
+        assert.equal(await frame.locator('#working-toggle').getAttribute('aria-pressed'),'false');
+        await frame.locator('#working-toggle').click();
+        assert.equal(await frame.evaluate(()=>workView.all),true);
+        assert.deepEqual(await state(),before);
+        return {geometry:await capture('default-world')};
+      });
       await check('visit unknown, explicit acknowledgement only, reload coverage',async()=>{
         assert((await frame.locator('#idle-recap').textContent()).includes('unknown'));
         if(surface==='web'){
@@ -88,7 +104,7 @@ const server=http.createServer((req,res)=>{try{
         assert(!text.includes('Testing stage token')&&text.includes('No stage tokens'));await capture('guild-unknown');await frame.locator('#quest .close').click();return {text};
       });
       await check('Guildhall tiers draw without world mutations or blocking Menu/Help',async()=>{
-        const d=fixture(true,10);await frame.evaluate(d=>{loadReplay(d,null,d.working.as_of);S.play=false;hudT=1;hud(0);document.querySelector('#working-toggle').click();const a=QuestIdleCity.findAnchor(W.props);Object.assign(cam,{x:a.x,y:a.y,tx:a.x,ty:a.y,zi:1});resize();draw();},d);
+        const d=fixture(true,10);await frame.evaluate(d=>{loadReplay(d,null,d.working.as_of);S.play=false;hudT=1;hud(0);if(!workView.all)document.querySelector('#working-toggle').click();const a=QuestIdleCity.findAnchor(W.props);Object.assign(cam,{x:a.x,y:a.y,tx:a.x,ty:a.y,zi:1});resize();draw();},d);
         const props=await frame.evaluate(()=>JSON.stringify(W.props));await capture('guildhall-tier3');
         assert.equal(await frame.evaluate(()=>JSON.stringify(W.props)),props);
         await frame.locator('#menu-toggle').click();assert(await frame.locator('#menu').isVisible());await frame.locator('#menu-toggle').click();
