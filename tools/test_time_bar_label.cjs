@@ -50,11 +50,28 @@ const server=http.createServer((req,res)=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-1780,max_rt:1800,hp:.1,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
           assert(r.text.includes('EST. TIME LEFT 20 SEC'),JSON.stringify(r.text));
           const o=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-9999,max_rt:1800,hp:.08,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
-          assert(o.text.includes('EST. TIME LEFT 0 SEC'),JSON.stringify(o.text));
+          assert(o.text.includes('EST. TIME LIMIT PASSED'),JSON.stringify(o.text));
+          assert(!o.text.some(t=>/TIME LEFT (0 SEC|-)/.test(t)),JSON.stringify(o.text));
+          await page.screenshot({path:path.join(out,`${engine}-${width}-estimate-passed.png`)});
+        });
+        await rec('expired estimate is not a real task completion or fabricated time',async()=>{
+          const r=await page.evaluate(()=>{const t=task(D.tasks[0].id),before=JSON.stringify([t.state,t.hp,S.vault,S.work.progress()]);t.runStart=S.t-1800;barText=[];draw();return {before,after:JSON.stringify([t.state,t.hp,S.vault,S.work.progress()]),text:barText};});
+          assert.equal(r.before,r.after);assert(r.text.includes('EST. TIME LIMIT PASSED'));assert(!r.text.some(t=>t.includes('QUEST COMPLETE')));
+        });
+        await rec('offscreen monster does not leave a viewport-pinned timer',async()=>{
+          const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-60,max_rt:1800,hp:.97,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700+innerWidth/2+100;cam.y=500;cam.tx=cam.x;cam.ty=500;cam.zi=1;`);
+          assert(!r.text.some(t=>t.includes('TIME L')),JSON.stringify(r.text));
+          await page.screenshot({path:path.join(out,`${engine}-${width}-offscreen-no-timer.png`)});
         });
         await rec('no start time falls back to TIME LIMIT, not a made-up remainder',async()=>{
           const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:null,max_rt:1200,hp:1,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});selectedScene=t.id;cam.x=700;cam.y=500;cam.tx=700;cam.ty=500;cam.zi=2;`);
           assert(r.text.includes('TIME LIMIT 20 MIN'),JSON.stringify(r.text));assert(!r.text.some(x=>x.includes('TIME LEFT')));
+        });
+        await rec('top-edge time bar never pins its label away from the bar',async()=>{
+          const r=await run(`const t=task(D.tasks[0].id);Object.assign(t,{state:'fight',runStart:S.t-60,max_rt:1800,hp:.97,alpha:1,region:'forge',emerge:0,dying:false,x:700,y:500,mx:700,my:500,mpath:null});const m=MMETA2[mtype(t)+'-'+mtier(t)];selectedScene=t.id;cam.x=700;cam.y=innerHeight/2+500-Math.round(m.fh*.78)-14;cam.tx=700;cam.ty=cam.y;cam.zi=1;`);
+          assert(await page.evaluate(()=>inspect.picks.some(p=>p.type==='monster'&&p.id===selectedScene)),'monster body remains visible');
+          assert(!r.text.some(t=>t.includes('TIME L')),JSON.stringify(r.text));
+          await page.screenshot({path:path.join(out,`${engine}-${width}-top-edge-no-pinned-timer.png`)});
         });
         await rec('crowded scene labels only the selected quest unless zoomed in',async()=>{
           const r=await run(`const ids=D.tasks.map(t=>t.id);ids.forEach((id,i)=>Object.assign(task(id),{state:'fight',runStart:S.t-60,max_rt:1800,hp:.9,alpha:1,region:'forge',emerge:0,dying:false,x:700+i*20,y:500,mx:700+i*20,my:500}));selectedScene=ids[0];cam.x=700;cam.y=500;cam.zi=1;`);

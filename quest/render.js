@@ -507,7 +507,10 @@ function timeBarDuration(sec) {
 function timeBarText(t) {
   const budget = Number(t.max_rt) > 0 ? Number(t.max_rt) : 1800;
   if (t.state === 'fight' && Number.isFinite(t.runStart)) {
-    const left = timeBarDuration(Math.max(0, budget - (ctx.S.t - t.runStart)));
+    const remaining = budget - (ctx.S.t - t.runStart);
+    // The estimate expiring does not mean the real task ended or became overdue.
+    if (remaining <= 0) return 'EST. TIME LIMIT PASSED';
+    const left = timeBarDuration(remaining);
     return left ? 'EST. TIME LEFT ' + left : 'EST. TIME LEFT';
   }
   const limit = timeBarDuration(budget);
@@ -526,11 +529,16 @@ function timeBarLabel(v, t, bx, top) {
   const T = typeof window === 'object' ? window.UIText : null;
   if (!T || typeof T.draw !== 'function' || !ctx.cx) return;
   if (barLabelCrowded && t !== ctx.selectedEntity() && v.Z / ctx.DPR < 2) return;
+  // Never float a viewport-pinned timer for an offscreen monster/time bar.
+  if (!ctx.inspect.picks.some(p => p.type === 'monster' && p.id === t.id)) return;
+  const barTop=v.oy+(top-2)*v.Z;
+  if(barTop<0||barTop+6*v.Z>ctx.cv.height)return;
   const text = timeBarText(t), sc = Math.max(1, Math.round(ctx.DPR)) * 2;
   const wpx = T.measure(text, sc), hpx = 7 * sc, pad = 3 * sc / 2 | 0;
   const cw = ctx.cv.width, ch = ctx.cv.height;
   let x = Math.round(v.ox + bx * v.Z - wpx / 2), y = Math.round(v.oy + (top - 2) * v.Z - hpx - pad * 2 - 2 * ctx.DPR);
-  x = Math.max(pad + 2, Math.min(cw - wpx - pad - 2, x)); y = Math.max(pad + 2, Math.min(ch - hpx - pad - 2, y));
+  if(y-pad-1<0||y+hpx+pad+1>ch)return;
+  x = Math.max(pad + 2, Math.min(cw - wpx - pad - 2, x));
   ctx.cx.save();
   ctx.cx.fillStyle = 'rgba(13,20,35,.92)'; ctx.cx.fillRect(x - pad - 1, y - pad - 1, wpx + pad * 2 + 2, hpx + pad * 2 + 2);
   ctx.cx.fillStyle = '#99783b'; ctx.cx.fillRect(x - pad - 1, y + hpx + pad, wpx + pad * 2 + 2, Math.max(1, ctx.DPR));
