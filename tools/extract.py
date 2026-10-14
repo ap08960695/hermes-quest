@@ -383,7 +383,13 @@ def _tool_calls_sql(captain=False, json1=True):
 def _latest_order_sql(json1=True):
     # Repeated snapshot reads have no prose consumer. Project only known action
     # names, row/call coordinates and string bindings in SQLite, never full arguments or call IDs.
-    window = "FROM messages WHERE role='assistant' AND timestamp>=? AND timestamp<=?"
+    # Enumerate session keys from a covering index, then seek each time range.
+    # A global timestamp predicate otherwise scans the multi-GB message table:
+    # Hermes indexes (session_id, timestamp), not timestamp alone. IS preserves
+    # nullable/orphan session IDs too; rowid/call ordering remains authoritative.
+    source = """FROM (SELECT DISTINCT session_id AS window_session_id FROM messages) AS message_sessions
+        CROSS JOIN messages"""
+    window = source + " WHERE messages.session_id IS window_session_id AND role='assistant' AND timestamp>=? AND timestamp<=?"
     if not json1:
         return 'SELECT session_id,timestamp,NULL AS name,NULL AS task_id,' \
                'NULL AS child_id,NULL AS assignee ' + window + ' AND 0'
@@ -395,8 +401,8 @@ def _latest_order_sql(json1=True):
     return f"""WITH calls AS (
         SELECT messages.rowid AS seq,session_id,timestamp,j.key AS call_index,
                CASE WHEN j.type='object' THEN j.value ELSE '{{}}' END AS call
-        FROM messages,json_each(CASE WHEN json_valid(tool_calls) THEN tool_calls ELSE '[]' END) AS j
-        WHERE role='assistant' AND timestamp>=? AND timestamp<=?
+        {source},json_each(CASE WHEN json_valid(tool_calls) THEN tool_calls ELSE '[]' END) AS j
+        WHERE messages.session_id IS window_session_id AND role='assistant' AND timestamp>=? AND timestamp<=?
     ), actions AS (
         SELECT seq,session_id,timestamp,call_index,json_extract(call,'$.function.name') AS name,
                CASE WHEN json_valid(json_extract(call,'$.function.arguments'))
@@ -751,6 +757,12 @@ def _run_actions(db, sid, start, end, json1=True):
     return row[0], row[1]
 
 
+def _working_task_retained(task, runs, cutoff):
+    activity = max([task['completed_at'] or 0, task['started_at'] or 0] +
+                   [r['ended_at'] or 0 for r in runs])
+    return task['status'] not in ('done', 'archived') or activity >= cutoff
+
+
 def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, captain_events, key, actions=None):
     """Read-only projection of CURRENT Kanban state (same snapshot as meta.as_of).
 
@@ -791,9 +803,7 @@ def _build_working(cfg, as_of, hours, captain, tasks, runs, bot_rows, profiles, 
             continue  # queued/waiting work is not "current work"
         else:
             status = 'unknown'
-        activity = max([t['completed_at'] or 0, t['started_at'] or 0] +
-                       [r['ended_at'] or 0 for r in rs])
-        if status in ('done', 'archived') and activity < cutoff:
+        if not _working_task_retained(t, rs, cutoff):
             continue
         if status == 'done' and not t['completed_at']:
             status = 'unknown'  # contradictory source state never earns a win
@@ -975,9 +985,20 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
             row = db.execute(f'SELECT rowid AS seq,{columns} FROM {table} WHERE rowid=? AND rowid<=?', (seq, hi)).fetchone()
             if row is not None:
                 yield row
-        yield from db.execute(f'SELECT rowid AS seq,{columns} FROM {table} WHERE rowid>? AND rowid<=?' +
-                              (f' AND {timestamp}>=?' if t0 is not None else '') + ' ORDER BY rowid',
-                              (old.get(source, 0), hi) + ((t0,) if t0 is not None else ()))
+        if table == 'messages' and t0 is not None:
+            # Materialize only indexed coordinates, not projected message bodies.
+            # Keep rowid bounds outside the time seek, including the snapshot hi.
+            yield from db.execute('WITH window_rows AS MATERIALIZED '
+                                  '(SELECT messages.rowid AS seq FROM '
+                                  '(SELECT DISTINCT session_id AS window_session_id FROM messages) AS message_sessions '
+                                  'CROSS JOIN messages WHERE messages.session_id IS window_session_id AND timestamp>=?) '
+                                  f'SELECT rowid AS seq,{columns} FROM messages '
+                                  'WHERE rowid IN (SELECT seq FROM window_rows) AND rowid>? AND rowid<=? ORDER BY rowid',
+                                  (t0, old.get(source, 0), hi))
+        else:
+            yield from db.execute(f'SELECT rowid AS seq,{columns} FROM {table} WHERE rowid>? AND rowid<=?' +
+                                  (f' AND {timestamp}>=?' if t0 is not None else '') + ' ORDER BY rowid',
+                                  (old.get(source, 0), hi) + ((t0,) if t0 is not None else ()))
     k = ro(home / 'kanban.db')
     done_days_7d = None
     task_activity, active_tasks = {}, set()
@@ -1150,6 +1171,10 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                 r = sessions[sid]
                 source = 'session-' + digest(sid)[:20]
                 runs_for_task = sorted(raw_runs.get(tid, []), key=lambda run: (run['started_at'] or 0, run['id']))
+                # Counts have no consumer for rows the Working projection omits.
+                # Keep all other session/event/mana reads and cursor marks intact.
+                if not _working_task_retained(raw_tasks[tid], runs_for_task, as_of - hours * 3600):
+                    runs_for_task = []
                 if raw_tasks[tid]['status'] == 'running':
                     runs_for_task = [run for run in runs_for_task if run['ended_at'] is None]
                 for run in runs_for_task[-1:]:
@@ -1171,9 +1196,19 @@ def _snapshot(cfg, previous=None, t0=None, window_hours=None):
                         emit(source, 'summon', dict(t=r['started_at'], task=tid, kind='summon', bot=prof,
                              **lineage(sid), sub=digest(sid)[:6], note=note(tid, 'summon', r['title'][9:])))
                 lower = 0 if sid in newly_mapped else old.get(message_source, 0)
-                messages = s.execute(f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages WHERE session_id=? AND rowid>? AND rowid<=?' +
-                                     (' AND timestamp>=?' if t0 is not None else '') + ' ORDER BY rowid',
-                                     (sid, lower, message_hi) + ((t0,) if t0 is not None else ()))
+                if t0 is not None:
+                    # Isolate the indexed time seek before applying rowid bounds;
+                    # otherwise SQLite prefers (session_id, id) and reads old
+                    # message bodies just to reject their timestamps.
+                    messages = s.execute(f'WITH window_rows AS MATERIALIZED '
+                                         '(SELECT rowid AS seq FROM messages WHERE session_id=? AND timestamp>=?) '
+                                         f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages '
+                                         'WHERE rowid IN (SELECT seq FROM window_rows) AND rowid>? AND rowid<=? ORDER BY rowid',
+                                         (sid, t0, lower, message_hi))
+                else:
+                    messages = s.execute(f'SELECT rowid AS seq,{_message_columns(json1=json1)} FROM messages '
+                                         'WHERE session_id=? AND rowid>? AND rowid<=? ORDER BY rowid',
+                                         (sid, lower, message_hi))
                 usage = None
                 if s.execute("SELECT 1 FROM sqlite_master WHERE name='session_model_usage'").fetchone():
                     usage = s.execute('SELECT sum(input_tokens+output_tokens) FROM session_model_usage WHERE session_id=?', (sid,)).fetchone()[0]
