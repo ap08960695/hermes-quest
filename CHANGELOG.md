@@ -6,6 +6,32 @@ and releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+## v0.1.6 - 2026-10-14
+
+### Changed
+
+- Open fresh visits in World (Show all), where heroes walk around; Working
+  remains available through the view toggle.
+
+### Fixed
+
+- Fade decorative villagers, suppress crowded scenery, and explain that faded
+  villagers cannot be selected.
+- Keep decorative and region labels behind actual work information, and use
+  one label per character in narrow Working views.
+- Add the mobile cue "Scroll for quests, instructions, gold & XP ↓".
+- Show EST. TIME LIMIT PASSED when an estimated quest duration runs out.
+
+### Known limitations
+
+- The initial mobile view at 390 px is still quiet: the starting camera does
+  not show a combat encounter. A mobile-camera improvement is planned for
+  the next version.
+- Desktop away recap remains unknown because the sandbox has no persistent
+  local storage for previously seen work; seen-state is not sent to the backend.
+- Restoring or copying kanban.db changes source identity; recap is unknown for
+  one cycle and replay safely rebases rather than inventing progress.
+
 ## v0.1.5 - 2026-10-12
 
 ### Added
