@@ -43,7 +43,8 @@ const server=http.createServer((req,res)=>{
           pageOverflow:document.documentElement.scrollWidth>innerWidth};
       });
       assert.equal(baseline.hero,width<=760?1:3);assert.equal(baseline.monster,baseline.hero);assert(baseline.count<=cap);assert.equal(baseline.completed,false);assert.equal(baseline.overlap,false);assert.equal(baseline.pageOverflow,false);assert(baseline.ink>20);
-      assert.equal(baseline.labels,baseline.hero+baseline.monster,'scene labels must not silently disappear');
+      const expectedLabels=width>1100||baseline.hero===1?baseline.hero+baseline.monster:baseline.monster;
+      assert.equal(baseline.labels,expectedLabels,'every pair keeps its quest label; focused/wide scenes also identify workers');
       await page.evaluate(()=>{S.t-=1800;hudT=1;hud(0);});
       assert((await page.locator('#working-rows').textContent()).includes('30 min'),'replay elapsed follows playhead');
       await page.evaluate(()=>{S.t=S.work.asOf;hudT=1;hud(0);});
@@ -100,6 +101,9 @@ const server=http.createServer((req,res)=>{
       assert.equal(fx.added,1);assert.equal(fx.repeat,0);assert(fx.visible>0);
       const thai=fixture();thai.working.items[0].display_name='กี่ญู';
       await page.evaluate(data=>{loadReplay(data);workView.focus=null;S.play=false;hudT=1;hud(0);draw();},thai);
+      // Complete worker names are on the focused pair, not repeated over every
+      // sprite in the narrow multi-pair overview. Use the real row to focus it.
+      await page.locator('#working-rows > section:first-child button').first().click();
       await page.evaluate(()=>UIText.ready());
       await page.waitForFunction(()=>{draw();return UIPanels.diagnostics().drawn.some(r=>r.unicode);});
       const empty=fixture();empty.working.items=[];empty.working.latest_order=null;
