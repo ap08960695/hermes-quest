@@ -90,12 +90,13 @@ select:focus-visible{outline:2px solid var(--gold)}
 #working-panel p{margin:6px 0;overflow-wrap:anywhere}
 #working-panel button{width:100%;height:auto;text-align:left;justify-content:flex-start}
 #working-toggle{margin-bottom:8px}
+#working-scroll-hint{display:none;color:var(--gold);font-weight:600;border-bottom:1px solid var(--gold);padding-bottom:6px}
 .work-row{margin:4px 0;padding:8px;border:1px solid var(--line);border-radius:4px}
 .work-row[aria-pressed=true]{border-color:var(--gold);background:#28304a}
 #guild-progress{width:100%;accent-color:var(--gold)}
 /* The side panel owns 320px plus its gutters; status controls wrap in the scene lane. */
 @media(min-width:761px){body:has(#working-panel:not([hidden])) #focus-bar{max-width:calc(100vw - 352px)}}
-@media(max-width:760px){#working-panel{top:auto;bottom:8px;left:8px;width:calc(100vw - 16px);max-height:38dvh;padding:8px}#working-panel h2{font-size:15px}#working-panel h3{margin-top:8px}}
+@media(max-width:760px){#working-panel{top:auto;bottom:8px;left:8px;width:calc(100vw - 16px);max-height:38dvh;padding:8px}#working-panel h2{font-size:15px}#working-panel h3{margin-top:8px}#working-scroll-hint{display:block}}
 @media(max-width:360px){#mode{padding:0 2px}#focus-bar{gap:2px}#issues{padding:2px;max-width:124px}}
 @media(max-height:400px){#menu{top:56px;max-height:calc(100dvh - 64px)}}
 
@@ -160,6 +161,7 @@ select:focus-visible{outline:2px solid var(--gold)}
 <section id="working-panel" class="panel" aria-label="Working quests" hidden>
   <h2 id="working-count">Working</h2>
   <button id="working-guild" class="text-button">Guildhall, trophies and stage tokens</button>
+  <p id="working-scroll-hint">Scroll for quests, instructions, gold &amp; XP ↓</p>
   <button id="working-toggle" class="text-button" aria-pressed="false">Show all</button>
   <p id="working-resting"></p>
   <p id="working-guide" hidden>Tap a character to see its name and quest. Crowded characters open a list to choose from.</p>

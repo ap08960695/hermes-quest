@@ -20,6 +20,7 @@ function registerCharacter(v, type, id, box, framingWorld) {
   const body = {left:r.left+(v.ox+box.left*v.Z)*scale, top:r.top+(v.oy+box.top*v.Z)*scale,
     right:r.left+(v.ox+box.right*v.Z)*scale, bottom:r.top+(v.oy+box.bottom*v.Z)*scale};
   if (body.right < r.left || body.left > r.right || body.bottom < r.top || body.top > r.bottom) return;
+  ctx.UI?.protectScene?.({left:body.left-r.left,top:body.top-r.top,right:body.right-r.left,bottom:body.bottom-r.top});
   const dx = Math.max(0, (44 - (body.right-body.left))/2), dy = Math.max(0, (44 - (body.bottom-body.top))/2);
   const h=ctx.workView?.pairs.find(p=>p.item.ref===id)?.hero || ctx.S.heroes[id];
   ctx.inspect.picks.push({type,id,world:box,framingWorld,body,anchor:type==='hero'&&h?[h.x,h.y]:null,order:ctx.inspect.picks.length,
@@ -60,7 +61,7 @@ function entityLabel(entity) {
 // Keep complete names rather than replacing narrow labels with bare quest numbers.
 // UIPanels owns viewport/reserved-area/collision placement; pinned labels get its
 // extra lanes. Wrap before passing a width so its ellipsis cannot erase the role.
-function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b') {
+function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b', decorative = false) {
   if (!ctx.UI || !text) return;
   const width = Math.max(48, Math.min(maxWidth, innerWidth - 32));
   const measure = value => window.UIText.measure(value.toUpperCase(), 2);
@@ -76,7 +77,7 @@ function sceneLabel(text, x, y, maxWidth = 280, pin = true, color = '#ffd36b') {
   }
   if (line.trim()) lines.push(line.trim());
   // Upward wrapping leaves the last line nearest its character's anchor.
-  lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, pin, width, color));
+  lines.forEach((value, i) => ctx.UI.screenLabel(value, x, y - (lines.length - 1 - i) * 22, pin, width, color, decorative));
 }
 function emptyScene(heroes) {
   // The last real completion can leave an empty scene while its payoff is still flying.
@@ -89,8 +90,8 @@ function emptyScene(heroes) {
 function villagerLabel(v, villagers) {
   if (!villagers.length) return;
   // One representative avoids giving scenery the same visual weight as workers.
-  const n = window.NPCS?.state?.list.find(n => onScreen(v, n.x, n.y, 80, 100));
-  if (n) sceneLabel('Villager · decorative', (v.ox + n.x * v.Z) / ctx.DPR, (v.oy + (n.y - 70) * v.Z) / ctx.DPR);
+  const n = villagers.find(n => onScreen(v, n.x, n.y, 80, 100));
+  if (n) sceneLabel('Villager · decorative', (v.ox + n.x * v.Z) / ctx.DPR, (v.oy + (n.y - 70) * v.Z) / ctx.DPR,280,false,'#7fc8b8',true);
 }
 function sceneSelection(v) {
   const entity = ctx.selectedEntity();
@@ -158,16 +159,16 @@ function draw() {
     if (!ctx.workView.all && entity !== ctx.selectedEntity() && !ctx.overflowed(entity) && onScreen(v,x,y,180,180))
       sceneLabel(entityLabel(entity),(v.ox+x*v.Z)/ctx.DPR,(v.oy+(y-110)*v.Z)/ctx.DPR);
   }
-  for (const [k,r] of Object.entries(ctx.W.regions)) banner(v,k,r);
   inspectionLinks(v); ctx.inspect.picks = [];
+  const villagers = window.NPCS ? NPCS.ents(v, blit, shadowPx).filter(e =>
+    ![...heroes,...quests].some(o => !ctx.overflowed(o) && Math.abs((o.mx??o.x)-e.x)<56 && Math.abs((o.my??o.y)-e.y)<88)) : [];
   const ents = [...(ctx.W.layered ? ctx.W.props : []).map(p => ({y: p.y, f: () => prop(v, p)})),
     ...guildDecorations().map(p=>({y:p.y,f:()=>prop(v,p)})),
     ...(Object.values(ctx.S.tasks).some(t => t.chained && t.alpha > 0) ? [{y: ctx.W.regions.volcano.spot[1] - 6, f: () => dragon(v)}] : []),
     ...Object.values(ctx.S.tasks).filter(t => t.alpha > 0).map(t => ({y: t.mx !== undefined ? t.my : t.y, f: () => monster(v, t)})),
     ...Object.values(ctx.S.heroes).map(h => ({y: h.y, f: () => heroDraw(v, h)})),
-    ...(window.NPCS ? NPCS.ents(v, blit, shadowPx) : [])];             // M4 villagers share the y-sort
+    ...villagers];
   ents.sort((a, b) => a.y - b.y).forEach(e => e.f());
-  villagerLabel(v, window.NPCS?.state?.list || []);
   const groups = new Map();
   for (const f of ctx.S.fx) {
     if(f.k !== 'num') { fxDraw(v,f); continue; }
@@ -178,6 +179,9 @@ function draw() {
   for(const group of groups.values())group.slice(0,3).forEach((f,i)=>
     fxDraw(v,{...f,y:f.y-i*18/v.Z*ctx.DPR,text:i===2&&group.length>3?'+'+compact(group.length-2):f.text}));
 
+  // Scenery is last: actual characters, time bars and real completion cues win.
+  for (const [k,r] of Object.entries(ctx.W.regions)) banner(v,k,r);
+  villagerLabel(v, villagers);
   if(ctx.UI)ctx.UI.flush();
   vignette();
 }
@@ -277,8 +281,8 @@ function banner(v, key, r) {
   const x = v.ox + N(px) * v.Z, y = v.oy + N(py) * v.Z;
   const n = Object.values(ctx.S.tasks).filter(t => t.region === key && t.alpha > 0 && t.state !== 'done').length;
   // A visible desktop plaza keeps its name at high zoom; collision lanes still yield to quest labels.
-  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,280,true,'#7fc8b8');
-    if(n||key==='vault')sceneLabel(key==='vault'?ctx.gameGoldText():compact(n)+' '+(n===1?'quest in replay scene':'quests in replay scene'),x/ctx.DPR,y/ctx.DPR-44,280,false,'#7fc8b8');}
+  if(ctx.UI){sceneLabel(r.label.split(' · ')[0],x/ctx.DPR,y/ctx.DPR,280,v.Z/ctx.DPR>=2,'#7fc8b8',true);
+    if(n||key==='vault')sceneLabel(key==='vault'?ctx.gameGoldText():compact(n)+' '+(n===1?'quest in replay scene':'quests in replay scene'),x/ctx.DPR,y/ctx.DPR-44,280,false,'#7fc8b8',true);}
 }
 function heroDraw(v, h) {
   if (ctx.overflowed(h)) return;
@@ -528,6 +532,7 @@ function timeBarLabel(v, t, bx, top) {
   ctx.cx.fillStyle = '#99783b'; ctx.cx.fillRect(x - pad - 1, y + hpx + pad, wpx + pad * 2 + 2, Math.max(1, ctx.DPR));
   T.draw(ctx.cx, text, x, y, {scale: sc, color: '#ffd36b'});
   ctx.cx.restore();
+  ctx.UI?.protectScene?.({left:(x-pad-1)/ctx.DPR,top:(y-pad-1)/ctx.DPR,right:(x+wpx+pad+1)/ctx.DPR,bottom:(y+hpx+pad+1)/ctx.DPR});
 }
 function dragon(v) {
   const [x, y] = ctx.W.regions.volcano.spot, b = Math.floor(performance.now() / 700) % 2;

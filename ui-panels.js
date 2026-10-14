@@ -3,7 +3,8 @@
   'use strict';
   const $=s=>document.querySelector(s), T=root.UIText, I=root.UIGlyphs;
   const icons=new Map(), numbers=new Map(), sceneLabels=new Map();
-  let epoch=0, reserved=[], grid=1, drawn=[];
+  const backplates=new WeakMap();
+  let epoch=0, reserved=[], protectedScene=[], grid=1, drawn=[];
   const overlay=$('#ui-stage'), slots=[];let slot=0, budget=Infinity, used=0;
   function iconImage(id,state='normal') {
     const key=id+state;if(icons.has(key))return icons.get(key);
@@ -58,7 +59,8 @@
   function resize() {
     grid=Math.ceil(root.devicePixelRatio||1);bounds();
   }
-  function clear() {bounds();drawn=[];slot=0;used=0;}
+  function clear() {bounds();drawn=[];protectedScene=[];slot=0;used=0;}
+  function protectScene(rect) {protectedScene.push(rect);}
   function flush() {for(let i=slot;i<slots.length;i++)slots[i].hidden=true;}
   function image(im,x,y) {
     if(slot>=128||used+im.width*im.height>budget)return;used+=im.width*im.height;
@@ -79,7 +81,7 @@
     for(let lane=0;lane<3;lane++){const top=y-lane*18;
       if(fits(x,top,im.width,im.height)){image(im,x,top);break;}}
   }
-  function screenLabel(text,x,y,pin=false,maxWidth=Infinity,color='#ffd36b') {
+  function screenLabel(text,x,y,pin=false,maxWidth=Infinity,color='#ffd36b',decorative=false) {
     let label=text.toUpperCase(),im=numericImage(label,color);
     if(Number.isFinite(maxWidth)&&Array.from(label).some(ch=>!Object.hasOwn(T.glyphs,ch))){
       const width=Math.max(48,Math.floor(maxWidth)),key=JSON.stringify([label,width,color]);
@@ -109,7 +111,15 @@
     if(pin)candidates.push(...[...reserved,...drawn].flatMap(r=>
       [Math.ceil(r.bottom+4),Math.floor(r.top-im.height-4)]).sort((a,b)=>Math.abs(a-y)-Math.abs(b-y)));
     for(const top of candidates){
-      if(fits(x-2,top-2,im.width+4,im.height+4)){image(im,x,top);break;}}
+      if(decorative&&protectedScene.some(r=>x-4<r.right&&x+im.width+4>r.left&&top-4<r.bottom&&top+im.height+4>r.top))continue;
+      if(fits(x-2,top-2,im.width+4,im.height+4)){
+        if(decorative){
+          let c=backplates.get(im);
+          if(!c){c=document.createElement('canvas');c.width=im.width+4;c.height=im.height+4;
+            const g=c.getContext('2d');g.fillStyle='#0d1423';g.fillRect(0,0,c.width,c.height);g.drawImage(im,2,2);backplates.set(im,c);}
+          image(c,x-2,top-2);
+        }else image(im,x,top);
+        break;}}
   }
   let overflowKey='',overflowGroups=[];
   function selected(label,id='quests') {
@@ -541,6 +551,6 @@
     });
     addEventListener('resize',resize);resize();
   }
-  root.UIPanels={init,resize,bounds,clear,flush,screenIcon,screenNumber,screenLabel,selected,sceneOverflow,placeOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,setup,privacy,drawer,feed,camps,plain,
-    diagnostics:()=>({grid,epoch,reserved,drawn})};
+  root.UIPanels={init,resize,bounds,clear,flush,protectScene,screenIcon,screenNumber,screenLabel,selected,sceneOverflow,placeOverflow,control,number,resources,status,mode,overview,playback,menu,detail,close,setup,privacy,drawer,feed,camps,plain,
+    diagnostics:()=>({grid,epoch,reserved,drawn,protectedScene})};
 })(window);

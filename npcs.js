@@ -47,7 +47,11 @@
     const [sx, sy] = W.regions[townKey].spot, rects = footprints(W);
     const segs = W.graph.edges.map(([a, b]) => [W.graph.pts[a], W.graph.pts[b]]).filter(([a, b]) =>
       Math.min(Math.hypot(a[0] - sx, a[1] - sy), Math.hypot(b[0] - sx, b[1] - sy)) < TOWN.rx + 200);
-    const busy = {x: sx + 8, y: sy + 18, rx: 132, ry: 58};                     // hero home band + hangout ring + fight yard (game.js slotPos/hangSpot): keep clear
+    // The scaled world has a separate standing plaza. Keep scenery outside the
+    // whole real-worker yard, not the old small ellipse at the building door.
+    const plaza = W.regions[townKey].plaza;
+    const busy = plaza ? {x: plaza.center[0], y: plaza.center[1], rx: plaza.standing[0] + 32, ry: plaza.standing[1] + 48}
+      : {x: sx + 8, y: sy + 18, rx: 132, ry: 58};
     const x0 = Math.floor(sx - TOWN.rx), y0 = Math.floor(sy - TOWN.ry), nx = Math.ceil(TOWN.rx * 2 / CELL), ny = Math.ceil(TOWN.ry * 2 / CELL);
     const grid = new Uint8Array(nx * ny);
     const roadD = (x, y) => { let best = 1e9; for (const [a, b] of segs) { const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy || 1, t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / L)); best = Math.min(best, Math.hypot(x - a[0] - t * dx, y - a[1] - t * dy)); } return best; };
@@ -117,7 +121,11 @@
       const i = Math.floor(S.rng() * S.nodes.length), t = S.nodes[i];
       if (Math.hypot(t.x - n.x, t.y - n.y) > 70) { n.path = route([n.x, n.y], i); n.state = 'walk'; return; }
     }
-    n.rest = between(S.rng, CFG[n.kind].rest);            // nowhere far enough: just rest again
+    // A narrow road spur may not offer a 70px destination. Still take its
+    // farthest reachable point instead of repeatedly extending a rest.
+    const far = S.nodes.reduce((best, p, i) => Math.hypot(p.x-n.x,p.y-n.y)>best.d ? {i,d:Math.hypot(p.x-n.x,p.y-n.y)} : best,{i:0,d:0});
+    if(far.d>24){n.path=route([n.x,n.y],far.i);n.state='walk';}
+    else n.rest = between(S.rng, CFG[n.kind].rest);
   }
   function stepNpc(n, dt) {
     n.clock += dt;
@@ -143,7 +151,11 @@
     if (S.nodes.length < 8) return false;
     S.rng = mulberry32(SEED ^ hash(town));
     for (let i = 0; i < COUNT; i++) {
-      const kind = KINDS[i % KINDS.length], n0 = S.nodes[Math.floor(S.rng() * S.nodes.length)];
+      const kind = KINDS[i % KINDS.length];
+      // Spread initial decorative figures along their reachable road network.
+      const start = Math.floor(S.rng() * S.nodes.length);
+      const distance = n => Math.min(...S.list.map(p => Math.hypot(n.x - p.x, n.y - p.y)));
+      const n0 = S.nodes.reduce((best, n) => distance(n) > distance(best) ? n : best, S.nodes[start]);
       S.list.push({id: 'npc' + i, kind, x: n0.x, y: n0.y, face: S.rng() < .5 ? 1 : -1, dist: S.rng() * 40, v: 0, state: 'rest',
         rest: S.rng() * 3, path: [], clock: S.rng() * 5, k: i});
     }
@@ -174,7 +186,7 @@
     shadowPx(v, bx, Math.round(n.y) + 1, Math.round(M.fw * .13));
     blit(v, im, fr * M.fw, 0, M.fw, M.fh, flip ? bx - (M.fw - M.ax) : bx - M.ax, by - M.base, flip);
   }
-  function ents(v, blit, shadowPx) { return S.ready ? S.list.map(n => ({y: n.y, f: () => drawOne(v, n, blit, shadowPx)})) : []; }
+  function ents(v, blit, shadowPx) { return S.ready ? S.list.map(n => ({x: n.x, y: n.y, f: () => drawOne(v, n, blit, shadowPx)})) : []; }
 
   const NPCS = {init, load, update, ents, walkable, state: S, STEP, CFG, KINDS, PLAZA, TOWN, ROAD_HALF, COUNT};
   if (typeof module !== 'undefined' && module.exports) module.exports = NPCS; else root.NPCS = NPCS;

@@ -117,6 +117,8 @@ jobs:
         run: node tools/test_idle_ui_fix.cjs "$RUNNER_TEMP/ui-regressions/idle-ui-fix"
       - name: Board goals and status layout at Web and SDK guest breakpoints
         run: node tools/test_idle_next_goal.cjs "$RUNNER_TEMP/ui-regressions/idle-next-goal"
+      - name: World-first decorative priority and mobile scroll discovery (Web and SDK guest)
+        run: node tools/test_world_readability.cjs "$RUNNER_TEMP/ui-regressions/world-readability"
       - name: Shared-worker quest context and partial session availability (both engines)
         run: node tools/test_clarity_web_followup.cjs "$RUNNER_TEMP/ui-regressions/clarity-web-followup"
       - name: Selected rendering and private presentation (both engines)
