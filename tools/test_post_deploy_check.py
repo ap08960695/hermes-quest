@@ -10,8 +10,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from urllib import parse
 
 try:
@@ -28,7 +29,7 @@ USER = "login-canary"
 CURSOR = "opaque-canary+/=雪"
 
 FAKE_COMMAND = '''#!/usr/bin/env python3
-import json, os, pathlib, sys
+import json, os, pathlib, sys, time
 state = pathlib.Path(os.environ["FAKE_STATE"])
 data = json.loads(state.read_text())
 args = sys.argv[1:]
@@ -59,6 +60,12 @@ elif kind == "systemctl":
         sys.exit(7)
 else:
     sys.exit(8)
+if data.get("exit_delay"):
+    # EOF before exit forces the parent's timed Popen.wait() sleep path.
+    sys.stdout.flush()
+    os.close(1)
+    os.close(2)
+    time.sleep(data["exit_delay"])
 '''
 
 
@@ -181,7 +188,8 @@ class PostDeployTests(unittest.TestCase):
 
     def run_gate(self, *extra):
         stdout, stderr = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), patch.object(check.time, "sleep") as sleep:
+        # Replace only the gate's module binding, not shared time.sleep used by subprocess.
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), patch.object(check, "time", wraps=time, sleep=Mock()) as clock:
             rc = check.main(self.argv() + list(extra))
         self.assertEqual(stderr.getvalue(), "")
         self.logs = [json.loads(line) for line in stdout.getvalue().splitlines()]
@@ -190,7 +198,7 @@ class PostDeployTests(unittest.TestCase):
         allowed = {"phase", "check", "status", "time", "http_status", "bytes", "elapsed_ms", "round", "rounds", "exit_code"}
         for row in self.logs:
             self.assertLessEqual(set(row), allowed)
-        self.sleeps = sleep.call_args_list
+        self.sleeps = clock.sleep.call_args_list
         self.calls = [json.loads(line) for line in self.calls_file.read_text().splitlines()] if self.calls_file.exists() else []
         for canary in (PASSWORD, SESSION, TOKEN, USER):
             self.assertNotIn(canary, json.dumps(self.calls))
@@ -206,6 +214,12 @@ class PostDeployTests(unittest.TestCase):
         self.assertEqual(self.received, [CURSOR, CURSOR + "1", CURSOR + "2"])
         self.assertEqual([call.args for call in self.sleeps], [(10.0,), (10.0,)])
         self.assertEqual(self.mutations(), [])
+
+    def test_poll_timing_excludes_delayed_subprocess_wait(self):
+        self.update_state(exit_delay=0.05)
+        with patch.object(time, "sleep", wraps=time.sleep) as wait_sleep:
+            self.test_pass_three_rounds_cursor_chain_and_timing()
+        self.assertTrue(wait_sleep.called, "fixture must exercise real subprocess wait sleeps")
 
     def test_events_422_rolls_back_and_rechecks(self):
         self.mode = "events_422"
