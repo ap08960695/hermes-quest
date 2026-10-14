@@ -247,7 +247,7 @@ function drawWorking() {
   for(const pair of ctx.workView.pairs){
     const bodies=ctx.inspect.picks.filter(p=>p.id===pair.item.ref||p.id===pair.hero?.bot).map(p=>p.body);
     const labelY=bodies.length?Math.min(...bodies.map(b=>b.top))-8:(v.oy+(pair.y-110)*v.Z)/ctx.DPR;
-    if(innerWidth>1100&&pair.hero)sceneLabel(entityLabel(pair.hero),(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY,280,true,'#ffd36b',false,true);
+    if((innerWidth>1100||ctx.workView.pairs.length===1)&&pair.hero)sceneLabel(entityLabel(pair.hero),(v.ox+pair.hero.x*v.Z)/ctx.DPR,labelY,280,true,'#ffd36b',false,true);
     const questLabel=entityLabel(pair.monster).replace(/^(Planning|Testing|Verification) quest/,(_,kind)=>({Planning:'Plan',Testing:'Test',Verification:'Verify'})[kind]+' quest');
     sceneLabel(questLabel,(v.ox+(innerWidth<=1100?pair.x:pair.monster.x)*v.Z)/ctx.DPR,labelY,280,true,'#ffd36b',false,true);
   }

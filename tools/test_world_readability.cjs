@@ -81,7 +81,7 @@ const overlap=(a,b)=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.
         for(let i=1;i<=expected;i++)assert(r.labels.some(l=>l.text.toUpperCase()==='BUILD QUEST #'+i),'complete quest '+i);
         for(const l of r.labels){assert(!r.protectedScene.some(b=>overlap(l.box,b)),l.text+' overlaps sprite');assert(Math.abs(l.box.bottom-l.anchor[1])<=80,l.text+' moved far from its pair');}
         for(let i=0;i<r.drawn.length;i++)assert(!r.drawn.slice(i+1).some(b=>overlap(r.drawn[i],b)),'Working label collision');
-        if(width<=1100)assert(!r.labels.some(l=>l.text.startsWith('Hero · ')),'one identification label per pair in narrow scene');
+        if(width<=1100&&r.pairs>1)assert(!r.labels.some(l=>l.text.startsWith('Hero · ')),'one identification label per pair in narrow multi-pair scene');
         await capture('working-labels');await frame.locator('#working-toggle').click();assert.equal(await sourceState(),before);return r;
       });
       await check('painted villagers stay separated over 60 seconds without changing walkers',async()=>{

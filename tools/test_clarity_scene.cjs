@@ -129,11 +129,19 @@ const server=http.createServer((req,res)=>{
  // Permitted long aliases remain complete, and crowd still exposes retained identities.
  const long=fixture();long.bots.forEach((b,i)=>b.display_name='Long Friendly Worker Alias '+(i+1));long.working.items.forEach((item,i)=>item.display_name='Long Friendly Worker Alias '+(i+1));await load(long);await page.evaluate(()=>{resize();draw();});await page.waitForTimeout(200);await page.evaluate(()=>draw());
  const aliases=['Long Friendly Worker Alias 1','Long Friendly Worker Alias 2'];
- const wrapped=await measure();assert(wrapped.drawn.length>1);assertRenderedAliases(wrapped.rendered,width>760?aliases:aliases.slice(0,1));
+ const wrapped=await measure();assert(wrapped.drawn.length>1);
+ if(width>1100||width<=760)assertRenderedAliases(wrapped.rendered,width>1100?aliases:aliases.slice(0,1));
+ else {
+   // Narrow multi-pair scenes identify quests once; complete worker identities
+   // remain visibly accessible in their work rows and in each focused scene.
+   assertRenderedAliases(wrapped.rendered,['Build quest #1','Build quest #2']);
+   for(const alias of aliases){const row=page.locator('#working-rows button').filter({hasText:alias});assert.equal(await row.count(),1);await row.scrollIntoViewIfNeeded();assert(await row.isVisible());assert((await row.innerText()).includes(alias));}
+ }
  // Narrow screens expose each pair through the existing focus control. Prove
  // every identity in its own view, rather than mistaking an off-screen pair for ink.
  for(const [i,alias] of aliases.entries()){
    await page.evaluate(i=>{workView.focus=S.work.active()[i].ref;draw();},i);
+   await page.waitForTimeout(200);await page.evaluate(()=>draw());
    assertRenderedAliases((await measure()).rendered,[alias]);
  }
  await page.evaluate(()=>{workView.focus=null;draw();});
